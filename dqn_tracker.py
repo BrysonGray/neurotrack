@@ -123,17 +123,16 @@ class DQN(nn.Module):
 
     def __init__(self, in_channels, n_actions, input_size):
         super().__init__()
-        self.conv1 = nn.Conv3d(in_channels, 8, 2)
+        self.conv1 = nn.Conv3d(in_channels, 8, 3, stride=2)
         self.norm1 = nn.BatchNorm3d(8)
-        self.conv2 = nn.Conv3d(8, 16, 5)
+        self.conv2 = nn.Conv3d(8, 16, 3, stride=2)
         self.norm2 = nn.BatchNorm3d(16)
-        # self.pool = nn.MaxPool3d(2, 2)
 
         # calculate the size of the convolution output for input to Linear
-        shape_out = lambda x, k: (x - (k-1) - 1) + 1
-        h = shape_out(input_size, 2) # first conv
-        h = shape_out(h, 5) # second conv
-        n_features = 16 * h**3
+        shape_out = lambda x, k, s: ((x - k)/s + 1)//1
+        h = shape_out(input_size, 3, 2) # first conv
+        h = shape_out(h, 3, 2) # second conv
+        n_features = int(16 * h**3)
 
         self.fc1 = nn.Linear(n_features, 120)
         self.fc2 = nn.Linear(120, 84)
@@ -145,7 +144,7 @@ class DQN(nn.Module):
         x = torch.flatten(x, 1) # flatten all dimensions except batch
         x = F.relu(self.fc1(x))
         x = F.relu(self.fc2(x))
-        x = F.relu(self.fc3(x))
+        x = self.fc3(x)
         
         return x
 
@@ -155,6 +154,7 @@ class DQNModel():
         self.policy_net = DQN(in_channels, n_actions, input_size).to(DEVICE)
         self.target_net = DQN(in_channels, n_actions, input_size).to(DEVICE)
         self.target_net.load_state_dict(self.policy_net.state_dict())
+
         self. optimizer = torch.optim.AdamW(self.policy_net.parameters(), lr=lr, amsgrad=True)
         self.memory = ReplayMemory(10000)
 
@@ -271,7 +271,7 @@ class DQNModel():
                         plot_returns(episode_returns)
                     if save_snapshots:
                         if i%10 == 0:
-                            torch.save(env.img[-1].detach().clone(), os.path.join(output, f'bundle_density_ep{i}.pt'))
+                            torch.save(env.img.data[-1].detach().clone(), os.path.join(output, f'bundle_density_ep{i}.pt'))
                             torch.save(target_net_state_dict, os.path.join(output, f'model_state_dict_{name}.pt'))
                             torch.save(episode_durations, os.path.join(output, 'episode_durations_{name}.pt'))
                             torch.save(episode_returns, os.path.join(output, 'episode_returns_{name}.pt'))

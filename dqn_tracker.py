@@ -155,7 +155,7 @@ class DQNModel():
         self.target_net = DQN(in_channels, n_actions, input_size).to(DEVICE)
         self.target_net.load_state_dict(self.policy_net.state_dict())
 
-        self. optimizer = torch.optim.AdamW(self.policy_net.parameters(), lr=lr, amsgrad=True)
+        self.optimizer = torch.optim.AdamW(self.policy_net.parameters(), lr=lr, amsgrad=True)
         self.memory = ReplayMemory(10000)
 
     def load_model(self, model_weights):

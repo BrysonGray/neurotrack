@@ -251,7 +251,8 @@ class Environment():
 
     """
 
-    def __init__(self, img, radius, seeds, mask, true_density, actions, n_seeds=1, step_size=1.0, step_width=1.0, pixelsize=[1.0,1.0,1.0], max_len=10000, alpha=1.0, beta=1e-3, friction=1e-4):
+    def __init__(self, img, radius, seeds, mask, true_density, actions, n_seeds=1, step_size=1.0,\
+                 step_width=1.0, pixelsize=[1.0,1.0,1.0], max_len=10000, alpha=1.0, beta=1e-3, friction=1e-4):
 
         self.head_id = 0
         self.n_resets = 0 # count number of resets

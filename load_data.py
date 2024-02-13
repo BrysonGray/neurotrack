@@ -18,7 +18,7 @@ sys.path.append('/home/brysongray/tractography')
 from image import Image
 
 
-def load_data(img_dir, label_file, downsample_factor):
+def load_data(img_dir, label_file, downsample_factor, binary=False):
     # load image stack
     files = os.listdir(img_dir)
     stack = []
@@ -55,7 +55,7 @@ def load_data(img_dir, label_file, downsample_factor):
 
     for s in segments:
         s = torch.tensor(s)
-        density.draw_line_segment(s[:,:3], width=s[0,-1].item(), binary=False)
+        density.draw_line_segment(s[:,:3], width=s[0,-1].item(), binary=binary)
 
     mask = torch.zeros_like(density.data)
     mask[density.data>0.68] = 1.0 

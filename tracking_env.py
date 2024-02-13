@@ -251,7 +251,7 @@ class Environment():
 
     """
 
-    def __init__(self, img, radius, seeds, mask, true_density, actions, n_seeds=1, step_size=1.0, pixelsize=[1.0,1.0,1.0], max_len=10000, alpha=1.0, beta=1e-3, friction=1e-4):
+    def __init__(self, img, radius, seeds, mask, true_density, actions, n_seeds=1, step_size=1.0, step_width=1.0, pixelsize=[1.0,1.0,1.0], max_len=10000, alpha=1.0, beta=1e-3, friction=1e-4):
 
         self.head_id = 0
         self.n_resets = 0 # count number of resets
@@ -262,6 +262,7 @@ class Environment():
         self.true_density = Image(true_density, dx=pixelsize)
         self.n_seeds = n_seeds # the number of paths per bundle
         self.step_size = torch.Tensor([step_size]) / torch.Tensor(pixelsize)
+        self.step_width = step_width
         self.max_len = max_len
         self.action_space = actions
         if not isinstance(self.action_space, torch.Tensor):
@@ -302,7 +303,7 @@ class Environment():
             # add_bundle_point(bundle_density, self.paths[i][0], self.ball)
             for j in range(len(self.paths[i])-1):
                 segment = torch.stack((self.paths[i][j], self.paths[i][j+1]), dim=0)
-                self.img.draw_line_segment(segment, width=1)
+                self.img.draw_line_segment(segment, width=self.step_width)
 
 
     def get_state(self):
@@ -316,7 +317,7 @@ class Environment():
         last_steps : torch.Tensor
          Tensor with shape 3 x 3 (3 step positions by 3 euclidean coordinates)
         """
-        patch, _ = self.img.crop(self.paths[self.head_id][-1], self.radius, pad=True, value=-1)
+        patch, _ = self.img.crop(self.paths[self.head_id][-1], self.radius, pad=True, value=0.0)
         patch = patch.detach().clone()
         
         last_steps = self.paths[self.head_id][-3:] # 3 x 3 tensor of last three streamline positions
@@ -419,12 +420,12 @@ class Environment():
             old_density_patch = old_density_patch.detach().clone()[-1][None] # need to make a copy or else this will be modified by adding a point to img
             # add_bundle_point(self.img, self.paths[self.head_id][-1], self.ball)
             segment = self.paths[self.head_id][-2:, :3]
-            self.img.draw_line_segment(segment, width=1.0)
+            self.img.draw_line_segment(segment, width=self.step_width)
             new_density_patch, _ = self.img.crop(center, radius=r)
             new_density_patch = new_density_patch[-1][None]
             delta_density_diff = density_error_change(true_density_patch, old_density_patch, new_density_patch)
             observation = self.get_state()
-            reward = self.get_reward(terminated, delta_density_diff)
+            reward = self.get_reward(terminated, delta_density_diff, verbose=False)
 
             self.head_id = (self.head_id + 1)%len(self.paths)
 
@@ -460,6 +461,6 @@ class Environment():
         for i in range(len(self.paths)):
             for j in range(len(self.paths[i])-1):
                 segment = torch.stack((self.paths[i][j], self.paths[i][j+1]), dim=0)
-                self.img.draw_line_segment(segment, width=1)
+                self.img.draw_line_segment(segment, width=self.step_width)
 
         return

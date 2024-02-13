@@ -123,20 +123,20 @@ class DQN(nn.Module):
 
     def __init__(self, in_channels, n_actions, input_size):
         super().__init__()
-        self.conv1 = nn.Conv3d(in_channels, 8, 3, stride=2)
-        self.norm1 = nn.BatchNorm3d(8)
-        self.conv2 = nn.Conv3d(8, 16, 3, stride=2)
-        self.norm2 = nn.BatchNorm3d(16)
+        self.conv1 = nn.Conv3d(in_channels, 16, 3, stride=2)
+        self.norm1 = nn.BatchNorm3d(16)
+        self.conv2 = nn.Conv3d(16, 32, 3, stride=2)
+        self.norm2 = nn.BatchNorm3d(32)
 
         # calculate the size of the convolution output for input to Linear
         shape_out = lambda x, k, s: ((x - k)/s + 1)//1
         h = shape_out(input_size, 3, 2) # first conv
         h = shape_out(h, 3, 2) # second conv
-        n_features = int(16 * h**3)
+        n_features = int(32 * h**3)
 
-        self.fc1 = nn.Linear(n_features, 120)
-        self.fc2 = nn.Linear(120, 84)
-        self.fc3 = nn.Linear(84, n_actions)
+        self.fc1 = nn.Linear(n_features, 512)
+        self.fc2 = nn.Linear(512, 128)
+        self.fc3 = nn.Linear(128, n_actions)
 
     def forward(self, x):
         x = self.norm1(F.relu(self.conv1(x)))
@@ -273,8 +273,8 @@ class DQNModel():
                         if i%10 == 0:
                             torch.save(env.img.data[-1].detach().clone(), os.path.join(output, f'bundle_density_ep{i}.pt'))
                             torch.save(target_net_state_dict, os.path.join(output, f'model_state_dict_{name}.pt'))
-                            torch.save(episode_durations, os.path.join(output, 'episode_durations_{name}.pt'))
-                            torch.save(episode_returns, os.path.join(output, 'episode_returns_{name}.pt'))
+                            torch.save(episode_durations, os.path.join(output, f'episode_durations_{name}.pt'))
+                            torch.save(episode_returns, os.path.join(output, f'episode_returns_{name}.pt'))
                     break
 
                 # if not terminated, move to the next state

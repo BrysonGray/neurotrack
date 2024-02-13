@@ -35,22 +35,23 @@ def main(args):
     model = args["model"] if "model" in args else None
     n_seeds = args["n_seeds"] if "n_seeds" in args else 1
     step_size = args["step_size"] if "step_size" in args else 1.0
+    step_width = args["step_width"] if "step_width" in args else 1.0
     batch_size = args["batchsize"] if "batchsize" in args else 128
     gamma = args["gamma"] if "gamma" in args else 0.99
     eps_start = args["eps_start"] if "eps_start" in args else 0.9
     eps_end = args["eps_end"] if "eps_end" in args else 0.01
     eps_decay = args["eps_decay"] if "eps_decay" in args else 1000
     tau = args["tau"] if "tau" in args else 0.001
-    lr = args["lr"] if "lr" in args else 1e-4
+    lr = args["lr"] if "lr" in args else 5e-4
     alpha = args["alpha"] if "alpha" in args else 1.0
     beta = args["beta"] if "beta" in args else 1e-3
     friction = args["friction"] if "friction" in args else 1e-4
     num_episodes = args["num_episodes"] if "num_episodes" in args else 100
     pixelsize = args["pixelsize"] if "pixelsize" in args else [1.0, 1.0, 1.0]
-    patch_radius = 12
-    actions = np.load('/home/brysongray/tractography/neuron_trx/action_space_40_dir.npy')
+    patch_radius = 17
+    actions = np.load('/home/brysongray/tractography/neuron_trx/action_space_6_dir.npy')
 
-    img, density, mask = load_data(img_file, label_file, downsample_factor=10)
+    img, density, mask = load_data(img_file, label_file, downsample_factor=10, binary=True)
 
 
     env = Environment(img,
@@ -61,6 +62,7 @@ def main(args):
                       actions,
                       n_seeds=1,
                       step_size=step_size,
+                      step_width=step_width,
                       pixelsize=pixelsize,
                       max_len=10000,
                       alpha=alpha,

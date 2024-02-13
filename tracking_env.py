@@ -251,7 +251,7 @@ class Environment():
 
     """
 
-    def __init__(self, img, radius, seeds, mask, true_density, actions, n_seeds=1, step_size=1.0, pixelsize=[1.0,1.0,1.0], max_len=10000, alpha=1.0, beta=1e-3, friction=1e-4):
+    def __init__(self, img, radius, seeds, mask, true_density, actions, n_seeds=1, step_size=1.0, step_width=1.0, pixelsize=[1.0,1.0], max_len=10000, alpha=1.0, beta=1e-3, friction=1e-4):
 
         self.head_id = 0
         self.n_resets = 0 # count number of resets
@@ -262,20 +262,21 @@ class Environment():
         self.true_density = Image(true_density, dx=pixelsize)
         self.n_seeds = n_seeds # the number of paths per bundle
         self.step_size = torch.Tensor([step_size]) / torch.Tensor(pixelsize)
+        self.step_width = step_width
         self.max_len = max_len
         self.action_space = actions
         if not isinstance(self.action_space, torch.Tensor):
             self.action_space = torch.tensor(self.action_space)
 
         seed_id = self.n_resets % len(self.seeds)
-        center = torch.Tensor(self.seeds[seed_id])
+        center = torch.tensor(self.seeds[seed_id])
         self.r = 5.0 # radius around center to randomly place starting points
         g = torch.Generator()
         g.manual_seed(0)
-        offsets = self.r * torch.rand((self.n_seeds, 3), generator=g)
+        offsets = self.r * torch.rand((self.n_seeds, 2), generator=g)
         bundle_seeds = center[None] + offsets
 
-        self.paths = [*torch.Tensor(bundle_seeds)[:,None]] # a list of N paths. each path is a 1 x 3 tensor
+        self.paths = [*torch.Tensor(bundle_seeds)[:,None]] # a list of N paths. each path is a 1 x 2 tensor
         self.cos_path_angle = [1.0] * len(self.paths) # list of N floats.       
         self.ended_paths = []
         self.alpha = alpha
@@ -285,8 +286,8 @@ class Environment():
         # initialize last two step directions randomly for each streamline
         g = torch.Generator()
         g.manual_seed(self.n_resets)
-        last_steps = [*2*torch.rand(((len(self.paths),)+(1,3)), generator=g)-1.0] # list of len N paths, of 1x3 tensors
-        last_steps = [x / np.sqrt(x[0,0]**2+x[0,1]**2+x[0,2]**2) for x in last_steps] # unit normalize directions
+        last_steps = [*2*torch.rand(((len(self.paths),)+(1,2)), generator=g)-1.0] # list of len N paths, of 1x3 tensors
+        last_steps = [x / np.sqrt(x[0,0]**2+x[0,1]**2) for x in last_steps] # unit normalize directions
         self.paths = [torch.cat((point - 2*step*self.step_size, point - step*self.step_size, point)) for point, step in zip(self.paths, last_steps)]
 
         # initialize bundle density map
@@ -302,7 +303,7 @@ class Environment():
             # add_bundle_point(bundle_density, self.paths[i][0], self.ball)
             for j in range(len(self.paths[i])-1):
                 segment = torch.stack((self.paths[i][j], self.paths[i][j+1]), dim=0)
-                self.img.draw_line_segment(segment, width=1)
+                self.img.draw_line_segment(segment, width=step_width, n_dim=2)
 
 
     def get_state(self):
@@ -316,10 +317,10 @@ class Environment():
         last_steps : torch.Tensor
          Tensor with shape 3 x 3 (3 step positions by 3 euclidean coordinates)
         """
-        patch, _ = self.img.crop(self.paths[self.head_id][-1], self.radius, pad=True, value=-1)
+        patch, _ = self.img.crop(self.paths[self.head_id][-1], self.radius, pad=True, value=0.0, n_dim=2)
         patch = patch.detach().clone()
         
-        last_steps = self.paths[self.head_id][-3:] # 3 x 3 tensor of last three streamline positions
+        last_steps = self.paths[self.head_id][-3:] # 3 x 2 tensor of last three streamline positions
 
         return patch[None], last_steps
 
@@ -351,7 +352,7 @@ class Environment():
             # note that delta density difference is a change in error,
             # so negative change is good, hence the flipped (positive) exponent which is normally negative for sigmoid function.
             # it is also shifted down so that zero change yields zero.
-            sigmoid_diff = 2e4 / (1 + np.exp(delta_density_diff / 2e-4)) - 1e4 # calibrated so that a good step is around 1.
+            sigmoid_diff = 2e2 / (1 + np.exp(delta_density_diff / 2e-4)) - 1e2 # calibrated so that a good step is around 1.
             sigmoid_diff = np.max([sigmoid_diff, 0.0]) # do not give negative values for matching
             reward = self.alpha*sigmoid_diff + self.beta*(cos_angle-1) - self.friction 
             if verbose:
@@ -414,13 +415,13 @@ class Environment():
         else:
             center = self.paths[self.head_id][-2]
             r = self.radius + int(np.ceil(self.step_size.max()))
-            true_density_patch, _ = self.true_density.crop(center, radius=r) # patch centered at previous step position
-            old_density_patch, _ = self.img.crop(center, radius=r)
+            true_density_patch, _ = self.true_density.crop(center, radius=r, n_dim=2) # patch centered at previous step position
+            old_density_patch, _ = self.img.crop(center, radius=r, n_dim=2)
             old_density_patch = old_density_patch.detach().clone()[-1][None] # need to make a copy or else this will be modified by adding a point to img
             # add_bundle_point(self.img, self.paths[self.head_id][-1], self.ball)
             segment = self.paths[self.head_id][-2:, :3]
-            self.img.draw_line_segment(segment, width=1.0)
-            new_density_patch, _ = self.img.crop(center, radius=r)
+            self.img.draw_line_segment(segment, width=self.step_width, n_dim=2)
+            new_density_patch, _ = self.img.crop(center, radius=r, n_dim=2)
             new_density_patch = new_density_patch[-1][None]
             delta_density_diff = density_error_change(true_density_patch, old_density_patch, new_density_patch)
             observation = self.get_state()
@@ -438,21 +439,20 @@ class Environment():
         # start with next seed point
         seed_id = self.n_resets % len(self.seeds)
         center = torch.Tensor(self.seeds[seed_id])
-        self.r = 5.0 # radius around center to randomly place starting points
         g = torch.Generator()
         g.manual_seed(0)
-        offsets = self.r * torch.rand((self.n_seeds, 3), generator=g)
+        offsets = self.r * torch.rand((self.n_seeds, 2), generator=g)
         bundle_seeds = center[None] + offsets
 
-        self.paths = [*torch.Tensor(bundle_seeds)[:,None]] # a list of N paths. each path is a 1 x 3 tensor
+        self.paths = [*torch.Tensor(bundle_seeds)[:,None]] # a list of N paths. each path is a 1 x 2 tensor
         self.ended_paths = []
         self.cos_path_angle = [1.0] * len(self.paths) # list of N floats.       
 
         # initialize last two step directions randomly for each streamline
         g = torch.Generator()
         g.manual_seed(self.n_resets)
-        last_steps = [*2*torch.rand(((len(self.paths),)+(1,3)), generator=g)-1.0] # list of len N paths, of 1x3 tensors
-        last_steps = [x / np.sqrt(x[0,0]**2+x[0,1]**2+x[0,2]**2) for x in last_steps] # unit normalize directions
+        last_steps = [*2*torch.rand(((len(self.paths),)+(1,2)), generator=g)-1.0] # list of len N paths, of 1x3 tensors
+        last_steps = [x / np.sqrt(x[0,0]**2+x[0,1]**2) for x in last_steps] # unit normalize directions
         self.paths = [torch.cat((point - 2*step*self.step_size, point - step*self.step_size, point)) for point, step in zip(self.paths, last_steps)]
 
         # reset bundle density
@@ -460,6 +460,6 @@ class Environment():
         for i in range(len(self.paths)):
             for j in range(len(self.paths[i])-1):
                 segment = torch.stack((self.paths[i][j], self.paths[i][j+1]), dim=0)
-                self.img.draw_line_segment(segment, width=1)
+                self.img.draw_line_segment(segment, width=self.step_width, n_dim=2)
 
         return

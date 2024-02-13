@@ -35,6 +35,7 @@ def main(args):
     model = args["model"] if "model" in args else None
     n_seeds = args["n_seeds"] if "n_seeds" in args else 1
     step_size = args["step_size"] if "step_size" in args else 1.0
+    step_width = args["step_width"] if "step_width" in args else 1.0
     batch_size = args["batchsize"] if "batchsize" in args else 128
     gamma = args["gamma"] if "gamma" in args else 0.99
     eps_start = args["eps_start"] if "eps_start" in args else 0.9
@@ -48,10 +49,16 @@ def main(args):
     num_episodes = args["num_episodes"] if "num_episodes" in args else 100
     pixelsize = args["pixelsize"] if "pixelsize" in args else [1.0, 1.0, 1.0]
     patch_radius = 12
-    actions = np.load('/home/brysongray/tractography/neuron_trx/action_space_40_dir.npy')
+    # actions = np.load('/home/brysongray/tractography/neuron_trx/action_space_40_dir.npy')
+    thetas = torch.arange(-torch.pi, torch.pi, torch.pi/15)
+    actions = torch.tensor([(-step_size*torch.cos(t), step_size*torch.sin(t)) for t in thetas])
+    actions = torch.concatenate((actions, torch.tensor([[0.0,0.0]])), dim=0)
 
-    img, density, mask = load_data(img_file, label_file, downsample_factor=10)
+    img, density, mask = load_data(img_file, label_file, downsample_factor=10, binary=True)
 
+    img = img.amax(dim=1)
+    density = density.amax(dim=1)
+    mask = mask.amax(dim=1)
 
     env = Environment(img,
                       patch_radius,
@@ -61,6 +68,7 @@ def main(args):
                       actions,
                       n_seeds=1,
                       step_size=step_size,
+                      step_width=step_width,
                       pixelsize=pixelsize,
                       max_len=10000,
                       alpha=alpha,

@@ -244,10 +244,6 @@ class Environment():
         Cosine angle between step directions. A list of N floats, one for each path.
     n_resets : int
         Count of the number of episode resets during training.
-    ended_paths : list
-        list of paths that have terminated
-    ball : ndarray
-        3D Gaussian volume patch.
 
     """
 
@@ -279,7 +275,6 @@ class Environment():
 
         self.paths = [*torch.Tensor(bundle_seeds)[:,None]] # a list of N paths. each path is a 1 x 3 tensor
         self.cos_path_angle = [1.0] * len(self.paths) # list of N floats.       
-        self.ended_paths = []
         self.alpha = alpha
         self.beta = beta
         self.friction = friction
@@ -354,7 +349,7 @@ class Environment():
             # so negative change is good, hence the flipped (positive) exponent which is normally negative for sigmoid function.
             # it is also shifted down so that zero change yields zero.
             sigmoid_diff = 2e4 / (1 + np.exp(delta_density_diff / 2e-4)) - 1e4 # calibrated so that a good step is around 1.
-            sigmoid_diff = np.max([sigmoid_diff, 0.0]) # do not give negative values for matching
+            # sigmoid_diff = np.max([sigmoid_diff, 0.0]) # do not give negative values for matching
             reward = self.alpha*sigmoid_diff + self.beta*(cos_angle-1) - self.friction 
             if verbose:
                 print(f'sigmoid_diff: {sigmoid_diff}','\n',
@@ -387,27 +382,31 @@ class Environment():
         """
         terminated = False
 
+        # bounce agent back in bounds if it steps out
         # add new position to path
-        while True:
-            new_position = self.paths[self.head_id][-1] + self.step_size*action
-            out_of_bound = any([x >= y or x < 0 for x,y in zip(torch.round(new_position), self.img.data.shape[1:])])
-            if out_of_bound:
-                action = self.action_space[int(np.random.randint(len(self.action_space)))]
-            else:
-                break
+        # while True:
+        #     new_position = self.paths[self.head_id][-1] + self.step_size*action
+        #     out_of_bound = any([x >= y or x < 0 for x,y in zip(torch.round(new_position), self.img.data.shape[1:])])
+        #     if out_of_bound:
+        #         action = self.action_space[int(np.random.randint(len(self.action_space)))]
+        #     else:
+        #         break
 
+        new_position = self.paths[self.head_id][-1] + self.step_size*action
+        out_of_bound = any([x >= y or x < 0 for x,y in zip(torch.round(new_position), self.img.data.shape[1:])])
+        out_of_mask = 1 - self.mask[(0,)+tuple([int(x) for x in self.paths[self.head_id][-1]])]
         self.paths[self.head_id] = torch.cat((self.paths[self.head_id], new_position[None]))
         # decide if path terminates
         # out_of_mask = self.mask[tuple([int(x) for x in self.paths[self.head_id][-1]])]
         too_long = len(self.paths[self.head_id]) > self.max_len
         self_terminate = not any(action)
-        terminate_path = too_long or self_terminate
+        terminate_path = too_long or self_terminate or out_of_mask or out_of_bound
 
         if terminate_path:
             observation = None
             reward = torch.tensor([0.], device=DEVICE)
             # remove the path from 'paths' and add it to 'ended_paths'
-            self.ended_paths.append(self.paths.pop(self.head_id))
+            self.paths.pop(self.head_id)
             # if that was the last path in the list, then terminate the episode
             if len(self.paths) == 0:
                 terminated = True
@@ -447,7 +446,6 @@ class Environment():
         bundle_seeds = center[None] + offsets
 
         self.paths = [*torch.Tensor(bundle_seeds)[:,None]] # a list of N paths. each path is a 1 x 3 tensor
-        self.ended_paths = []
         self.cos_path_angle = [1.0] * len(self.paths) # list of N floats.       
 
         # initialize last two step directions randomly for each streamline

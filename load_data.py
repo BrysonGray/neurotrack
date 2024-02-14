@@ -58,7 +58,7 @@ def load_data(img_dir, label_file, downsample_factor, binary=False):
         density.draw_line_segment(s[:,:3], width=s[0,-1].item(), binary=binary)
 
     mask = torch.zeros_like(density.data)
-    mask[density.data>0.68] = 1.0 
+    mask[density.data>0.05] = 1.0 
 
     # # get points
     # points = label.points[:,:3]

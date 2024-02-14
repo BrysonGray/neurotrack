@@ -149,7 +149,7 @@ class DQN(nn.Module):
         return x
 
 class DQNModel():
-    def __init__(self, in_channels, n_actions, input_size, lr):
+    def __init__(self, in_channels, n_actions, input_size, lr=0.005):
     
         self.policy_net = DQN(in_channels, n_actions, input_size).to(DEVICE)
         self.target_net = DQN(in_channels, n_actions, input_size).to(DEVICE)
@@ -162,18 +162,23 @@ class DQNModel():
         self.policy_net.load_state_dict(model_weights)
         self.target_net.load_state_dict(model_weights)
 
-    def select_action(self, action_space, observation, steps_done, eps_start=0.9, eps_end=0.01, eps_decay=1000):
-        sample = random.random()
-        eps_threshold = eps_end + (eps_start - eps_end) * \
-            math.exp(-1. * steps_done / eps_decay)
+    def select_action(self, action_space, observation, steps_done=0, eps_start=0.9, eps_end=0.01, eps_decay=1000, greedy=False):
+        if not greedy:
+            sample = random.random()
+            eps_threshold = eps_end + (eps_start - eps_end) * \
+                math.exp(-1. * steps_done / eps_decay)
 
-        if sample > eps_threshold:
+            if sample > eps_threshold:
+                with torch.no_grad():
+                    #  pick action with the larger expected reward.
+                    return torch.argmax(self.policy_net(observation))
+            else:
+                # take a random action  
+                return torch.randint(len(action_space), (1,), device=DEVICE).squeeze()
+        else:
             with torch.no_grad():
                 #  pick action with the larger expected reward.
                 return torch.argmax(self.policy_net(observation))
-        else:
-            # take a random action  
-            return torch.randint(len(action_space), (1,), device=DEVICE).squeeze()
 
 
     def optimize_model(self, batch_size, gamma):
@@ -238,6 +243,7 @@ class DQNModel():
             ep_return = 0
             for t in count():
                 action_id = self.select_action(env.action_space, state, steps_done, eps_start, eps_end, eps_decay)
+                steps_done += 1
                 # take step, get observation and reward, and move index to next streamline
                 observation, reward, terminated = env.step(env.action_space[action_id]) 
                 ep_return += reward
@@ -270,7 +276,7 @@ class DQNModel():
                         plot_durations(episode_durations)
                         plot_returns(episode_returns)
                     if save_snapshots:
-                        if i%10 == 0:
+                        if i%17 == 0:
                             torch.save(env.img.data[-1].detach().clone(), os.path.join(output, f'bundle_density_ep{i}.pt'))
                             torch.save(target_net_state_dict, os.path.join(output, f'model_state_dict_{name}.pt'))
                             torch.save(episode_durations, os.path.join(output, f'episode_durations_{name}.pt'))
@@ -279,6 +285,8 @@ class DQNModel():
 
                 # if not terminated, move to the next state
                 state = env.get_state()[0].to(dtype=torch.float32, device=DEVICE) # the head of the next streamline
+        
+            
 
         print('Complete')
         plot_durations(episode_durations, show_result=True)
@@ -287,3 +295,31 @@ class DQNModel():
         plt.show()
 
         return
+    
+
+    def inference(self, env):
+
+            env.reset()
+            state = env.get_state()[0].clone().to(dtype=torch.float32, device=DEVICE)
+            ep_return = 0
+
+            while True:
+                # get action
+                action_id = self.select_action(env.action_space, state, greedy=True)
+
+                # take step, get observation and reward, and move index to next streamline
+                observation, reward, terminated = env.step(env.action_space[action_id]) 
+                ep_return += reward
+
+                if terminated: # episode terminated
+                    next_state = None
+                else:
+                    next_state = observation # if the streamline terminated observation is None
+                    if next_state is not None:
+                        next_state = next_state[0].clone().to(dtype=torch.float32, device=DEVICE)
+                
+                if terminated:
+                    return env
+
+                # if not terminated, move to the next state
+                state = env.get_state()[0].to(dtype=torch.float32, device=DEVICE) # the head of the next streamline

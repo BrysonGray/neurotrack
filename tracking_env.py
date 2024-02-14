@@ -316,7 +316,7 @@ class Environment():
         patch, _ = self.img.crop(self.paths[self.head_id][-1], self.radius, pad=True, value=0.0)
         patch = patch.detach().clone()
         
-        last_steps = self.paths[self.head_id][-3:] # 3 x 3 tensor of last three streamline positions
+        last_steps = self.paths[self.head_id][-3:].detach().clone() # 3 x 3 tensor of last three streamline positions
 
         return patch[None], last_steps
 

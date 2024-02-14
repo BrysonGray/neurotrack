@@ -10,13 +10,13 @@
     "step_size": 2.0,
     "step_width": 2.0,
     "eps_start": 0.9,
-    "eps_end": 0.001,
+    "eps_end": 0.01,
     "eps_decay": 1e4,
     "tau": 0.0005,
     "lr": 0.0001,
     "alpha": 1.0,
-    "beta": 0.0,
+    "beta": 0.5,
     "friction": 0.0,
-    "num_episodes": 1000000000,
+    "num_episodes": 10000,
     "pixelsize": [0.88, 1.0, 1.0]
 }

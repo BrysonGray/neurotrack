@@ -72,7 +72,8 @@ def main(args):
     dqn_model = DQNModel(in_channels=4,
                          n_actions=len(actions),
                          input_size=(2*patch_radius+1),
-                         lr=lr)
+                         lr=lr,
+                         step_size=torch.tensor(step_size))
 
     if model:
         dqn_model.load_model(torch.load(model))
@@ -87,7 +88,7 @@ def main(args):
                     eps_decay=eps_decay,
                     save_snapshots=True,
                     show=False,
-                    name='config_alpha-1_beta-0_f-0')
+                    name='config_alpha-1_beta-0.5_f-0')
 
     return
 

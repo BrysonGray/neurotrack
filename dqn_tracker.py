@@ -121,12 +121,10 @@ class DQN(nn.Module):
         Note the input must have equal height, width, and depth.
     """
 
-    def __init__(self, in_channels, n_actions, input_size):
+    def __init__(self, in_channels, n_actions, input_size, step_size=torch.tensor([1.0,1.0,1.0])):
         super().__init__()
-        self.conv1 = nn.Conv3d(in_channels, 16, 3, stride=2)
-        self.norm1 = nn.BatchNorm3d(16)
-        self.conv2 = nn.Conv3d(16, 32, 3, stride=2)
-        self.norm2 = nn.BatchNorm3d(32)
+
+        self.step_size = step_size
 
         # calculate the size of the convolution output for input to Linear
         shape_out = lambda x, k, s: ((x - k)/s + 1)//1
@@ -134,25 +132,45 @@ class DQN(nn.Module):
         h = shape_out(h, 3, 2) # second conv
         n_features = int(32 * h**3)
 
+        # convolution layers
+        self.conv1 = nn.Conv3d(in_channels, 16, 3, stride=2)
+        self.norm1 = nn.BatchNorm3d(16)
+        self.conv2 = nn.Conv3d(16, 32, 3, stride=2)
+        self.norm2 = nn.BatchNorm3d(32)
+
+        # fully connected layers
         self.fc1 = nn.Linear(n_features, 512)
         self.fc2 = nn.Linear(512, 128)
         self.fc3 = nn.Linear(128, n_actions)
+        self.fc4 = nn.Linear(6, 128)
 
-    def forward(self, x):
+        self.beta = torch.tensor(1.0, requires_grad=True)
+
+
+    def forward(self, state):
+        x,p = state
+
+        v = (p[1] - p[0]) / self.step_size
+        w = (p[2] - p[1]) / self.step_size
+        a = torch.dot(v,w)
+
         x = self.norm1(F.relu(self.conv1(x)))
         x = self.norm2(F.relu(self.conv2(x)))
         x = torch.flatten(x, 1) # flatten all dimensions except batch
         x = F.relu(self.fc1(x))
         x = F.relu(self.fc2(x))
-        x = self.fc3(x)
+        b = self.beta * a
+        c = x + b
+        x = self.fc3(c)
         
         return x
+    
 
 class DQNModel():
-    def __init__(self, in_channels, n_actions, input_size, lr=0.005):
+    def __init__(self, in_channels, n_actions, input_size, lr=0.005, step_size=torch.tensor([1.0,1.0,1.0])):
     
-        self.policy_net = DQN(in_channels, n_actions, input_size).to(DEVICE)
-        self.target_net = DQN(in_channels, n_actions, input_size).to(DEVICE)
+        self.policy_net = DQN(in_channels, n_actions, input_size, step_size).to(DEVICE)
+        self.target_net = DQN(in_channels, n_actions, input_size, step_size).to(DEVICE)
         self.target_net.load_state_dict(self.policy_net.state_dict())
 
         self.optimizer = torch.optim.AdamW(self.policy_net.parameters(), lr=lr, amsgrad=True)
@@ -239,7 +257,9 @@ class DQNModel():
         # Train the Network
         for i in tqdm(range(episodes)):
             env.reset()
-            state = env.get_state()[0].clone().to(dtype=torch.float32, device=DEVICE)
+            state = env.get_state()
+            state = (state[0].to(dtype=torch.float32, device=DEVICE),\
+                     state[1].to(dtype=torch.float32, device=DEVICE))
             ep_return = 0
             for t in count():
                 action_id = self.select_action(env.action_space, state, steps_done, eps_start, eps_end, eps_decay)
@@ -253,7 +273,9 @@ class DQNModel():
                 else:
                     next_state = observation # if the streamline terminated observation is None
                     if next_state is not None:
-                        next_state = next_state[0].clone().to(dtype=torch.float32, device=DEVICE)
+                        next_state = (next_state[0].to(dtype=torch.float32, device=DEVICE),\
+                                      next_state[1].to(dtype=torch.float32, device=DEVICE))
+
 
                 # Store the transition in memory
                 self.memory.push(state, action_id, next_state, reward)
@@ -284,10 +306,10 @@ class DQNModel():
                     break
 
                 # if not terminated, move to the next state
-                state = env.get_state()[0].to(dtype=torch.float32, device=DEVICE) # the head of the next streamline
+                state = env.get_state() # the head of the next streamline
+                state = (state[0].to(dtype=torch.float32, device=DEVICE),\
+                        state[1].to(dtype=torch.float32, device=DEVICE))
         
-            
-
         print('Complete')
         plot_durations(episode_durations, show_result=True)
         plot_returns(episode_durations, show_result=True)
@@ -300,7 +322,7 @@ class DQNModel():
     def inference(self, env):
 
             env.reset()
-            state = env.get_state()[0].clone().to(dtype=torch.float32, device=DEVICE)
+            state = env.get_state().clone().to(dtype=torch.float32, device=DEVICE)
             ep_return = 0
 
             while True:
@@ -316,10 +338,10 @@ class DQNModel():
                 else:
                     next_state = observation # if the streamline terminated observation is None
                     if next_state is not None:
-                        next_state = next_state[0].clone().to(dtype=torch.float32, device=DEVICE)
+                        next_state = next_state.clone().to(dtype=torch.float32, device=DEVICE)
                 
                 if terminated:
                     return env
 
                 # if not terminated, move to the next state
-                state = env.get_state()[0].to(dtype=torch.float32, device=DEVICE) # the head of the next streamline
+                state = env.get_state().to(dtype=torch.float32, device=DEVICE) # the head of the next streamline

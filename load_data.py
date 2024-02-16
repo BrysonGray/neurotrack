@@ -55,7 +55,7 @@ def load_data(img_dir, label_file, downsample_factor, binary=False):
 
     for s in segments:
         s = torch.tensor(s)
-        density.draw_line_segment(s[:,:3], width=s[0,-1].item(), binary=binary)
+        density.draw_line_segment(s[:,:3], width=s[0,-1].item()/2, binary=binary)
 
     mask = torch.zeros_like(density.data)
     mask[density.data>0.05] = 1.0 

@@ -124,7 +124,7 @@ class DQN(nn.Module):
     def __init__(self, in_channels, n_actions, input_size, step_size=torch.tensor([1.0,1.0,1.0])):
         super().__init__()
 
-        self.step_size = step_size
+        self.step_size = step_size.to(dtype=torch.float32, device=DEVICE)
 
         # calculate the size of the convolution output for input to Linear
         shape_out = lambda x, k, s: ((x - k)/s + 1)//1
@@ -142,26 +142,21 @@ class DQN(nn.Module):
         self.fc1 = nn.Linear(n_features, 512)
         self.fc2 = nn.Linear(512, 128)
         self.fc3 = nn.Linear(128, n_actions)
-        self.fc4 = nn.Linear(6, 128)
-
-        self.beta = torch.tensor(1.0, requires_grad=True)
-
+        self.fc4 = nn.Linear(3, n_actions)
 
     def forward(self, state):
         x,p = state
+        w = (p[:,2] - p[:,1]) / self.step_size
 
-        v = (p[1] - p[0]) / self.step_size
-        w = (p[2] - p[1]) / self.step_size
-        a = torch.dot(v,w)
-
-        x = self.norm1(F.relu(self.conv1(x)))
-        x = self.norm2(F.relu(self.conv2(x)))
+        x = F.relu(self.norm1(self.conv1(x)))
+        x = F.relu(self.norm2(self.conv2(x)))
         x = torch.flatten(x, 1) # flatten all dimensions except batch
         x = F.relu(self.fc1(x))
         x = F.relu(self.fc2(x))
-        b = self.beta * a
-        c = x + b
-        x = self.fc3(c)
+
+        w = self.fc4(w)
+
+        x = self.fc3(x) + w
         
         return x
     
@@ -174,6 +169,9 @@ class DQNModel():
         self.target_net.load_state_dict(self.policy_net.state_dict())
 
         self.optimizer = torch.optim.AdamW(self.policy_net.parameters(), lr=lr, amsgrad=True)
+
+        self.lrscheduler = torch.optim.lr_scheduler.StepLR(self.optimizer, step_size=1, gamma=0.9993)
+
         self.memory = ReplayMemory(10000)
 
     def load_model(self, model_weights):
@@ -203,8 +201,9 @@ class DQNModel():
         """ Do one optimization step
         
         """
+        loss = None
         if len(self.memory) < batch_size:
-            return
+            return loss
         transitions = self.memory.sample(batch_size)
 
         # Convert batch-array of transitions to transition of batch-arrays
@@ -213,9 +212,20 @@ class DQNModel():
         # Compute a mask of non-final states and concatenate the batch elements
         non_final_mask = torch.tensor(tuple(map(lambda s: s is not None,
                                             batch.next_state)), device=DEVICE, dtype=torch.bool)
-        non_final_next_states = torch.cat([s for s in batch.next_state
-                                                    if s is not None])
-        state_batch = torch.cat(batch.state)
+        
+        # non_final_next_states = torch.cat([s[0] for s in batch.next_state
+        #                                             if s is not None])
+        
+        # turn a tupe of tuples (observation, last_steps) into a single tuple of concatenated states 
+        x = torch.cat([s[0] for s in batch.next_state if s is not None])
+        p = torch.cat([s[1] for s in batch.next_state if s is not None])
+        non_final_next_states = (x,p)
+
+        x = torch.cat([s[0] for s in batch.state if s is not None])
+        p = torch.cat([s[1] for s in batch.state if s is not None])
+        state_batch = (x,p)
+
+        # state_batch = torch.cat(batch.state)
         action_batch = torch.stack(batch.action).unsqueeze(1)
         reward_batch = torch.cat(batch.reward).to(device=DEVICE)
 
@@ -246,12 +256,17 @@ class DQNModel():
         torch.nn.utils.clip_grad_value_(self.policy_net.parameters(), 100)
         self.optimizer.step()
 
+        return loss.detach().to('cpu')
+
     def train(self, env, episodes=100, batch_size=128, gamma=0.99, tau=0.001, eps_start=0.9, eps_end=0.01,
               eps_decay=1000, save_snapshots=True, output='./outputs', name='config0', show=False):
 
         steps_done = 0
         episode_durations = []
         episode_returns = []
+        losses = []
+        lr_vals = []
+        eps = []
         if not os.path.exists(output):
             os.makedirs(output)
         # Train the Network
@@ -281,7 +296,10 @@ class DQNModel():
                 self.memory.push(state, action_id, next_state, reward)
 
                 # Perform one step of the optimization (on the policy network)
-                self.optimize_model(batch_size, gamma)
+                loss = self.optimize_model(batch_size, gamma)
+                if loss:
+                    if steps_done%50 == 0:
+                        losses.append(loss)
 
                 # Soft update of the target network's weights
                 # θ′ ← τ θ + (1 −τ )θ′
@@ -299,17 +317,27 @@ class DQNModel():
                         plot_returns(episode_returns)
                     if save_snapshots:
                         if i%17 == 0:
-                            torch.save(env.img.data[-1].detach().clone(), os.path.join(output, f'bundle_density_ep{i}.pt'))
+                            torch.save(env.img.data[-1].detach().clone(), os.path.join(output, f'bundle_density_ep{i%5}.pt'))
                             torch.save(target_net_state_dict, os.path.join(output, f'model_state_dict_{name}.pt'))
                             torch.save(episode_durations, os.path.join(output, f'episode_durations_{name}.pt'))
                             torch.save(episode_returns, os.path.join(output, f'episode_returns_{name}.pt'))
+                            torch.save(losses, os.path.join(output, f'loss_{name}.pt'))
+                            torch.save(lr_vals, os.path.join(output, f'lr_{name}.pt'))
+
+                            eps.append(eps_end + (eps_start - eps_end) * math.exp(-1. * steps_done / eps_decay))
+                            torch.save(eps, os.path.join(output, f'eps_{name}.pt'))
                     break
 
                 # if not terminated, move to the next state
                 state = env.get_state() # the head of the next streamline
                 state = (state[0].to(dtype=torch.float32, device=DEVICE),\
                         state[1].to(dtype=torch.float32, device=DEVICE))
-        
+                
+            if len(self.memory) > batch_size:
+                self.lrscheduler.step()
+                lr = self.lrscheduler.get_last_lr()
+                lr_vals.append(lr)
+
         print('Complete')
         plot_durations(episode_durations, show_result=True)
         plot_returns(episode_durations, show_result=True)

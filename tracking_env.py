@@ -318,7 +318,7 @@ class Environment():
         
         last_steps = self.paths[self.head_id][-3:].detach().clone() # 3 x 3 tensor of last three streamline positions
 
-        return patch[None], last_steps
+        return patch[None], last_steps[None]
 
 
     def get_reward(self, terminated, delta_density_diff, verbose=False):
@@ -342,13 +342,13 @@ class Environment():
         if terminated:
             reward = 0
         else:
-            prev_step = self.paths[self.head_id][-2]-self.paths[self.head_id][-3] # shape (3,) tensor
-            current_step = self.paths[self.head_id][-1]-self.paths[self.head_id][-2] # shape (3,) tensor
-            cos_angle = torch.dot(current_step, prev_step).to(float) / torch.sqrt(torch.sum(self.step_size**2))
+            prev_step = (self.paths[self.head_id][-2]-self.paths[self.head_id][-3]) / self.step_size
+            current_step = (self.paths[self.head_id][-1]-self.paths[self.head_id][-2]) / self.step_size
+            cos_angle = torch.dot(current_step, prev_step).to(float) #/ torch.sqrt(torch.sum(self.step_size**2))
             # note that delta density difference is a change in error,
             # so negative change is good, hence the flipped (positive) exponent which is normally negative for sigmoid function.
             # it is also shifted down so that zero change yields zero.
-            sigmoid_diff = 2e4 / (1 + np.exp(delta_density_diff / 2e-4)) - 1e4 # calibrated so that a good step is around 1.
+            sigmoid_diff = 2e4 / (1 + np.exp(delta_density_diff / 1e-4)) - 1e4 # calibrated so that a good step is around 1.
             # sigmoid_diff = np.max([sigmoid_diff, 0.0]) # do not give negative values for matching
             reward = self.alpha*sigmoid_diff + self.beta*(cos_angle-1) - self.friction 
             if verbose:
@@ -361,7 +361,7 @@ class Environment():
         return torch.tensor([reward], device=DEVICE, dtype=torch.float32)
 
 
-    def step(self, action):
+    def step(self, action, verbose=False):
         """ Take a tracking step for one streamline. Add the new position to the path and
         and the bundle density mask, and compute the reward and new state observation.
 
@@ -425,7 +425,7 @@ class Environment():
             new_density_patch = new_density_patch[-1][None]
             delta_density_diff = density_error_change(true_density_patch, old_density_patch, new_density_patch)
             observation = self.get_state()
-            reward = self.get_reward(terminated, delta_density_diff, verbose=False)
+            reward = self.get_reward(terminated, delta_density_diff, verbose=verbose)
 
             self.head_id = (self.head_id + 1)%len(self.paths)
 

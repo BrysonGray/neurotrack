@@ -88,7 +88,7 @@ def main(args):
                     eps_decay=eps_decay,
                     save_snapshots=True,
                     show=False,
-                    name='config_alpha-1_beta-0.5_f-0')
+                    name='alpha-1_beta-2.0_f-0.5_n-10')
 
     return
 

@@ -146,7 +146,7 @@ class DQN(nn.Module):
 
     def forward(self, state):
         x,p = state
-        w = (p[:,2] - p[:,1]) / self.step_size
+        w = (p[:,1] - p[:,0]) / self.step_size
 
         x = F.relu(self.norm1(self.conv1(x)))
         x = F.relu(self.norm2(self.conv2(x)))
@@ -216,7 +216,7 @@ class DQNModel():
         # non_final_next_states = torch.cat([s[0] for s in batch.next_state
         #                                             if s is not None])
         
-        # turn a tupe of tuples (observation, last_steps) into a single tuple of concatenated states 
+        # turn a tuple of tuples (observation, last_steps) into a single tuple of concatenated states 
         x = torch.cat([s[0] for s in batch.next_state if s is not None])
         p = torch.cat([s[1] for s in batch.next_state if s is not None])
         non_final_next_states = (x,p)

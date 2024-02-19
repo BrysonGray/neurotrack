@@ -11,24 +11,40 @@ import tifffile as tf
 import os
 import numpy as np
 import torch
-import scipy
+import utils
 from neurom.io.utils import load_morphology
 import sys
 sys.path.append('/home/brysongray/tractography')
 from image import Image
 
 
-def load_data(img_dir, label_file, downsample_factor, binary=False):
+def load_data(img_dir, label_file, pixelsize=[1.0,1.0,1.0], downsample_factor=1.0):
     # load image stack
     files = os.listdir(img_dir)
     stack = []
-    for i in range(len(files)):
-        img = tf.imread(os.path.join(img_dir,files[i])) # channels are in the last dim
-        img = img[::downsample_factor, ::downsample_factor]
+    
+    # load first image and initialize interp coordinates
+    img = tf.imread(os.path.join(img_dir,files[0])).transpose(2,0,1).astype(np.float32) # channels are in the last dim
+    
+    # downsample in x-y by stepping in intervals of dz*downsample_factor so that if downsampling is zero,
+    # this will set the image to isotropic pixel size 
+    x = [torch.arange(x)*d for x,d in zip(img.shape[1:], pixelsize[1:])]
+    scale = pixelsize[0]*downsample_factor
+    x_ = [torch.arange(start=0.0, end=x*d, step=scale) for x,d in zip(img.shape[1:], pixelsize[1:])]
+    phii = torch.stack(torch.meshgrid(x_, indexing='ij'))
+
+    img = utils.interp(x, img, phii, interp2d=True) # channels along the first axis
+    stack.append(img)
+    # now do the rest
+    for i in range(len(files)-1):
+        img = tf.imread(os.path.join(img_dir,files[i+1])).transpose(2,0,1).astype(np.float32)
+        # downsample x,y first to reduce memory
+        # img = img[::downsample_factor, ::downsample_factor]
+        img = utils.interp(x, img, phii, interp2d=True) # channels along the first axis
         stack.append(img)
     stack = torch.tensor(np.array(stack))
-    stack = torch.permute(stack, (-1,0,1,2))
-    stack = stack / stack.amax(dim=(0,1,2,3))
+    stack = torch.permute(stack, (1,0,2,3)) # reshape to c x h x w x d
+    stack = stack / stack.amax(dim=(0,1,2,3)) # rescale to [0,1]
 
     # load label
     label = load_morphology(label_file)
@@ -49,16 +65,18 @@ def load_data(img_dir, label_file, downsample_factor, binary=False):
         segments_[:,:,-1] = np.stack((r,r), axis=-1)
         segments.append(segments_)
     segments = np.concatenate(segments, axis=0)
-    segments = np.stack((segments[:,:,2], segments[:,:,1]/downsample_factor, segments[:,:,0]/downsample_factor, segments[...,-1]), axis=-1)
 
-    density = Image(torch.zeros((1,)+stack.shape[1:]), dx=[0.88, 1.0, 1.0])
+    # rescale segments
+    segments = np.stack((segments[:,:,2], segments[:,:,1]/scale, segments[:,:,0]/scale, segments[...,-1]), axis=-1)
+
+    density = Image(torch.zeros((1,)+stack.shape[1:]))
 
     for s in segments:
         s = torch.tensor(s)
-        density.draw_line_segment(s[:,:3], width=s[0,-1].item()/2, binary=binary)
+        density.draw_line_segment(s[:,:3], width=s[0,-1].item()/2)
 
     mask = torch.zeros_like(density.data)
-    mask[density.data>0.05] = 1.0 
+    mask[density.data>0.018] = 1.0 
 
     # # get points
     # points = label.points[:,:3]

@@ -22,13 +22,10 @@ class Image:
     ----------
     data : ndarray
         array with with channels along the first axis (c x h x w x d)
-    dx : list
-        the size of each pixel dimension in user defined coordinates.
 
     """
-    def __init__(self, data, dx):
+    def __init__(self, data):
         self.data = data
-        self.dx = dx
         if not isinstance(self.data, torch.Tensor):
             self.data = torch.from_numpy(self.data)
 
@@ -49,7 +46,7 @@ class Image:
             cropped_img : ndarray
                 Cropped image
         """
-        i,j,k = [int(x) for x in center]
+        i,j,k = [int(np.round(x)) for x in center]
         shape = self.data.shape[1:]
         zpad_top = zpad_btm = ypad_front = ypad_back = xpad_left = xpad_right = 0
 
@@ -80,7 +77,7 @@ class Image:
         return patch, padding
 
 
-    def draw_line_segment(self, segment, width, binary=False, channel=-1):
+    def draw_line_segment(self, segment, width, channel=-1):
         """ Draw a line segment with width.
 
         Parameters
@@ -93,7 +90,7 @@ class Image:
         """
         # get the center of the patch from the segment endpoints
         center = segment.sum(axis=0) / 2
-        direction = segment[0] - segment[1]
+        direction = segment[1] - segment[0]
         segment_length = torch.sqrt(torch.sum(direction**2))
 
         # unit normalize direction
@@ -101,8 +98,8 @@ class Image:
 
         # the patch should contain both line end points plus some blur
         L = int(torch.ceil(segment_length/2)) # half the line length, rounded up
-        overhang = int(2*width) # include space for 3 standard deviations beyond the line
-        patch_radius = L + overhang
+        overhang = int(2*width) # include space beyond the end of the line
+        patch_radius = L + overhang + 1
 
         patch_size = 2*patch_radius + 1
         X = torch.zeros((patch_size,patch_size,patch_size))
@@ -110,10 +107,13 @@ class Image:
         c = torch.Tensor([patch_radius]*3)
         start = torch.round(segment_length*direction + c).to(int)
         end = torch.round(-segment_length*direction + c).to(int)
-        line = line_nd(start, end, endpoint=True)
+        line = line_nd(start, end, endpoint=False)
         X[line] = 1.0
-        sigma = [d*width/2 for d in self.dx]
-        X = torch.Tensor(gaussian(X, sigma=sigma))
+
+        # if width is 0, don't blur
+        if width > 0:
+            sigma = width/2
+            X = torch.tensor(gaussian(X, sigma=sigma))
 
         patch, padding = self.crop(center, patch_radius, pad=False) # patch is a view of self.data (c x h x w x d)
         new_patch = X[padding[0]:X.shape[0]-padding[1], padding[2]:X.shape[1]-padding[3], padding[4]:X.shape[2]-padding[5]]
@@ -122,17 +122,8 @@ class Image:
         # add segment to patch
         patch[channel] = torch.maximum(new_patch, patch[channel])
 
-        if binary:
-            patch[channel] = torch.where(patch[channel] > 0.68, 1.0, 0.0)
-
         return
 
-        # # compute distance from the vertical segment. To be rotated later
-        # x = [np.arange(2*patch_radius+1)*d for d in self.dx]
-        # c = np.array([patch_radius*d for d in self.dx])
-        # start_point = c - np.array([L, 0, 0]) # bottom of the line
-        # end_point = c + np.array([L, 0, 0])
-        # X = np.stack(np.meshgrid(*x, indexing='ij'), axis=-1)
 
 def draw_neurite_tree(img, segments):
     """ Draw all segments to reconstruct a whole neurite tree.

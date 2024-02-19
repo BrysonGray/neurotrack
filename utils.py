@@ -325,7 +325,7 @@ def interp(x, I, phii, interp2d=False, **kwargs):
         spatial dimensions along the last 2.
     phii : array
         Numpy array or torch tensor storing positions of the sample points. phii is a 3D or 4D array
-        with components along the first axis (e.g. x0,x1,x1) and spatial dimensions 
+        with components along the first axis (e.g. x0,x1,x2) and spatial dimensions 
         along the last axes.
     interp2d : bool, optional
         If True, interpolates a 2D image, otherwise 3D. Default is False (expects a 3D image).

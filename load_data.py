@@ -44,7 +44,7 @@ def load_data(img_dir, label_file, pixelsize=[1.0,1.0,1.0], downsample_factor=1.
         stack.append(img)
     stack = torch.tensor(np.array(stack))
     stack = torch.permute(stack, (1,0,2,3)) # reshape to c x h x w x d
-    stack = stack / stack.amax(dim=(0,1,2,3)) # rescale to [0,1]
+    stack = stack / stack.amax(dim=(1,2,3))[:,None,None,None] # rescale to [0,1]. Each channel separately
 
     # load label
     label = load_morphology(label_file)

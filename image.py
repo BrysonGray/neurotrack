@@ -107,7 +107,7 @@ class Image:
         c = torch.Tensor([patch_radius]*3)
         start = torch.round(segment_length*direction + c).to(int)
         end = torch.round(-segment_length*direction + c).to(int)
-        line = line_nd(start, end, endpoint=False)
+        line = line_nd(start, end, endpoint=True)
         X[line] = 1.0
 
         # if width is 0, don't blur

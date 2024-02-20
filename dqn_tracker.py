@@ -350,7 +350,9 @@ class DQNModel():
     def inference(self, env):
 
             env.reset()
-            state = env.get_state().clone().to(dtype=torch.float32, device=DEVICE)
+            state = env.get_state()
+            state = (state[0].clone().to(dtype=torch.float32, device=DEVICE),\
+                     state[1].clone().to(dtype=torch.float32, device=DEVICE))
             ep_return = 0
 
             while True:
@@ -366,10 +368,13 @@ class DQNModel():
                 else:
                     next_state = observation # if the streamline terminated observation is None
                     if next_state is not None:
-                        next_state = next_state.clone().to(dtype=torch.float32, device=DEVICE)
+                        next_state = (next_state[0].to(dtype=torch.float32, device=DEVICE),\
+                                      next_state[1].to(dtype=torch.float32, device=DEVICE))
                 
                 if terminated:
                     return env
 
                 # if not terminated, move to the next state
-                state = env.get_state().to(dtype=torch.float32, device=DEVICE) # the head of the next streamline
+                state = env.get_state()
+                state = (state[0].clone().to(dtype=torch.float32, device=DEVICE),\
+                        state[1].clone().to(dtype=torch.float32, device=DEVICE)) # the head of the next streamline

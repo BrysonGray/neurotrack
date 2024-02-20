@@ -21,7 +21,7 @@ class Image:
     Parameters
     ----------
     data : ndarray
-        array with with channels along the first axis (c x h x w x d)
+        array with channels along the first axis (c x h x w x d)
 
     """
     def __init__(self, data):

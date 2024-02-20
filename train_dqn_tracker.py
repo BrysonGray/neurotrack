@@ -49,9 +49,9 @@ def main(args):
     num_episodes = args["num_episodes"] if "num_episodes" in args else 100
     pixelsize = args["pixelsize"] if "pixelsize" in args else [1.0, 1.0, 1.0]
     patch_radius = 17
-    actions = np.load('/home/brysongray/tractography/neuron_trx/action_space_30_dir.npy')
+    actions = np.load('/home/brysongray/tractography/neuron_trx/action_space_6_dir.npy')
 
-    img, density, mask = load_data(img_file, label_file, pixelsize=pixelsize)
+    img, density, mask = load_data(img_file, label_file, pixelsize=pixelsize, inverse=True)
 
 
     env = Environment(img,
@@ -86,8 +86,8 @@ def main(args):
                     eps_end=eps_end,
                     eps_decay=eps_decay,
                     save_snapshots=True,
-                    show=True,
-                    name='alpha-1_b-2.0_f-0.5_n-10')
+                    show=False,
+                    name=f'alpha-{alpha:.1f}_b-{beta:.1f}_f-{friction:.1f}_n-{n_seeds}')
 
     return
 

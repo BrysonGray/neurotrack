@@ -139,13 +139,15 @@ class Environment():
         self.finished_paths = []
 
         # initialize bundle density map
-        bundle_density = torch.zeros_like(true_density)
-        self.img.data = torch.cat((self.img.data, bundle_density), dim=0)
+        self.bundle_density = torch.zeros_like(true_density)
+        self.img.data = torch.cat((self.img.data, self.bundle_density.clone()), dim=0)
+        self.bundle_density = Image(self.bundle_density)
         for i in range(len(self.paths)):
             # add_bundle_point(bundle_density, self.paths[i][0], self.ball)
             for j in range(len(self.paths[i])-1):
                 segment = torch.stack((self.paths[i][j], self.paths[i][j+1]), dim=0)
                 self.img.draw_line_segment(segment, width=0)
+                self.bundle_density.draw_line_segment(segment, width=self.step_width)
 
 
     def get_state(self):
@@ -195,8 +197,8 @@ class Environment():
             # so negative change is good, hence the flipped (positive) exponent which is normally negative for sigmoid function.
             # it is also shifted down so that zero change yields zero.
             # sigmoid_diff = 2e3 / (1 + np.exp(delta_density_diff / 5e-3)) - 1e3 # calibrated so that a good step is around 1.
-            m = -52631.
-            b = -0.05263
+            m = -2.5e3 #-52631.
+            b = 0.2 #-0.05263
             diff = m*delta_density_diff + b
             # sigmoid_diff = np.max([sigmoid_diff, 0.0]) # do not give negative values for matching
             reward = self.alpha*diff + self.beta*(cos_angle-1) - self.friction 
@@ -232,19 +234,22 @@ class Environment():
         terminated = False
 
         new_position = self.paths[self.head_id][-1] + self.step_size*action
-        out_of_bound = any([x >= y or x < 0 for x,y in zip(torch.round(new_position), self.img.data.shape[1:])])
-        out_of_mask = 1 - self.mask[(0,)+tuple([int(np.round(x)) for x in self.paths[self.head_id][-1]])]
+
         # decide if path terminates
-        # out_of_mask = self.mask[tuple([int(x) for x in self.paths[self.head_id][-1]])]
-        too_long = len(self.paths[self.head_id]) > self.max_len
-        self_terminate = not any(action)
-        terminate_path = too_long or self_terminate or out_of_mask or out_of_bound
+        out_of_bound = any([x >= y or x < 0 for x,y in zip(torch.round(new_position), self.img.data.shape[1:])])
+        if out_of_bound:
+            terminate_path = True
+        else:
+            out_of_mask = 1 - self.mask[(0,)+tuple([int(np.round(x)) for x in new_position])]
+            too_long = len(self.paths[self.head_id]) > self.max_len
+            self_terminate = not any(action)
+            terminate_path = too_long or self_terminate or out_of_mask
 
         if terminate_path:
             observation = None
             reward = torch.tensor([0.], device=DEVICE)
             # remove the path from 'paths' and add it to 'ended_paths'
-            self.paths.pop(self.head_id)
+            self.finished_paths.append(self.paths.pop(self.head_id))
             # if that was the last path in the list, then terminate the episode
             if len(self.paths) == 0:
                 terminated = True
@@ -260,22 +265,16 @@ class Environment():
             true_density_patch, _ = self.true_density.crop(center, radius=r) # patch centered at previous step position
             
             # get old patch centered on old streamline head
-            old_density_patch, _ = self.img.crop(center, radius=r)
-            old_density_patch = old_density_patch.detach().clone()[-1] # need to make a copy or else this will be modified by adding a point to img
-            sigma = self.step_width/2
-            old_density_patch = torch.tensor(gaussian(old_density_patch, sigma=sigma))
+            old_density_patch, _ = self.bundle_density.crop(center, radius=r)
+            old_density_patch = old_density_patch.clone() # need to make a copy or else this will be modified by adding a point to img
 
             # draw the segment
             segment = self.paths[self.head_id][-2:, :3]
-            try:
-                self.img.draw_line_segment(segment, width=0)
-            except:
-                print()
+            self.img.draw_line_segment(segment, width=0)
+            self.bundle_density.draw_line_segment(segment, width=self.step_width)
 
             # get the new patch centered on the old streamline head
-            new_density_patch, _ = self.img.crop(center, radius=r)
-            new_density_patch = new_density_patch.detach().clone()[-1]
-            new_density_patch = torch.tensor(gaussian(new_density_patch, sigma=sigma))
+            new_density_patch, _ = self.bundle_density.crop(center, radius=r)
 
             # find the change in error mean(|true - new|) - mean(|true - old|)
             delta_density_diff = density_error_change(true_density_patch, old_density_patch, new_density_patch)
@@ -310,6 +309,8 @@ class Environment():
         last_steps = [*2*torch.rand(((len(self.paths),)+(1,3)), generator=g)-1.0] # list of len N paths, of 1x3 tensors
         last_steps = [x / np.sqrt(x[0,0]**2+x[0,1]**2+x[0,2]**2) for x in last_steps] # unit normalize directions
         self.paths = [torch.cat((point - 2*step*self.step_size, point - step*self.step_size, point)) for point, step in zip(self.paths, last_steps)]
+
+        self.finished_paths = []
 
         # reset bundle density
         self.img.data[-1] = torch.zeros_like(self.true_density.data[0])

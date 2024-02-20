@@ -317,7 +317,7 @@ class DQNModel():
                         plot_returns(episode_returns)
                     if save_snapshots:
                         if i%17 == 0:
-                            torch.save(env.img.data[-1].detach().clone(), os.path.join(output, f'bundle_density_ep{i%5}.pt'))
+                            torch.save(env.img.data[-1].detach().clone(), os.path.join(output, f'bundle_density_ep{i%env.n_seeds}.pt'))
                             torch.save(target_net_state_dict, os.path.join(output, f'model_state_dict_{name}.pt'))
                             torch.save(episode_durations, os.path.join(output, f'episode_durations_{name}.pt'))
                             torch.save(episode_returns, os.path.join(output, f'episode_returns_{name}.pt'))
@@ -350,7 +350,9 @@ class DQNModel():
     def inference(self, env):
 
             env.reset()
-            state = env.get_state().clone().to(dtype=torch.float32, device=DEVICE)
+            state = env.get_state()
+            state = (state[0].to(dtype=torch.float32, device=DEVICE),\
+                     state[1].to(dtype=torch.float32, device=DEVICE))
             ep_return = 0
 
             while True:
@@ -366,10 +368,12 @@ class DQNModel():
                 else:
                     next_state = observation # if the streamline terminated observation is None
                     if next_state is not None:
-                        next_state = next_state.clone().to(dtype=torch.float32, device=DEVICE)
+                        next_state = (next_state[0].to(dtype=torch.float32, device=DEVICE),\
+                                      next_state[1].to(dtype=torch.float32, device=DEVICE))
                 
                 if terminated:
                     return env
 
                 # if not terminated, move to the next state
-                state = env.get_state().to(dtype=torch.float32, device=DEVICE) # the head of the next streamline
+                state = (state[0].to(dtype=torch.float32, device=DEVICE),\
+                        state[1].to(dtype=torch.float32, device=DEVICE)) # the head of the next streamline

@@ -18,7 +18,7 @@ sys.path.append('/home/brysongray/tractography')
 from image import Image
 
 
-def load_data(img_dir, label_file, pixelsize=[1.0,1.0,1.0], downsample_factor=1.0):
+def load_data(img_dir, label_file, pixelsize=[1.0,1.0,1.0], downsample_factor=1.0, inverse=False):
     # load image stack
     files = os.listdir(img_dir)
     stack = []
@@ -45,6 +45,9 @@ def load_data(img_dir, label_file, pixelsize=[1.0,1.0,1.0], downsample_factor=1.
     stack = torch.tensor(np.array(stack))
     stack = torch.permute(stack, (1,0,2,3)) # reshape to c x h x w x d
     stack = stack / stack.amax(dim=(1,2,3))[:,None,None,None] # rescale to [0,1]. Each channel separately
+
+    if inverse:
+        stack = 1.0 - stack
 
     # load label
     label = load_morphology(label_file)
@@ -76,7 +79,7 @@ def load_data(img_dir, label_file, pixelsize=[1.0,1.0,1.0], downsample_factor=1.
         density.draw_line_segment(s[:,:3], width=s[0,-1].item()/2)
 
     mask = torch.zeros_like(density.data)
-    mask[density.data>0.018] = 1.0 
+    mask[density.data>np.exp(-5)] = 1.0 
 
     # # get points
     # points = label.points[:,:3]

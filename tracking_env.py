@@ -285,6 +285,8 @@ class Environment():
         last_steps = [*2*torch.rand(((len(self.paths),)+(1,3)), generator=g)-1.0] # list of len N paths, of 1x3 tensors
         last_steps = [x / np.sqrt(x[0,0]**2+x[0,1]**2+x[0,2]**2) for x in last_steps] # unit normalize directions
         self.paths = [torch.cat((point - 2*step*self.step_size, point - step*self.step_size, point)) for point, step in zip(self.paths, last_steps)]
+        
+        self.finished_paths = []
 
         # initialize bundle density map
         # compute gaussian ball to represent streamline points in bundle density map
@@ -405,8 +407,8 @@ class Environment():
         if terminate_path:
             observation = None
             reward = torch.tensor([0.], device=DEVICE)
-            # remove the path from 'paths' and add it to 'ended_paths'
-            self.paths.pop(self.head_id)
+            # remove the path from 'paths' and add it to 'finished_paths'
+            self.finished_paths.append(self.paths.pop(self.head_id))
             # if that was the last path in the list, then terminate the episode
             if len(self.paths) == 0:
                 terminated = True

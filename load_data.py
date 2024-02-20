@@ -18,7 +18,7 @@ sys.path.append('/home/brysongray/tractography')
 from image import Image
 
 
-def load_data(img_dir, label_file, downsample_factor, binary=False):
+def load_data(img_dir, label_file, downsample_factor, binary=False, inverse=False):
     # load image stack
     files = os.listdir(img_dir)
     stack = []
@@ -28,7 +28,10 @@ def load_data(img_dir, label_file, downsample_factor, binary=False):
         stack.append(img)
     stack = torch.tensor(np.array(stack))
     stack = torch.permute(stack, (-1,0,1,2))
-    stack = stack / stack.amax(dim=(0,1,2,3))
+    stack = stack / stack.amax(dim=(1,2,3))[:,None,None,None]
+
+    if inverse:
+        stack = 1.0 - stack
 
     # load label
     label = load_morphology(label_file)

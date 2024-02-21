@@ -347,21 +347,22 @@ class DQNModel():
         return
     
 
-    def inference(self, env):
+    def inference(self, env, out=None):
 
-            env.reset()
             state = env.get_state()
             state = (state[0].clone().to(dtype=torch.float32, device=DEVICE),\
                      state[1].clone().to(dtype=torch.float32, device=DEVICE))
             ep_return = 0
-
+            i = 0
+            plt.ioff()
             while True:
                 # get action
                 action_id = self.select_action(env.action_space, state, greedy=True)
 
                 # take step, get observation and reward, and move index to next streamline
-                observation, reward, terminated = env.step(env.action_space[action_id]) 
+                observation, reward, terminated = env.step(env.action_space[action_id])
                 ep_return += reward
+                i += 1
 
                 if terminated: # episode terminated
                     next_state = None
@@ -370,7 +371,14 @@ class DQNModel():
                     if next_state is not None:
                         next_state = (next_state[0].to(dtype=torch.float32, device=DEVICE),\
                                       next_state[1].to(dtype=torch.float32, device=DEVICE))
-                
+
+                        if out is not None and i%10 == 0:
+                                plt.figure(0)
+                                plt.imshow(env.img.data[-1].amax(dim=0), cmap='hot', alpha=0.5)#, int(paths[env.head_id][-1, 0])])
+                                plt.imshow(env.img.data[:3].amin(dim=1).permute(1,2,0), alpha=0.5)
+                                plt.axis('off')
+                                plt.savefig(os.path.join(out, f'path_{i}.png'))
+                            
                 if terminated:
                     return env
 

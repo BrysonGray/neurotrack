@@ -395,14 +395,15 @@ class Environment():
         #         break
 
         new_position = self.paths[self.head_id][-1] + self.step_size*action
-        out_of_bound = any([x >= y or x < 0 for x,y in zip(torch.round(new_position), self.img.data.shape[1:])])
-        out_of_mask = 1 - self.mask[(0,)+tuple([int(x) for x in self.paths[self.head_id][-1]])]
-        self.paths[self.head_id] = torch.cat((self.paths[self.head_id], new_position[None]))
         # decide if path terminates
-        # out_of_mask = self.mask[tuple([int(x) for x in self.paths[self.head_id][-1]])]
-        too_long = len(self.paths[self.head_id]) > self.max_len
-        self_terminate = not any(action)
-        terminate_path = too_long or self_terminate or out_of_mask or out_of_bound
+        out_of_bound = any([x >= y or x < 0 for x,y in zip(torch.round(new_position), self.img.data.shape[1:])])
+        if out_of_bound:
+            terminate_path = True
+        else:
+            out_of_mask = 1 - self.mask[(0,)+tuple([int(x) for x in torch.round(new_position)])]
+            too_long = len(self.paths[self.head_id]) > self.max_len
+            self_terminate = not any(action)
+            terminate_path = too_long or self_terminate or out_of_mask
 
         if terminate_path:
             observation = None
@@ -415,6 +416,9 @@ class Environment():
             else:
                 self.head_id = (self.head_id + 1)%len(self.paths)
         else:
+            # add step to path
+            self.paths[self.head_id] = torch.cat((self.paths[self.head_id], new_position[None]))
+
             center = self.paths[self.head_id][-2]
             r = self.radius + int(np.ceil(self.step_size.max()))
             true_density_patch, _ = self.true_density.crop(center, radius=r) # patch centered at previous step position
@@ -456,6 +460,8 @@ class Environment():
         last_steps = [*2*torch.rand(((len(self.paths),)+(1,3)), generator=g)-1.0] # list of len N paths, of 1x3 tensors
         last_steps = [x / np.sqrt(x[0,0]**2+x[0,1]**2+x[0,2]**2) for x in last_steps] # unit normalize directions
         self.paths = [torch.cat((point - 2*step*self.step_size, point - step*self.step_size, point)) for point, step in zip(self.paths, last_steps)]
+
+        self.finished_paths = []
 
         # reset bundle density
         self.img.data[-1] = torch.zeros_like(self.true_density.data[0])

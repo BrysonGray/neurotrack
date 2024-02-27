@@ -121,7 +121,7 @@ class DQN(nn.Module):
         Note the input must have equal height, width, and depth.
     """
 
-    def __init__(self, in_channels, n_actions, input_size, step_size=torch.tensor([1.0,1.0,1.0])):
+    def __init__(self, in_channels, n_actions, input_size, step_size=torch.tensor([1.0,1.0,1.0]), n=1):
         super().__init__()
 
         self.step_size = step_size.to(dtype=torch.float32, device=DEVICE)
@@ -133,30 +133,30 @@ class DQN(nn.Module):
         n_features = int(32 * h**3)
 
         # convolution layers
-        self.conv1 = nn.Conv3d(in_channels, 16, 3, stride=2)
-        self.norm1 = nn.BatchNorm3d(16)
-        self.conv2 = nn.Conv3d(16, 32, 3, stride=2)
-        self.norm2 = nn.BatchNorm3d(32)
+        # TODO: variable n
+        self.conv1 = nn.Conv3d(in_channels + 3, 16*n, 3, stride=2)
+        self.norm1 = nn.BatchNorm3d(16*n)
+        self.conv2 = nn.Conv3d(16*n, 32*n, 3, stride=2)
+        self.norm2 = nn.BatchNorm3d(32*n)
 
         # fully connected layers
         self.fc1 = nn.Linear(n_features, 512)
         self.fc2 = nn.Linear(512, 128)
         self.fc3 = nn.Linear(128, n_actions)
-        self.fc4 = nn.Linear(3, n_actions)
+        # self.fc4 = nn.Linear(3, n_actions)
 
     def forward(self, state):
         x,p = state
         w = (p[:,1] - p[:,0]) / self.step_size
+        
+        x = torch.concatenate((x, torch.ones((x.shape[0], 1, x.shape[2], x.shape[3], x.shape[4]), device=DEVICE)*w[:,:,None,None,None]), dim=1) # TODO: check this is right
 
         x = F.relu(self.norm1(self.conv1(x)))
         x = F.relu(self.norm2(self.conv2(x)))
         x = torch.flatten(x, 1) # flatten all dimensions except batch
         x = F.relu(self.fc1(x))
         x = F.relu(self.fc2(x))
-
-        w = self.fc4(w)
-
-        x = self.fc3(x) + w
+        x = self.fc3(x)
         
         return x
     
@@ -317,15 +317,15 @@ class DQNModel():
                         plot_returns(episode_returns)
                     if save_snapshots:
                         if i%17 == 0:
-                            torch.save(env.img.data[-1].detach().clone(), os.path.join(output, f'bundle_density_ep{i%env.n_seeds}.pt'))
+                            torch.save(env.img.data[-1].detach().clone(), os.path.join(output, f'bundle_density_ep{i%len(env.seeds)}.pt'))
                             torch.save(target_net_state_dict, os.path.join(output, f'model_state_dict_{name}.pt'))
                             torch.save(episode_durations, os.path.join(output, f'episode_durations_{name}.pt'))
                             torch.save(episode_returns, os.path.join(output, f'episode_returns_{name}.pt'))
-                            torch.save(losses, os.path.join(output, f'loss_{name}.pt'))
-                            torch.save(lr_vals, os.path.join(output, f'lr_{name}.pt'))
+                            # torch.save(losses, os.path.join(output, f'loss_{name}.pt'))
+                            # torch.save(lr_vals, os.path.join(output, f'lr_{name}.pt'))
 
-                            eps.append(eps_end + (eps_start - eps_end) * math.exp(-1. * steps_done / eps_decay))
-                            torch.save(eps, os.path.join(output, f'eps_{name}.pt'))
+                            # eps.append(eps_end + (eps_start - eps_end) * math.exp(-1. * steps_done / eps_decay))
+                            # torch.save(eps, os.path.join(output, f'eps_{name}.pt'))
                     break
 
                 # if not terminated, move to the next state
@@ -339,22 +339,23 @@ class DQNModel():
                 lr_vals.append(lr)
 
         print('Complete')
-        plot_durations(episode_durations, show_result=True)
-        plot_returns(episode_durations, show_result=True)
-        plt.ioff()
-        plt.show()
+        if show:
+            plt.ioff()
+            plt.show()
 
         return
     
 
-    def inference(self, env):
+    def inference(self, env, out=None):
 
             env.reset()
             state = env.get_state()
             state = (state[0].to(dtype=torch.float32, device=DEVICE),\
                      state[1].to(dtype=torch.float32, device=DEVICE))
             ep_return = 0
-
+            i = 0
+            plt.ioff()
+            
             while True:
                 # get action
                 action_id = self.select_action(env.action_space, state, greedy=True)
@@ -362,6 +363,7 @@ class DQNModel():
                 # take step, get observation and reward, and move index to next streamline
                 observation, reward, terminated = env.step(env.action_space[action_id]) 
                 ep_return += reward
+                i += 1
 
                 if terminated: # episode terminated
                     next_state = None
@@ -370,6 +372,12 @@ class DQNModel():
                     if next_state is not None:
                         next_state = (next_state[0].to(dtype=torch.float32, device=DEVICE),\
                                       next_state[1].to(dtype=torch.float32, device=DEVICE))
+                        if out is not None and i%10 == 0:
+                            plt.figure(0)
+                            plt.imshow(env.img.data[-1].amax(dim=0), cmap='hot', alpha=0.5)#, int(paths[env.head_id][-1, 0])])
+                            plt.imshow(env.img.data[:3].amin(dim=1).permute(1,2,0), alpha=0.5)
+                            plt.axis('off')
+                            plt.savefig(os.path.join(out, f'path_{i}.png'))
                 
                 if terminated:
                     return env

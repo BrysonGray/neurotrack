@@ -74,6 +74,8 @@ class Image:
             patch_[:, zpad_top:patch_size - zpad_btm, ypad_front:patch_size - ypad_back, xpad_left:patch_size - xpad_right] = patch
             patch = patch_
 
+
+
         return patch, padding
 
 

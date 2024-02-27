@@ -115,7 +115,7 @@ class Environment():
 
         seed_id = self.n_resets % len(self.seeds)
         center = torch.Tensor(self.seeds[seed_id])
-        self.r = 5.0 # radius around center to randomly place starting points
+        self.r = 4.0 # radius around center to randomly place starting points
         g = torch.Generator()
         g.manual_seed(0)
         offsets = torch.rand((self.n_seeds, 3), generator=g)

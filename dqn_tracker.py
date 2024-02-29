@@ -267,6 +267,9 @@ class DQNModel():
         losses = []
         lr_vals = []
         eps = []
+        mae = []
+        bending_energy = []
+        friction = []
         if not os.path.exists(output):
             os.makedirs(output)
         # Train the Network
@@ -312,6 +315,20 @@ class DQNModel():
                 if terminated:
                     episode_durations.append(t + 1)
                     episode_returns.append(ep_return)
+                    # save global matching error
+                    mae.append(torch.mean(torch.abs(env.bundle_density.data - env.true_density.data)))
+                    # save global bending energy
+                    bending_energy_ = []
+                    for i in range(len(env.finished_paths)):
+                        p0 = env.finished_paths[i][:-1]
+                        p1 = env.finished_paths[i][1:]
+                        segments = (p1 - p0) / env.step_size
+                        energy = (torch.einsum('ij,ij->i', segments[1:], segments[:-1]) - 1.0) / -2.0
+                        bending_energy_.append(torch.sum(energy))
+                    bending_energy.append(torch.sum(torch.tensor(bending_energy_)))
+                    # save global friction
+                    friction.append(torch.sum(torch.tensor([len(path) for path in env.finished_paths])))
+                    
                     if show:
                         plot_durations(episode_durations)
                         plot_returns(episode_returns)
@@ -321,9 +338,12 @@ class DQNModel():
                             torch.save(target_net_state_dict, os.path.join(output, f'model_state_dict_{name}.pt'))
                             torch.save(episode_durations, os.path.join(output, f'episode_durations_{name}.pt'))
                             torch.save(episode_returns, os.path.join(output, f'episode_returns_{name}.pt'))
+                            torch.save(mae, os.path.join(output, f'matching_error_{name}.pt'))
+                            torch.save(bending_energy, os.path.join(output, f'bending_energy_{name}.pt'))
+                            torch.save(friction, os.path.join(output, f'friction_{name}.pt'))
+
                             # torch.save(losses, os.path.join(output, f'loss_{name}.pt'))
                             # torch.save(lr_vals, os.path.join(output, f'lr_{name}.pt'))
-
                             # eps.append(eps_end + (eps_start - eps_end) * math.exp(-1. * steps_done / eps_decay))
                             # torch.save(eps, os.path.join(output, f'eps_{name}.pt'))
                     break

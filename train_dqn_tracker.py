@@ -58,7 +58,11 @@ def main(args):
     frictions = np.arange(start=0., stop=1.2, step=0.2)
     for alpha in alphas:
         for beta in betas:
+            if beta > alpha:
+                continue
             for friction in frictions:
+                if friction > alpha:
+                    continue
                 env = Environment(img,
                                 patch_radius,
                                 seeds,

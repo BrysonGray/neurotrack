@@ -13,6 +13,7 @@ import numpy as np
 from scipy.linalg import expm
 from skimage.draw import line_nd
 from skimage.filters import gaussian
+import utils
 
 
 class Image:
@@ -30,7 +31,7 @@ class Image:
             self.data = torch.from_numpy(self.data)
 
 
-    def crop(self, center, radius, pad=True, value=0.0):
+    def crop(self, center, radius, interp=True, padding_mode="zeros", pad=True, value=0.0):
         """ Crop an image around a center point (rounded to the nearest pixel center).
             The cropped image will be smaller than the given radius if it overlaps with the image boundary.
 
@@ -48,7 +49,11 @@ class Image:
         """
         i,j,k = [int(np.round(x)) for x in center]
         shape = self.data.shape[1:]
+
+        # get amount of padding for each face
         zpad_top = zpad_btm = ypad_front = ypad_back = xpad_left = xpad_right = 0
+
+        radius = radius + 1 # leave one pixel to be cropped at the end to remove interpolation padding 
 
         if (i + radius) > shape[0]-1:
             zpad_btm = i + radius - (shape[0]-1)
@@ -62,11 +67,19 @@ class Image:
             xpad_right = k + radius - (shape[2]-1) # number of zeros to append in the x dim
         if (k - radius) < 0:
             xpad_left = radius - k
-        
         padding = np.array([zpad_top, zpad_btm, ypad_front, ypad_back, xpad_left, xpad_right])
-        zrmd_top, zrmd_btm, yrmd_front, yrmd_back, xrmd_left, xrmd_right = np.array([radius]*6) - padding
-        
-        patch = self.data[:, i-zrmd_top:i+zrmd_btm+1, j-yrmd_front:j+yrmd_back+1, k-xrmd_left:k+xrmd_right+1] # slicing img creates a view (not a copy of img)
+        # get remainder for each face (patch radius minus padding) 
+        remainder = np.array([radius]*6) - padding # zrmd_top, zrmd_btm, yrmd_front, yrmd_back, xrmd_left, xrmd_right
+        # patch is data cropped around center. Note: slicing img creates a view (not a copy of img)
+        patch = self.data[:, i-remainder[0]:i+remainder[1]+1, j-remainder[2]:j+remainder[3]+1, k-remainder[4]:k+remainder[5]+1]
+
+        if interp:
+            center = center.numpy().astype(np.float32)
+            remainder = remainder.reshape(3,2)
+            x = [np.arange(x-r[0], x+r[1]+1).astype(np.float32) for x,r in zip(np.round(center), remainder)]
+            x_ = [np.arange(x-r[0], x+r[1]+1).astype(np.float32) for x,r in zip(center, remainder)]
+            phii = np.stack(np.meshgrid(*x_, indexing='ij'))
+            patch = utils.interp(x, patch, phii, padding_mode=padding_mode) # after interp patch is a copy (not a view of data)
 
         if pad:
             patch_size = 2*radius+1
@@ -74,7 +87,7 @@ class Image:
             patch_[:, zpad_top:patch_size - zpad_btm, ypad_front:patch_size - ypad_back, xpad_left:patch_size - xpad_right] = patch
             patch = patch_
 
-
+        patch = patch[:, 1:-1, 1:-1, 1:-1]
 
         return patch, padding
 
@@ -91,25 +104,23 @@ class Image:
             segment width
         """
         # get the center of the patch from the segment endpoints
-        center = segment.sum(axis=0) / 2
-        direction = segment[1] - segment[0]
-        segment_length = torch.sqrt(torch.sum(direction**2))
-
-        # unit normalize direction
-        direction = direction / segment_length
+        # center = segment.sum(axis=0) / 2 # TODO: center should actually be the start of the line and rounded to the nearest pixel
+        start = torch.round(segment[0]).to(int)
+        segment = segment[1] - segment[0]
+        segment_length = torch.sqrt(torch.sum(segment**2))
 
         # the patch should contain both line end points plus some blur
-        L = int(torch.ceil(segment_length/2)) # half the line length, rounded up
+        L = int(torch.ceil(segment_length)) + 1 # The radius of the patch is the whole line length since the line starts at patch center.
         overhang = int(2*width) # include space beyond the end of the line
-        patch_radius = L + overhang + 1
+        patch_radius = L + overhang
 
         patch_size = 2*patch_radius + 1
         X = torch.zeros((patch_size,patch_size,patch_size))
         # get endpoints
-        c = torch.Tensor([patch_radius]*3)
-        start = torch.round(segment_length*direction + c).to(int)
-        end = torch.round(-segment_length*direction + c).to(int)
-        line = line_nd(start, end, endpoint=True)
+        start_ = torch.Tensor([patch_radius]*3) # the patch center is the start point rounded to the nearest pixel
+        # start = torch.round(segment_length*direction + c).to(int)
+        end = torch.round(start_ + segment).to(int)
+        line = line_nd(start_, end, endpoint=True)
         X[line] = 1.0
 
         # if width is 0, don't blur
@@ -117,7 +128,8 @@ class Image:
             sigma = width/2
             X = torch.tensor(gaussian(X, sigma=sigma))
 
-        patch, padding = self.crop(center, patch_radius, pad=False) # patch is a view of self.data (c x h x w x d)
+        # TODO: When I crop, I should not need to interpolate since center will be integer coordinates.
+        patch, padding = self.crop(start, patch_radius, interp=False, pad=False) # patch is a view of self.data (c x h x w x d)
         new_patch = X[padding[0]:X.shape[0]-padding[1], padding[2]:X.shape[1]-padding[3], padding[4]:X.shape[2]-padding[5]]
         new_patch /= torch.amax(new_patch, dim=(0,1,2))
 

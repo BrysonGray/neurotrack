@@ -313,10 +313,13 @@ class Environment():
         self.finished_paths = []
 
         # reset bundle density
-        self.img.data[-1] = torch.zeros_like(self.true_density.data[0])
+        self.bundle_density = torch.zeros_like(self.true_density.data)
+        self.bundle_density = Image(self.bundle_density)
+        self.img.data[-1] = torch.zeros_like(self.bundle_density.data[0])
         for i in range(len(self.paths)):
             for j in range(len(self.paths[i])-1):
                 segment = torch.stack((self.paths[i][j], self.paths[i][j+1]), dim=0)
                 self.img.draw_line_segment(segment, width=0)
+                self.bundle_density.draw_line_segment(segment, width=self.step_width)
 
         return

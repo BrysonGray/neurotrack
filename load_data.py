@@ -12,10 +12,11 @@ import os
 import numpy as np
 import torch
 import utils
-from neurom.io.utils import load_morphology
 import sys
+from neurom.io.utils import load_morphology
 sys.path.append('/home/brysongray/tractography')
 from image import Image
+from skimage.morphology import dilation, cube
 
 
 def load_data(img_dir, label_file, pixelsize=[1.0,1.0,1.0], downsample_factor=1.0, inverse=False):
@@ -79,7 +80,9 @@ def load_data(img_dir, label_file, pixelsize=[1.0,1.0,1.0], downsample_factor=1.
         density.draw_line_segment(s[:,:3], width=s[0,-1].item()/2)
 
     mask = torch.zeros_like(density.data)
-    mask[density.data>np.exp(-5)] = 1.0 
+    mask[density.data>np.exp(-3)] = 1.0 
+    mask = torch.tensor(dilation(mask, cube(10)[None]))
+
 
     # # get points
     # points = label.points[:,:3]

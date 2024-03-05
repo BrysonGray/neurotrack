@@ -135,6 +135,7 @@ class DQN(nn.Module):
         # convolution layers
         # TODO: variable n
         self.conv1 = nn.Conv3d(in_channels + 3, 16*n, 3, stride=2)
+        # self.conv1 = nn.Conv3d(in_channels, 16*n, 3, stride=2)
         self.norm1 = nn.BatchNorm3d(16*n)
         self.conv2 = nn.Conv3d(16*n, 32*n, 3, stride=2)
         self.norm2 = nn.BatchNorm3d(32*n)
@@ -318,16 +319,16 @@ class DQNModel():
                     # save global matching error
                     mae.append(torch.mean(torch.abs(env.bundle_density.data - env.true_density.data)))
                     # save global bending energy
+                    friction.append(torch.sum(torch.tensor([len(path) for path in env.finished_paths])))
                     bending_energy_ = []
-                    for i in range(len(env.finished_paths)):
-                        p0 = env.finished_paths[i][:-1]
-                        p1 = env.finished_paths[i][1:]
+                    for j in range(len(env.finished_paths)):
+                        p0 = env.finished_paths[j][:-1]
+                        p1 = env.finished_paths[j][1:]
                         segments = (p1 - p0) / env.step_size
                         energy = (torch.einsum('ij,ij->i', segments[1:], segments[:-1]) - 1.0) / -2.0
                         bending_energy_.append(torch.sum(energy))
                     bending_energy.append(torch.sum(torch.tensor(bending_energy_)))
                     # save global friction
-                    friction.append(torch.sum(torch.tensor([len(path) for path in env.finished_paths])))
                     
                     if show:
                         plot_durations(episode_durations)

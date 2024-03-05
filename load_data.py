@@ -80,7 +80,7 @@ def load_data(img_dir, label_file, pixelsize=[1.0,1.0,1.0], downsample_factor=1.
         density.draw_line_segment(s[:,:3], width=s[0,-1].item()/2)
 
     mask = torch.zeros_like(density.data)
-    mask[density.data>np.exp(-3)] = 1.0 
+    mask[density.data>np.exp(-3)] = 1.0
     mask = torch.tensor(dilation(mask, cube(10)[None]))
 
 

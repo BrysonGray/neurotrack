@@ -17,7 +17,7 @@
     "lr": 0.0005,
     "alpha": 1.0,
     "beta": 0.5,
-    "friction": 0.2,
+    "friction": 0.0,
     "num_episodes": 1500,
     "pixelsize": [8.8, 1.0, 1.0]
 }

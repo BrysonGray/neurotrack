@@ -53,7 +53,7 @@ class Image:
         # get amount of padding for each face
         zpad_top = zpad_btm = ypad_front = ypad_back = xpad_left = xpad_right = 0
 
-        radius = radius + 1 # leave one pixel to be cropped at the end to remove interpolation padding 
+        # radius = radius + 1 # leave one pixel to be cropped at the end to remove interpolation padding 
 
         if (i + radius) > shape[0]-1:
             zpad_btm = i + radius - (shape[0]-1)
@@ -73,13 +73,13 @@ class Image:
         # patch is data cropped around center. Note: slicing img creates a view (not a copy of img)
         patch = self.data[:, i-remainder[0]:i+remainder[1]+1, j-remainder[2]:j+remainder[3]+1, k-remainder[4]:k+remainder[5]+1]
 
-        if interp:
-            center = center.numpy().astype(np.float32)
-            remainder = remainder.reshape(3,2)
-            x = [np.arange(x-r[0], x+r[1]+1).astype(np.float32) for x,r in zip(np.round(center), remainder)]
-            x_ = [np.arange(x-r[0], x+r[1]+1).astype(np.float32) for x,r in zip(center, remainder)]
-            phii = np.stack(np.meshgrid(*x_, indexing='ij'))
-            patch = utils.interp(x, patch, phii, padding_mode=padding_mode) # after interp patch is a copy (not a view of data)
+        # if interp:
+        #     center = center.numpy().astype(np.float32)
+        #     remainder = remainder.reshape(3,2)
+        #     x = [np.arange(x-r[0], x+r[1]+1).astype(np.float32) for x,r in zip(np.round(center), remainder)]
+        #     x_ = [np.arange(x-r[0], x+r[1]+1).astype(np.float32) for x,r in zip(center, remainder)]
+        #     phii = np.stack(np.meshgrid(*x_, indexing='ij'))
+        #     patch = utils.interp(x, patch, phii, padding_mode=padding_mode) # after interp patch is a copy (not a view of data)
 
         if pad:
             patch_size = 2*radius+1
@@ -87,7 +87,7 @@ class Image:
             patch_[:, zpad_top:patch_size - zpad_btm, ypad_front:patch_size - ypad_back, xpad_left:patch_size - xpad_right] = patch
             patch = patch_
 
-        patch = patch[:, 1:-1, 1:-1, 1:-1]
+        # patch = patch[:, 1:-1, 1:-1, 1:-1]
 
         return patch, padding
 

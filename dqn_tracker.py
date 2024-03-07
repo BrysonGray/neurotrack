@@ -386,23 +386,17 @@ class DQNModel():
                 ep_return += reward
                 i += 1
 
-                if terminated: # episode terminated
-                    next_state = None
-                else:
-                    next_state = observation # if the streamline terminated observation is None
-                    if next_state is not None:
-                        next_state = (next_state[0].to(dtype=torch.float32, device=DEVICE),\
-                                      next_state[1].to(dtype=torch.float32, device=DEVICE))
-                        if out is not None and i%10 == 0:
-                            plt.figure(0)
-                            plt.imshow(env.img.data[-1].amax(dim=0), cmap='hot', alpha=0.5)#, int(paths[env.head_id][-1, 0])])
-                            plt.imshow(env.img.data[:3].amin(dim=1).permute(1,2,0), alpha=0.5)
-                            plt.axis('off')
-                            plt.savefig(os.path.join(out, f'path_{i}.png'))
-                
                 if terminated:
                     return env
 
-                # if not terminated, move to the next state
-                state = (state[0].to(dtype=torch.float32, device=DEVICE),\
-                        state[1].to(dtype=torch.float32, device=DEVICE)) # the head of the next streamline
+                else:
+                    # if not terminated, move to the next state
+                    state = env.get_state() # the head of the next streamline
+                    state = (state[0].to(dtype=torch.float32, device=DEVICE),\
+                            state[1].to(dtype=torch.float32, device=DEVICE))
+                    if out is not None and i%10 == 0:
+                        plt.figure(0)
+                        plt.imshow(env.img.data[-1].amax(dim=0), cmap='hot', alpha=0.5)#, int(paths[env.head_id][-1, 0])])
+                        plt.imshow(env.img.data[:3].amin(dim=1).permute(1,2,0), alpha=0.5)
+                        plt.axis('off')
+                        plt.savefig(os.path.join(out, f'path_{i}.png'))

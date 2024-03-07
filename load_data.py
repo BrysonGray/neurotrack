@@ -67,12 +67,14 @@ def load_data(img_dir, label_file, pixelsize=[1.0,1.0,1.0], downsample_factor=1.
         segments_ = np.stack((starts, ends), axis=1)
         r = (segments_[:,0,-1]+segments_[:,1,-1])/2
         segments_[:,:,-1] = np.stack((r,r), axis=-1)
+
         segments.append(segments_)
     segments = np.concatenate(segments, axis=0)
 
-    # rescale segments
+    # rescale points
     segments = np.stack((segments[:,:,2], segments[:,:,1]/scale, segments[:,:,0]/scale, segments[...,-1]), axis=-1)
 
+    # create density image
     density = Image(torch.zeros((1,)+stack.shape[1:]))
 
     for s in segments:

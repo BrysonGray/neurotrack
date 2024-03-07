@@ -51,43 +51,53 @@ def main(args):
     patch_radius = 17
     actions = np.load('/home/brysongray/tractography/neuron_trx/action_space_30_dir.npy')
 
-    img, density, mask = load_data(img_file, label_file, downsample_factor=10, binary=False)
+    img, density, mask = load_data(img_file, label_file, pixelsize=pixelsize, inverse=True)
 
+    alphas = np.arange(start=1.0,stop=6.0,step=1.0)
+    betas = np.arange(start=0.0, stop=5.5, step=0.5)
+    frictions = np.arange(start=0., stop=1.2, step=0.2)
+    for alpha in alphas:
+        for beta in betas:
+            if beta > alpha:
+                continue
+            for friction in frictions:
+                if alpha == 1.0 and beta == 0.0 and friction == 0.0:
+                    continue
+                env = Environment(img,
+                                patch_radius,
+                                seeds,
+                                mask,
+                                density,
+                                actions,
+                                n_seeds=n_seeds,
+                                step_size=step_size,
+                                step_width=step_width,
+                                max_len=10000,
+                                alpha=alpha,
+                                beta=beta,
+                                friction=friction)
 
-    env = Environment(img,
-                      patch_radius,
-                      seeds,
-                      mask,
-                      density,
-                      actions,
-                      n_seeds=n_seeds,
-                      step_size=step_size,
-                      step_width=step_width,
-                      pixelsize=pixelsize,
-                      max_len=10000,
-                      alpha=alpha,
-                      beta=beta,
-                      friction=friction)
+                dqn_model = DQNModel(in_channels=4,
+                                    n_actions=len(actions),
+                                    input_size=(2*patch_radius+1),
+                                    lr=lr,
+                                    step_size=torch.tensor(step_size))
 
-    dqn_model = DQNModel(in_channels=4,
-                         n_actions=len(actions),
-                         input_size=(2*patch_radius+1),
-                         lr=lr)
+                if model:
+                    dqn_model.load_model(torch.load(model))
 
-    if model:
-        dqn_model.load_model(torch.load(model))
-
-    dqn_model.train(env,
-                    episodes=num_episodes,
-                    batch_size=batch_size,
-                    gamma=gamma,
-                    tau=tau,
-                    eps_start=eps_start,
-                    eps_end=eps_end,
-                    eps_decay=eps_decay,
-                    save_snapshots=True,
-                    show=False,
-                    name='config_alpha-1_beta-0_f-0')
+                dqn_model.train(env,
+                                episodes=num_episodes,
+                                batch_size=batch_size,
+                                gamma=gamma,
+                                tau=tau,
+                                eps_start=eps_start,
+                                eps_end=eps_end,
+                                eps_decay=eps_decay,
+                                save_snapshots=True,
+                                show=False,
+                                name=f'alpha-{alpha:.1f}_b-{beta:.1f}_f-{friction:.1f}_n-{n_seeds}',
+                                output='./outputs')
 
     return
 

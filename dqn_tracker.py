@@ -121,12 +121,10 @@ class DQN(nn.Module):
         Note the input must have equal height, width, and depth.
     """
 
-    def __init__(self, in_channels, n_actions, input_size):
+    def __init__(self, in_channels, n_actions, input_size, step_size=torch.tensor([1.0,1.0,1.0]), n=1):
         super().__init__()
-        self.conv1 = nn.Conv3d(in_channels, 16, 3, stride=2)
-        self.norm1 = nn.BatchNorm3d(16)
-        self.conv2 = nn.Conv3d(16, 32, 3, stride=2)
-        self.norm2 = nn.BatchNorm3d(32)
+
+        self.step_size = step_size.to(dtype=torch.float32, device=DEVICE)
 
         # calculate the size of the convolution output for input to Linear
         shape_out = lambda x, k, s: ((x - k)/s + 1)//1
@@ -134,28 +132,47 @@ class DQN(nn.Module):
         h = shape_out(h, 3, 2) # second conv
         n_features = int(32 * h**3)
 
+        # convolution layers
+        # TODO: variable n
+        self.conv1 = nn.Conv3d(in_channels + 3, 16*n, 3, stride=2)
+        # self.conv1 = nn.Conv3d(in_channels, 16*n, 3, stride=2)
+        self.norm1 = nn.BatchNorm3d(16*n)
+        self.conv2 = nn.Conv3d(16*n, 32*n, 3, stride=2)
+        self.norm2 = nn.BatchNorm3d(32*n)
+
+        # fully connected layers
         self.fc1 = nn.Linear(n_features, 512)
         self.fc2 = nn.Linear(512, 128)
         self.fc3 = nn.Linear(128, n_actions)
+        # self.fc4 = nn.Linear(3, n_actions)
 
-    def forward(self, x):
-        x = self.norm1(F.relu(self.conv1(x)))
-        x = self.norm2(F.relu(self.conv2(x)))
+    def forward(self, state):
+        x,p = state
+        w = (p[:,1] - p[:,0]) / self.step_size
+        
+        x = torch.concatenate((x, torch.ones((x.shape[0], 1, x.shape[2], x.shape[3], x.shape[4]), device=DEVICE)*w[:,:,None,None,None]), dim=1) # TODO: check this is right
+
+        x = F.relu(self.norm1(self.conv1(x)))
+        x = F.relu(self.norm2(self.conv2(x)))
         x = torch.flatten(x, 1) # flatten all dimensions except batch
         x = F.relu(self.fc1(x))
         x = F.relu(self.fc2(x))
         x = self.fc3(x)
         
         return x
+    
 
 class DQNModel():
-    def __init__(self, in_channels, n_actions, input_size, lr=0.005):
+    def __init__(self, in_channels, n_actions, input_size, lr=0.005, step_size=torch.tensor([1.0,1.0,1.0])):
     
-        self.policy_net = DQN(in_channels, n_actions, input_size).to(DEVICE)
-        self.target_net = DQN(in_channels, n_actions, input_size).to(DEVICE)
+        self.policy_net = DQN(in_channels, n_actions, input_size, step_size).to(DEVICE)
+        self.target_net = DQN(in_channels, n_actions, input_size, step_size).to(DEVICE)
         self.target_net.load_state_dict(self.policy_net.state_dict())
 
         self.optimizer = torch.optim.AdamW(self.policy_net.parameters(), lr=lr, amsgrad=True)
+
+        self.lrscheduler = torch.optim.lr_scheduler.StepLR(self.optimizer, step_size=1, gamma=0.9993)
+
         self.memory = ReplayMemory(10000)
 
     def load_model(self, model_weights):
@@ -185,8 +202,9 @@ class DQNModel():
         """ Do one optimization step
         
         """
+        loss = None
         if len(self.memory) < batch_size:
-            return
+            return loss
         transitions = self.memory.sample(batch_size)
 
         # Convert batch-array of transitions to transition of batch-arrays
@@ -195,9 +213,20 @@ class DQNModel():
         # Compute a mask of non-final states and concatenate the batch elements
         non_final_mask = torch.tensor(tuple(map(lambda s: s is not None,
                                             batch.next_state)), device=DEVICE, dtype=torch.bool)
-        non_final_next_states = torch.cat([s for s in batch.next_state
-                                                    if s is not None])
-        state_batch = torch.cat(batch.state)
+        
+        # non_final_next_states = torch.cat([s[0] for s in batch.next_state
+        #                                             if s is not None])
+        
+        # turn a tuple of tuples (observation, last_steps) into a single tuple of concatenated states 
+        x = torch.cat([s[0] for s in batch.next_state if s is not None])
+        p = torch.cat([s[1] for s in batch.next_state if s is not None])
+        non_final_next_states = (x,p)
+
+        x = torch.cat([s[0] for s in batch.state if s is not None])
+        p = torch.cat([s[1] for s in batch.state if s is not None])
+        state_batch = (x,p)
+
+        # state_batch = torch.cat(batch.state)
         action_batch = torch.stack(batch.action).unsqueeze(1)
         reward_batch = torch.cat(batch.reward).to(device=DEVICE)
 
@@ -228,18 +257,28 @@ class DQNModel():
         torch.nn.utils.clip_grad_value_(self.policy_net.parameters(), 100)
         self.optimizer.step()
 
+        return loss.detach().to('cpu')
+
     def train(self, env, episodes=100, batch_size=128, gamma=0.99, tau=0.001, eps_start=0.9, eps_end=0.01,
               eps_decay=1000, save_snapshots=True, output='./outputs', name='config0', show=False):
 
         steps_done = 0
         episode_durations = []
         episode_returns = []
+        losses = []
+        lr_vals = []
+        eps = []
+        mae = []
+        bending_energy = []
+        friction = []
         if not os.path.exists(output):
             os.makedirs(output)
         # Train the Network
         for i in tqdm(range(episodes)):
             env.reset()
-            state = env.get_state()[0].clone().to(dtype=torch.float32, device=DEVICE)
+            state = env.get_state()
+            state = (state[0].to(dtype=torch.float32, device=DEVICE),\
+                     state[1].to(dtype=torch.float32, device=DEVICE))
             ep_return = 0
             for t in count():
                 action_id = self.select_action(env.action_space, state, steps_done, eps_start, eps_end, eps_decay)
@@ -253,13 +292,18 @@ class DQNModel():
                 else:
                     next_state = observation # if the streamline terminated observation is None
                     if next_state is not None:
-                        next_state = next_state[0].clone().to(dtype=torch.float32, device=DEVICE)
+                        next_state = (next_state[0].to(dtype=torch.float32, device=DEVICE),\
+                                      next_state[1].to(dtype=torch.float32, device=DEVICE))
+
 
                 # Store the transition in memory
                 self.memory.push(state, action_id, next_state, reward)
 
                 # Perform one step of the optimization (on the policy network)
-                self.optimize_model(batch_size, gamma)
+                loss = self.optimize_model(batch_size, gamma)
+                if loss:
+                    if steps_done%50 == 0:
+                        losses.append(loss)
 
                 # Soft update of the target network's weights
                 # θ′ ← τ θ + (1 −τ )θ′
@@ -272,37 +316,67 @@ class DQNModel():
                 if terminated:
                     episode_durations.append(t + 1)
                     episode_returns.append(ep_return)
+                    # save global matching error
+                    mae.append(torch.mean(torch.abs(env.bundle_density.data - env.true_density.data)))
+                    # save global bending energy
+                    friction.append(torch.sum(torch.tensor([len(path) for path in env.finished_paths])))
+                    bending_energy_ = []
+                    for j in range(len(env.finished_paths)):
+                        p0 = env.finished_paths[j][:-1]
+                        p1 = env.finished_paths[j][1:]
+                        segments = (p1 - p0) / env.step_size
+                        energy = (torch.einsum('ij,ij->i', segments[1:], segments[:-1]) - 1.0) / -2.0
+                        bending_energy_.append(torch.sum(energy))
+                    bending_energy.append(torch.sum(torch.tensor(bending_energy_)))
+                    # save global friction
+                    
                     if show:
                         plot_durations(episode_durations)
                         plot_returns(episode_returns)
                     if save_snapshots:
                         if i%17 == 0:
-                            torch.save(env.img.data[-1].detach().clone(), os.path.join(output, f'bundle_density_ep{i}.pt'))
+                            torch.save(env.img.data[-1].detach().clone(), os.path.join(output, f'bundle_density_ep{i%len(env.seeds)}.pt'))
                             torch.save(target_net_state_dict, os.path.join(output, f'model_state_dict_{name}.pt'))
                             torch.save(episode_durations, os.path.join(output, f'episode_durations_{name}.pt'))
                             torch.save(episode_returns, os.path.join(output, f'episode_returns_{name}.pt'))
+                            torch.save(mae, os.path.join(output, f'matching_error_{name}.pt'))
+                            torch.save(bending_energy, os.path.join(output, f'bending_energy_{name}.pt'))
+                            torch.save(friction, os.path.join(output, f'friction_{name}.pt'))
+
+                            # torch.save(losses, os.path.join(output, f'loss_{name}.pt'))
+                            # torch.save(lr_vals, os.path.join(output, f'lr_{name}.pt'))
+                            # eps.append(eps_end + (eps_start - eps_end) * math.exp(-1. * steps_done / eps_decay))
+                            # torch.save(eps, os.path.join(output, f'eps_{name}.pt'))
                     break
 
                 # if not terminated, move to the next state
-                state = env.get_state()[0].to(dtype=torch.float32, device=DEVICE) # the head of the next streamline
-        
-            
+                state = env.get_state() # the head of the next streamline
+                state = (state[0].to(dtype=torch.float32, device=DEVICE),\
+                        state[1].to(dtype=torch.float32, device=DEVICE))
+                
+            if len(self.memory) > batch_size:
+                self.lrscheduler.step()
+                lr = self.lrscheduler.get_last_lr()
+                lr_vals.append(lr)
 
         print('Complete')
-        plot_durations(episode_durations, show_result=True)
-        plot_returns(episode_durations, show_result=True)
-        plt.ioff()
-        plt.show()
+        if show:
+            plt.ioff()
+            plt.show()
 
         return
     
 
-    def inference(self, env):
+    def inference(self, env, out=None):
 
             env.reset()
-            state = env.get_state()[0].clone().to(dtype=torch.float32, device=DEVICE)
+            state = env.get_state()
+            state = (state[0].to(dtype=torch.float32, device=DEVICE),\
+                     state[1].to(dtype=torch.float32, device=DEVICE))
             ep_return = 0
-
+            i = 0
+            plt.ioff()
+            
             while True:
                 # get action
                 action_id = self.select_action(env.action_space, state, greedy=True)
@@ -310,16 +384,19 @@ class DQNModel():
                 # take step, get observation and reward, and move index to next streamline
                 observation, reward, terminated = env.step(env.action_space[action_id]) 
                 ep_return += reward
+                i += 1
 
-                if terminated: # episode terminated
-                    next_state = None
-                else:
-                    next_state = observation # if the streamline terminated observation is None
-                    if next_state is not None:
-                        next_state = next_state[0].clone().to(dtype=torch.float32, device=DEVICE)
-                
                 if terminated:
                     return env
 
-                # if not terminated, move to the next state
-                state = env.get_state()[0].to(dtype=torch.float32, device=DEVICE) # the head of the next streamline
+                else:
+                    # if not terminated, move to the next state
+                    state = env.get_state() # the head of the next streamline
+                    state = (state[0].to(dtype=torch.float32, device=DEVICE),\
+                            state[1].to(dtype=torch.float32, device=DEVICE))
+                    if out is not None and i%10 == 0:
+                        plt.figure(0)
+                        plt.imshow(env.img.data[-1].amax(dim=0), cmap='hot', alpha=0.5)#, int(paths[env.head_id][-1, 0])])
+                        plt.imshow(env.img.data[:3].amin(dim=1).permute(1,2,0), alpha=0.5)
+                        plt.axis('off')
+                        plt.savefig(os.path.join(out, f'path_{i}.png'))

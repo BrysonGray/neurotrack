@@ -44,8 +44,10 @@ class Image:
             
             Returns
             -------
-            cropped_img : ndarray
+            patch  : ndarray
                 Cropped image
+            padding : ndarray
+                Length that patch overlaps with image boundaries on each end of each dimension.
         """
         i,j,k = [int(np.round(x)) for x in center]
         shape = self.data.shape[1:]
@@ -137,7 +139,22 @@ class Image:
         patch[channel] = torch.maximum(new_patch, patch[channel])
 
         return
+    
+    def draw_point(self, point, radius=3, channel=-2, binary=False):
 
+        patch_size = 2*radius+1
+        if binary:
+            X = torch.ones((patch_size,patch_size,patch_size))
+        else:
+            X = torch.zeros((patch_size,patch_size,patch_size))
+            X[radius,radius,radius] = 1.0
+            X = torch.tensor(gaussian(X, sigma=radius))
+        patch, padding = self.crop(point, radius=radius, interp=False, pad=False)
+        new_patch = X[padding[0]:X.shape[0]-padding[1], padding[2]:X.shape[1]-padding[3], padding[4]:X.shape[2]-padding[5]]
+        new_patch /= torch.amax(new_patch, dim=(0,1,2))
+        patch[channel] = torch.maximum(new_patch, patch[channel])
+
+        return
 
 def draw_neurite_tree(img, segments):
     """ Draw all segments to reconstruct a whole neurite tree.

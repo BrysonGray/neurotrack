@@ -144,20 +144,20 @@ class DQN(nn.Module):
         self.fc1 = nn.Linear(n_features, 512)
         self.fc2 = nn.Linear(512, 128)
         self.fc3 = nn.Linear(128, n_actions)
-        # self.fc4 = nn.Linear(3, n_actions)
 
     def forward(self, state):
         x,p = state
         w = (p[:,1] - p[:,0]) / self.step_size
         
-        x = torch.concatenate((x, torch.ones((x.shape[0], 1, x.shape[2], x.shape[3], x.shape[4]), device=DEVICE)*w[:,:,None,None,None]), dim=1) # TODO: check this is right
-
+        x = torch.concatenate((x, torch.ones((x.shape[0], 1, x.shape[2], x.shape[3], x.shape[4]), device=DEVICE)*w[:,:,None,None,None]), dim=1)
         x = F.relu(self.norm1(self.conv1(x)))
         x = F.relu(self.norm2(self.conv2(x)))
         x = torch.flatten(x, 1) # flatten all dimensions except batch
         x = F.relu(self.fc1(x))
         x = F.relu(self.fc2(x))
+
         x = self.fc3(x)
+
         
         return x
     
@@ -187,15 +187,21 @@ class DQNModel():
 
             if sample > eps_threshold:
                 with torch.no_grad():
-                    #  pick action with the larger expected reward.
-                    return torch.argmax(self.policy_net(observation))
+                    # pick action with the larger expected reward.
+                    try:
+                        action = self.policy_net(observation)  # action is an index of action_space
+                    except:
+                        print()
+                        raise Exception()
+                    return torch.argmax(action[0])
             else:
-                # take a random action  
-                return torch.randint(len(action_space), (1,), device=DEVICE).squeeze()
+                # take a random action 
+                return torch.randint(len(action_space)+2, (1,), device=DEVICE).squeeze()
         else:
             with torch.no_grad():
-                #  pick action with the larger expected reward.
-                return torch.argmax(self.policy_net(observation))
+                    # pick action with the larger expected reward.
+                    action = self.policy_net(observation) # action is an index of action_space
+                    return torch.argmax(action[0])
 
 
     def optimize_model(self, batch_size, gamma):
@@ -281,23 +287,23 @@ class DQNModel():
                      state[1].to(dtype=torch.float32, device=DEVICE))
             ep_return = 0
             for t in count():
-                action_id = self.select_action(env.action_space, state, steps_done, eps_start, eps_end, eps_decay)
+                action = self.select_action(env.action_space, state, steps_done, eps_start, eps_end, eps_decay) # returns an index for action_space
                 steps_done += 1
                 # take step, get observation and reward, and move index to next streamline
-                observation, reward, terminated = env.step(env.action_space[action_id]) 
+                observation, reward, terminated = env.step(action)
                 ep_return += reward
 
                 if terminated: # episode terminated
                     next_state = None
                 else:
-                    next_state = observation # if the streamline terminated observation is None
+                    next_state = observation # if the streamline terminated then observation is None
                     if next_state is not None:
                         next_state = (next_state[0].to(dtype=torch.float32, device=DEVICE),\
                                       next_state[1].to(dtype=torch.float32, device=DEVICE))
 
 
                 # Store the transition in memory
-                self.memory.push(state, action_id, next_state, reward)
+                self.memory.push(state, action, next_state, reward)
 
                 # Perform one step of the optimization (on the policy network)
                 loss = self.optimize_model(batch_size, gamma)
@@ -379,10 +385,10 @@ class DQNModel():
             
             while True:
                 # get action
-                action_id = self.select_action(env.action_space, state, greedy=True)
+                action = self.select_action(env.action_space, state, greedy=True)
 
                 # take step, get observation and reward, and move index to next streamline
-                observation, reward, terminated = env.step(env.action_space[action_id]) 
+                observation, reward, terminated = env.step(action) 
                 ep_return += reward
                 i += 1
 

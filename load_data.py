@@ -54,6 +54,9 @@ def load_data(img_dir, label_file, pixelsize=[1.0,1.0,1.0], downsample_factor=1.
     label = load_morphology(label_file)
 
     segments = []
+    branch_points = []
+    terminals = []
+    ids = []
     for i in range(len(label.sections)):
         points = label.sections[i].points
         starts = []
@@ -69,10 +72,21 @@ def load_data(img_dir, label_file, pixelsize=[1.0,1.0,1.0], downsample_factor=1.
         segments_[:,:,-1] = np.stack((r,r), axis=-1)
 
         segments.append(segments_)
+        if len(label.sections[i].children) > 0:
+            branch_points.append(segments_[-1,1,:3])
+        else:
+            terminals.append(segments_[-1,1,:3])
+
     segments = np.concatenate(segments, axis=0)
 
     # rescale points
     segments = np.stack((segments[:,:,2], segments[:,:,1]/scale, segments[:,:,0]/scale, segments[...,-1]), axis=-1)
+    branch_points = torch.from_numpy(np.array(branch_points))
+    branch_points = torch.stack((branch_points[:,2], branch_points[:,1]/scale, branch_points[:,0]/scale), dim=-1)
+    # branch_points[:,1:] = branch_points[:,1:]/scale
+    terminals = torch.from_numpy(np.array(terminals))
+    terminals = torch.stack((terminals[:,2], terminals[:,1]/scale, terminals[:,0]/scale), dim=-1)
+    # terminals[:,1:] = terminals[:,1:]/scale
 
     # create density image
     density = Image(torch.zeros((1,)+stack.shape[1:]))
@@ -102,4 +116,4 @@ def load_data(img_dir, label_file, pixelsize=[1.0,1.0,1.0], downsample_factor=1.
     # density = density.unsqueeze(0)
     # mask = mask.unsqueeze(0)
 
-    return stack, density.data, mask
+    return stack, density.data, mask, branch_points, terminals

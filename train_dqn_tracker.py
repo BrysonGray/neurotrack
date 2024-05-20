@@ -48,59 +48,63 @@ def main(args):
     friction = args["friction"] if "friction" in args else 1e-4
     num_episodes = args["num_episodes"] if "num_episodes" in args else 100
     pixelsize = args["pixelsize"] if "pixelsize" in args else [1.0, 1.0, 1.0]
+    outdir = args["outdir"] if "outdir" in args else "./outputs"
     patch_radius = 17
     directions = np.load('/home/brysongray/tractography/neuron_trx/action_space_30_dir.npy')
 
     img, density, mask, branch_points, terminals = load_data(img_file, label_file, pixelsize=pixelsize, inverse=True)
 
-    alphas = np.arange(start=1.0,stop=6.0,step=1.0)
-    betas = np.arange(start=0.0, stop=5.5, step=0.5)
-    frictions = np.arange(start=0., stop=1.2, step=0.2)
-    for alpha in alphas:
-        for beta in betas:
-            if beta > alpha:
-                continue
-            for friction in frictions:
-                if alpha == 1.0 and beta == 0.0 and friction == 0.0:
-                    continue
+    # alphas = np.arange(start=1.0,stop=6.0,step=1.0)
+    # betas = np.arange(start=0.0, stop=5.5, step=0.5)
+    # frictions = np.arange(start=0., stop=1.2, step=0.2)
+    # for alpha in alphas:
+    #     for beta in betas:
+    #         if beta > alpha:
+    #             continue
+    #         for friction in frictions:
+    #             if alpha == 1.0 and beta == 0.0 and friction == 0.0:
+    #                 continue
 
-                env = Environment(img,
-                                patch_radius,
-                                seeds,
-                                mask,
-                                density,
-                                branch_points,
-                                terminals,
-                                directions,
-                                n_seeds=n_seeds,
-                                step_size=step_size,
-                                step_width=step_width,
-                                max_len=10000,
-                                alpha=alpha,
-                                beta=beta,
-                                friction=friction)
+    env = Environment(img,
+                    patch_radius,
+                    seeds,
+                    mask,
+                    density,
+                    branch_points,
+                    terminals,
+                    directions,
+                    n_seeds=n_seeds,
+                    step_size=step_size,
+                    step_width=step_width,
+                    max_len=10000,
+                    alpha=alpha,
+                    beta=beta,
+                    friction=friction)
 
-                dqn_model = DQNModel(in_channels=6,
-                                    n_actions=len(directions)+2,
-                                    input_size=(2*patch_radius+1),
-                                    lr=lr,
-                                    step_size=torch.tensor(step_size))
+    dqn_model = DQNModel(in_channels=4,
+                        n_actions=len(directions)+1,
+                        input_size=(2*patch_radius+1),
+                        lr=lr,
+                        step_size=torch.tensor(step_size))
+    # TODO: changed for testing
+    # in_channels=6
+    # n_actions=len(directions)+2
 
-                if model:
-                    dqn_model.load_model(torch.load(model))
+    if model:
+        dqn_model.load_model(torch.load(model))
 
-                dqn_model.train(env,
-                                episodes=num_episodes,
-                                batch_size=batch_size,
-                                gamma=gamma,
-                                tau=tau,
-                                eps_start=eps_start,
-                                eps_end=eps_end,
-                                eps_decay=eps_decay,
-                                save_snapshots=True,
-                                show=False,
-                                name=f'alpha-{alpha:.1f}_b-{beta:.1f}_f-{friction:.1f}_n-{n_seeds}',
-                                output='./outputs')
+    dqn_model.train(env,
+                    episodes=num_episodes,
+                    batch_size=batch_size,
+                    gamma=gamma,
+                    tau=tau,
+                    eps_start=eps_start,
+                    eps_end=eps_end,
+                    eps_decay=eps_decay,
+                    save_snapshots=True,
+                    show=False,
+                    name=f'alpha-{alpha:.1f}_b-{beta:.1f}_f-{friction:.1f}_n-{n_seeds}',
+                    output=outdir)
 
     return
 

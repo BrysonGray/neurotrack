@@ -32,7 +32,7 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # plotting functions
 def plot_durations(episode_durations, show_result=False):
-    plt.figure(1)
+    plt.figure()
     durations_t = torch.tensor(episode_durations, dtype=torch.float)
     if show_result:
         plt.title('Result')
@@ -52,15 +52,15 @@ def plot_durations(episode_durations, show_result=False):
     if is_ipython:
         if not show_result:
             # display.display(plt.gcf())
-            display.display(plt.figure(1),display_id=1)
+            display.display(plt.figure(),display_id=1)
             display.clear_output(wait=True)
         else:
             # display.display(plt.gcf(), display_id=True)
-            display.display(plt.figure(1), display_id=1)
+            display.display(plt.figure(), display_id=1)
 
 
 def plot_returns(episode_returns, show_result=False):
-    plt.figure(2)
+    plt.figure()
     return_t = torch.tensor(episode_returns, dtype=torch.float)
     if show_result:
         plt.title('Result')
@@ -80,11 +80,11 @@ def plot_returns(episode_returns, show_result=False):
     if is_ipython:
         if not show_result:
             # display.display(plt.gcf())
-            display.display(plt.figure(2), display_id=2)
+            display.display(plt.figure(), display_id=2)
             display.clear_output(wait=True)
         else:
             # display.display(plt.gcf())
-            display.display(plt.figure(2), display_id=2)
+            display.display(plt.figure(), display_id=2)
 
 
 class ReplayMemory():
@@ -133,9 +133,8 @@ class DQN(nn.Module):
         n_features = int(32 * h**3)
 
         # convolution layers
-        # TODO: variable n
-        self.conv1 = nn.Conv3d(in_channels + 3, 16*n, 3, stride=2)
-        # self.conv1 = nn.Conv3d(in_channels, 16*n, 3, stride=2)
+        self.conv1 = nn.Conv3d(in_channels + 3, 16*n, 3, stride=2) # 3 channels added to in_channels for components of previous step direction
+        # self.conv1 = nn.Conv3d(in_channels, 16*n, 3, stride=2) # TODO: test with no previous step
         self.norm1 = nn.BatchNorm3d(16*n)
         self.conv2 = nn.Conv3d(16*n, 32*n, 3, stride=2)
         self.norm2 = nn.BatchNorm3d(32*n)
@@ -147,7 +146,7 @@ class DQN(nn.Module):
 
     def forward(self, state):
         x,p = state
-        w = (p[:,1] - p[:,0]) / self.step_size
+        w = (p[:,1] - p[:,0]) / self.step_size # TODO: test with no previous step
         
         x = torch.concatenate((x, torch.ones((x.shape[0], 1, x.shape[2], x.shape[3], x.shape[4]), device=DEVICE)*w[:,:,None,None,None]), dim=1)
         x = F.relu(self.norm1(self.conv1(x)))
@@ -173,7 +172,7 @@ class DQNModel():
 
         self.lrscheduler = torch.optim.lr_scheduler.StepLR(self.optimizer, step_size=1, gamma=0.9993)
 
-        self.memory = ReplayMemory(10000)
+        self.memory = ReplayMemory(1000)
 
     def load_model(self, model_weights):
         self.policy_net.load_state_dict(model_weights)
@@ -196,7 +195,8 @@ class DQNModel():
                     return torch.argmax(action[0])
             else:
                 # take a random action 
-                return torch.randint(len(action_space)+2, (1,), device=DEVICE).squeeze()
+                # return torch.randint(len(action_space)+2, (1,), device=DEVICE).squeeze() # choices are n step directions plus terminate and bifurcate #TODO: changed for testing
+                return torch.randint(len(action_space)+1, (1,), device=DEVICE).squeeze() # choices are n step directions plus terminate
         else:
             with torch.no_grad():
                     # pick action with the larger expected reward.
@@ -277,6 +277,7 @@ class DQNModel():
         mae = []
         bending_energy = []
         friction = []
+        n_paths = []
         if not os.path.exists(output):
             os.makedirs(output)
         # Train the Network
@@ -322,6 +323,7 @@ class DQNModel():
                 if terminated:
                     episode_durations.append(t + 1)
                     episode_returns.append(ep_return)
+                    n_paths.append(len(env.finished_paths))
                     # save global matching error
                     mae.append(torch.mean(torch.abs(env.bundle_density.data - env.true_density.data)))
                     # save global bending energy
@@ -341,13 +343,15 @@ class DQNModel():
                         plot_returns(episode_returns)
                     if save_snapshots:
                         if i%17 == 0:
-                            torch.save(env.img.data[-1].detach().clone(), os.path.join(output, f'bundle_density_ep{i%len(env.seeds)}.pt'))
+                            torch.save(env.img.data[3].detach().clone(), os.path.join(output, f'bundle_density_ep{i%len(env.seeds)}.pt'))
+                            # torch.save(env.img[4].detach().clone(), os.path.join(output, f'bifurcations_ep{i%len(env.seeds)}.pt')) #TODO: changed for testing
                             torch.save(target_net_state_dict, os.path.join(output, f'model_state_dict_{name}.pt'))
                             torch.save(episode_durations, os.path.join(output, f'episode_durations_{name}.pt'))
                             torch.save(episode_returns, os.path.join(output, f'episode_returns_{name}.pt'))
                             torch.save(mae, os.path.join(output, f'matching_error_{name}.pt'))
                             torch.save(bending_energy, os.path.join(output, f'bending_energy_{name}.pt'))
                             torch.save(friction, os.path.join(output, f'friction_{name}.pt'))
+                            torch.save(n_paths, os.path.join(output, f'n_paths_{name}.pt'))
 
                             # torch.save(losses, os.path.join(output, f'loss_{name}.pt'))
                             # torch.save(lr_vals, os.path.join(output, f'lr_{name}.pt'))

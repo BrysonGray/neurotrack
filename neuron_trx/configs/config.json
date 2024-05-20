@@ -1,6 +1,7 @@
 {
     "image": "/home/brysongray/tractography/data/Cerebellar Climbing Fibers/Image Stacks/CF_1",
     "label": "/home/brysongray/tractography/data/Cerebellar Climbing Fibers/Gold Standard Reconstructions/CF_1.swc",
+    "outdir": "./outputs_test_5-15-24",
     "seeds": [[19,163,276],
               [14,95,297],
               [19,319,80],
@@ -15,8 +16,8 @@
     "eps_decay": 1e4,
     "tau": 0.0005,
     "lr": 0.0005,
-    "alpha": 3.0,
-    "beta": 1.0,
+    "alpha": 4.0,
+    "beta": 0.0,
     "friction": 0.2,
     "num_episodes": 1500,
     "pixelsize": [8.8, 1.0, 1.0]

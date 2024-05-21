@@ -37,10 +37,14 @@ def density_error_change(true_density, old_density, new_density):
     # old_density = old_density / (old_density.sum() + np.finfo(float).eps)
     # new_density = new_density / (new_density.sum() + np.finfo(float).eps)
 
-    old_mad = torch.mean(torch.abs(true_density - old_density))
-    new_mad = torch.mean(torch.abs(true_density - new_density))
+    # old_mad = torch.mean(torch.abs(true_density - old_density))
+    # new_mad = torch.mean(torch.abs(true_density - new_density))
 
-    return new_mad - old_mad
+    # TODO: test using sum of square error instead of mean absolute difference
+    old = torch.sum((old_density - true_density)**2)
+    new = torch.sum((new_density - true_density)**2)
+
+    return new - old
 
 
 class Environment():
@@ -177,7 +181,7 @@ class Environment():
         return patch[None], last_steps[None]
 
 
-    def get_reward(self, terminate_dist=None, delta_density_diff=None, bifurcate_dist=None, verbose=False):
+    def get_reward(self, terminate_dist=None, delta_density_diff=None, bifurcate_dist=None, verbose=False, sigmaf=1.0, sigmab=0.3):
         """ Get the reward for the current state. The reward depends on the streamline smoothness and
         the change in distance between the streamline density and true denisty maps.
 
@@ -214,24 +218,32 @@ class Environment():
                       f'bifurcate reward: {reward}')
 
         else:
-            prev_step = (self.paths[self.head_id][-2]-self.paths[self.head_id][-3]) / self.step_size
-            current_step = (self.paths[self.head_id][-1]-self.paths[self.head_id][-2]) / self.step_size
-            cos_angle = torch.dot(current_step, prev_step).to(float)
+            # prev_step = (self.paths[self.head_id][-2]-self.paths[self.head_id][-3]) / self.step_size
+            # current_step = (self.paths[self.head_id][-1]-self.paths[self.head_id][-2]) / self.step_size
+            # cos_angle = torch.dot(current_step, prev_step).to(float)
             # note that delta density difference is a change in error,
             # so negative change is good, hence the flipped (positive) exponent which is normally negative for sigmoid function.
             # it is also shifted down so that zero change yields zero.
-            # sigmoid_diff = 2e3 / (1 + np.exp(delta_density_diff / 5e-3)) - 1e3 # calibrated so that a good step is around 1.
-            m = -2.5e3 #-52631.
-            b = 0.2 #-0.05263
-            diff = m*delta_density_diff + b
-            # sigmoid_diff = np.max([sigmoid_diff, 0.0]) # do not give negative values for matching
-            reward = self.alpha*diff + self.beta*(cos_angle-1) - self.friction 
+            #TODO: test using matchin sse
+            # m = -2.5e3 #-52631.
+            # b = 0.2 #-0.05263
+            # diff = m*delta_density_diff + b
+            M = -delta_density_diff
+            # reward = self.alpha*diff + self.beta*(cos_angle-1) - self.friction
+            q = self.paths[self.head_id][-1]
+            q_ = self.paths[self.head_id][-2]
+            q__ = self.paths[self.head_id][-3]
+            # Z = torch.sum((q - 1/(1/sigmaf**2 + 1/sigmab**2)*(q_/sigmaf**2 + (2*q_ - q__)/sigmab**2))**2) * (1/sigmaf**2 + 1/sigmab**2)
+            P = - torch.sum((q - q_)**2)/(2*sigmaf**2) - torch.sum((q - 2*q_ + q__)**2) / (2*sigmab**2) # prior likelihood
+            reward = self.alpha*M + self.beta*P + 4.0
             if verbose:
-                print(f'sigmoid_diff: {diff}','\n',
-                      f'matching reward: {self.alpha*diff}','\n',
-                      f'cos_angle: {cos_angle}','\n',
-                      f'smoothing reward: {self.beta*(cos_angle-1)}', '\n',
-                      f'friction reward: {-self.friction}')
+                print(f'delta_sse: {delta_density_diff}\n',
+                      f'matching reward: {self.alpha*M}\n',
+                      f'prior likelihood: {P}\n',
+                      f'prior reward: {self.beta*P}')
+                    #   f'cos_angle: {cos_angle}','\n',
+                    #   f'smoothing reward: {self.beta*(cos_angle-1)}', '\n',
+                    #   f'friction reward: {-self.friction}')
 
         return torch.tensor([reward], device=DEVICE, dtype=torch.float32)
 

@@ -83,10 +83,9 @@ def load_data(img_dir, label_file, pixelsize=[1.0,1.0,1.0], downsample_factor=1.
     segments = np.stack((segments[:,:,2], segments[:,:,1]/scale, segments[:,:,0]/scale, segments[...,-1]), axis=-1)
     branch_points = torch.from_numpy(np.array(branch_points))
     branch_points = torch.stack((branch_points[:,2], branch_points[:,1]/scale, branch_points[:,0]/scale), dim=-1)
-    # branch_points[:,1:] = branch_points[:,1:]/scale
+
     terminals = torch.from_numpy(np.array(terminals))
     terminals = torch.stack((terminals[:,2], terminals[:,1]/scale, terminals[:,0]/scale), dim=-1)
-    # terminals[:,1:] = terminals[:,1:]/scale
 
     # create density image
     density = Image(torch.zeros((1,)+stack.shape[1:]))
@@ -98,7 +97,6 @@ def load_data(img_dir, label_file, pixelsize=[1.0,1.0,1.0], downsample_factor=1.
     mask = torch.zeros_like(density.data)
     mask[density.data>np.exp(-3)] = 1.0
     mask = torch.tensor(dilation(mask, cube(10)[None]))
-
 
     # # get points
     # points = label.points[:,:3]

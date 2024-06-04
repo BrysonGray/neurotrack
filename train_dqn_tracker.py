@@ -81,14 +81,14 @@ def main(args):
                     beta=beta,
                     friction=friction)
 
-    dqn_model = DQNModel(in_channels=4,
-                        n_actions=len(directions)+1,
+    dqn_model = DQNModel(in_channels=6,
+                        n_actions=len(directions)+2,
                         input_size=(2*patch_radius+1),
                         lr=lr,
                         step_size=torch.tensor(step_size))
     # TODO: changed for testing
-    # in_channels=6
-    # n_actions=len(directions)+2
+    # in_channels=4
+    # n_actions=len(directions)+1
 
     if model:
         dqn_model.load_model(torch.load(model))

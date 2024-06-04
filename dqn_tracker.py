@@ -130,7 +130,7 @@ class DQN(nn.Module):
         shape_out = lambda x, k, s: ((x - k)/s + 1)//1
         h = shape_out(input_size, 3, 2) # first conv
         h = shape_out(h, 3, 2) # second conv
-        n_features = int(32 * h**3)
+        n_features = int(32*n * h**3)
 
         # convolution layers
         self.conv1 = nn.Conv3d(in_channels + 3, 16*n, 3, stride=2) # 3 channels added to in_channels for components of previous step direction
@@ -157,7 +157,6 @@ class DQN(nn.Module):
 
         x = self.fc3(x)
 
-        
         return x
     
 
@@ -195,8 +194,8 @@ class DQNModel():
                     return torch.argmax(action[0])
             else:
                 # take a random action 
-                # return torch.randint(len(action_space)+2, (1,), device=DEVICE).squeeze() # choices are n step directions plus terminate and bifurcate #TODO: changed for testing
-                return torch.randint(len(action_space)+1, (1,), device=DEVICE).squeeze() # choices are n step directions plus terminate
+                return torch.randint(len(action_space)+2, (1,), device=DEVICE).squeeze() # choices are n step directions plus terminate and bifurcate #TODO: changed for testing
+                # return torch.randint(len(action_space)+1, (1,), device=DEVICE).squeeze() # choices are n step directions plus terminate
         else:
             with torch.no_grad():
                     # pick action with the larger expected reward.
@@ -344,7 +343,7 @@ class DQNModel():
                     if save_snapshots:
                         if i%17 == 0:
                             torch.save(env.img.data[3].detach().clone(), os.path.join(output, f'bundle_density_ep{i%len(env.seeds)}.pt'))
-                            # torch.save(env.img[4].detach().clone(), os.path.join(output, f'bifurcations_ep{i%len(env.seeds)}.pt')) #TODO: changed for testing
+                            torch.save(env.img.data[4].detach().clone(), os.path.join(output, f'bifurcations_ep{i%len(env.seeds)}.pt')) #TODO: changed for testing
                             torch.save(target_net_state_dict, os.path.join(output, f'model_state_dict_{name}.pt'))
                             torch.save(episode_durations, os.path.join(output, f'episode_durations_{name}.pt'))
                             torch.save(episode_returns, os.path.join(output, f'episode_returns_{name}.pt'))

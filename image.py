@@ -94,7 +94,7 @@ class Image:
         return patch, padding
 
 
-    def draw_line_segment(self, segment, width, channel=-1):
+    def draw_line_segment(self, segment, width, channel=-1, value=1.0):
         """ Draw a line segment with width.
 
         Parameters
@@ -123,17 +123,18 @@ class Image:
         # start = torch.round(segment_length*direction + c).to(int)
         end = torch.round(start_ + segment).to(int)
         line = line_nd(start_, end, endpoint=True)
-        X[line] = 1.0
+        X[line] = float(value)
 
         # if width is 0, don't blur
         if width > 0:
             sigma = width/2
             X = torch.tensor(gaussian(X, sigma=sigma))
+            X /= torch.amax(X)
 
         # TODO: When I crop, I should not need to interpolate since center will be integer coordinates.
         patch, padding = self.crop(start, patch_radius, interp=False, pad=False) # patch is a view of self.data (c x h x w x d)
         new_patch = X[padding[0]:X.shape[0]-padding[1], padding[2]:X.shape[1]-padding[3], padding[4]:X.shape[2]-padding[5]]
-        new_patch /= torch.amax(new_patch, dim=(0,1,2))
+        # new_patch /= torch.amax(new_patch, dim=(0,1,2))
 
         # add segment to patch
         patch[channel] = torch.maximum(new_patch, patch[channel])

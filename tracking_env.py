@@ -133,6 +133,7 @@ class Environment():
         bundle_seeds = center[None] + r * offsets
 
         self.paths = [*torch.Tensor(bundle_seeds)[:,None]] # a list of N paths. each path is a 1 x 3 tensor
+        self.path_labels = [1.0]
         self.alpha = alpha
         self.beta = beta
         self.friction = friction
@@ -150,15 +151,16 @@ class Environment():
         # initialize bundle density map
         self.bundle_density = torch.zeros_like(true_density)
 
-        # self.img.data = torch.cat((self.img.data, torch.zeros((3,)+self.img.data.shape[1:])), dim=0) # add 3 channels for path, bifurcation points, and terminal points
+        self.img.data = torch.cat((self.img.data, torch.zeros((3,)+self.img.data.shape[1:])), dim=0) # add 3 channels for path, bifurcation points, and terminal points
         # self.img.data = torch.cat((self.img.data, torch.zeros((2,)+self.img.data.shape[1:])), dim=0) # add 2 channels for path, and bifurcation points.
-        self.img.data = torch.cat((self.img.data, torch.zeros((1,)+self.img.data.shape[1:])), dim=0) # add 1 channel for path #TODO: changed for testing
+        # self.img.data = torch.cat((self.img.data, torch.zeros((1,)+self.img.data.shape[1:])), dim=0) # add 1 channel for path #TODO: changed for testing
         self.bundle_density = Image(self.bundle_density)
         for i in range(len(self.paths)):
             # add_bundle_point(bundle_density, self.paths[i][0], self.ball)
             for j in range(len(self.paths[i])-1):
                 segment = torch.stack((self.paths[i][j], self.paths[i][j+1]), dim=0)
-                self.img.draw_line_segment(segment, width=0, channel=3)
+                travel_dist = np.linalg.norm(self.paths[self.head_id][j] - self.paths[self.head_id][0])
+                self.img.draw_line_segment(segment, width=0, channel=3, value=travel_dist/100.0)
                 self.bundle_density.draw_line_segment(segment, width=self.step_width)
 
 
@@ -181,7 +183,7 @@ class Environment():
         return patch[None], last_steps[None]
 
 
-    def get_reward(self, terminate_dist=None, delta_density_diff=None, bifurcate_dist=None, verbose=False, sigmaf=1.0, sigmab=0.3):
+    def get_reward(self, terminate_dist=None, delta_density_diff=None, bifurcate_dist=None, accidental_terminate=False, verbose=False, sigmaf=1.0, sigmab=0.3):
         """ Get the reward for the current state. The reward depends on the streamline smoothness and
         the change in distance between the streamline density and true denisty maps.
 
@@ -198,52 +200,75 @@ class Environment():
         reward : torch.Tensor
             Tensor with shape 1
         """
-        # get_reward should receive one and only one of either terminated, bifurcate, or delta_density_diff
-        check = sum([terminate_dist is not None, delta_density_diff is not None, bifurcate_dist is not None])
-        if check != 1:
-            raise RuntimeError("Function get_reward should receive one and only one of either terminated, bifurcate, or delta_density_diff parameters.")
-        
-        w = 2.0
-        
-        if terminate_dist is not None:
-            reward = max(-2/self.radius * terminate_dist + 1, -1) * w
+
+        if accidental_terminate:
+            travel_dist = np.linalg.norm(self.paths[self.head_id][-1] - self.paths[self.head_id][0])
+            early_stop_penalty = -10*np.exp(-travel_dist/5)-2
+            reward = early_stop_penalty
             if verbose:
-                print(f'terminate distance: {terminate_dist}',
-                      f'terminate reward: {reward}')
-        
-        elif bifurcate_dist is not None:
-            reward = max(-2/self.radius * bifurcate_dist + 1, -1) * w
-            if verbose:
-                print(f'bifurcate distance: {bifurcate_dist}',
-                      f'bifurcate reward: {reward}')
+                print('accidental terminate \n',
+                      f'travel distance: {travel_dist}\n',
+                      f'early stop penalty: {early_stop_penalty}\n')
 
         else:
-            # prev_step = (self.paths[self.head_id][-2]-self.paths[self.head_id][-3]) / self.step_size
-            # current_step = (self.paths[self.head_id][-1]-self.paths[self.head_id][-2]) / self.step_size
-            # cos_angle = torch.dot(current_step, prev_step).to(float)
-            # note that delta density difference is a change in error,
-            # so negative change is good, hence the flipped (positive) exponent which is normally negative for sigmoid function.
-            # it is also shifted down so that zero change yields zero.
-            #TODO: test using matchin sse
-            # m = -2.5e3 #-52631.
-            # b = 0.2 #-0.05263
-            # diff = m*delta_density_diff + b
-            M = -delta_density_diff
-            # reward = self.alpha*diff + self.beta*(cos_angle-1) - self.friction
-            q = self.paths[self.head_id][-1]
-            q_ = self.paths[self.head_id][-2]
-            q__ = self.paths[self.head_id][-3]
-            # Z = torch.sum((q - 1/(1/sigmaf**2 + 1/sigmab**2)*(q_/sigmaf**2 + (2*q_ - q__)/sigmab**2))**2) * (1/sigmaf**2 + 1/sigmab**2)
-            P = - torch.sum((q - q_)**2)/(2*sigmaf**2) - torch.sum((q - 2*q_ + q__)**2) / (2*sigmab**2) # prior likelihood
-            reward = self.alpha*M + self.beta*P + 4.0
-            if verbose:
-                print(f'delta_sse: {delta_density_diff}\n',
-                      f'matching reward: {self.alpha*M}\n',
-                      f'prior likelihood: {P}\n',
-                      f'prior reward: {self.beta*P}')
-                    #   f'cos_angle: {cos_angle}','\n',
-                    #   f'smoothing reward: {self.beta*(cos_angle-1)}', '\n',
-                    #   f'friction reward: {-self.friction}')
+            # get_reward should receive one and only one of either terminated, bifurcate, or delta_density_diff
+            check = sum([terminate_dist is not None, delta_density_diff is not None, bifurcate_dist is not None])
+            if check != 1:
+                raise RuntimeError("Function get_reward should receive one and only one of either terminated, bifurcate, or delta_density_diff parameters.")
+                    
+            a=100
+            b=2
+            c=4
+            d=-5
+            dist_reward_function = lambda x: a / ( 1+np.exp((x+b)/c) ) + d # for proximity to the correct landmark (terminate or bifurcate)
+
+            if terminate_dist is not None:
+                travel_dist = np.linalg.norm(self.paths[self.head_id][-1] - self.paths[self.head_id][0])
+                early_stop_penalty = -np.exp(-(travel_dist-15)/4)
+                distance_reward = dist_reward_function(terminate_dist)
+                reward = distance_reward + early_stop_penalty
+                # reward = 0.0 #TODO: train without terminate reward
+                if verbose:
+                    print(f'terminate distance: {terminate_dist}\n',
+                        f'distance reward: {distance_reward}\n',
+                        f'travel distance: {travel_dist}\n',
+                        f'early stop penalty: {early_stop_penalty}\n',
+                        f'total reward: {reward}\n')
+            
+            elif bifurcate_dist is not None:
+                reward = dist_reward_function(bifurcate_dist)
+                # reward = 0.0 #TODO: train without bifurcate reward
+                if verbose:
+                    print(f'bifurcate distance: {bifurcate_dist}\n',
+                        f'bifurcate reward: {reward}\n')
+
+            else:
+                # prev_step = (self.paths[self.head_id][-2]-self.paths[self.head_id][-3]) / self.step_size
+                # current_step = (self.paths[self.head_id][-1]-self.paths[self.head_id][-2]) / self.step_size
+                # cos_angle = torch.dot(current_step, prev_step).to(float)
+                # note that delta density difference is a change in error,
+                # so negative change is good, hence the flipped (positive) exponent which is normally negative for sigmoid function.
+                # it is also shifted down so that zero change yields zero.
+                #TODO: test using matching sse
+                # m = -2.5e3 #-52631.
+                # b = 0.2 #-0.05263
+                # diff = m*delta_density_diff + b
+                M = -delta_density_diff
+                # reward = self.alpha*diff + self.beta*(cos_angle-1) - self.friction
+                q = self.paths[self.head_id][-1]
+                q_ = self.paths[self.head_id][-2]
+                q__ = self.paths[self.head_id][-3]
+                # Z = torch.sum((q - 1/(1/sigmaf**2 + 1/sigmab**2)*(q_/sigmaf**2 + (2*q_ - q__)/sigmab**2))**2) * (1/sigmaf**2 + 1/sigmab**2)
+                P = - torch.sum((q - q_)**2)/(2*sigmaf**2) - torch.sum((q - 2*q_ + q__)**2) / (2*sigmab**2) # prior likelihood
+                reward = self.alpha*M + self.beta*P
+                if verbose:
+                    print(f'delta_sse: {delta_density_diff}\n',
+                        f'matching reward: {self.alpha*M}\n',
+                        f'prior likelihood: {P}\n',
+                        f'prior reward: {self.beta*P}')
+                        #   f'cos_angle: {cos_angle}','\n',
+                        #   f'smoothing reward: {self.beta*(cos_angle-1)}', '\n',
+                        #   f'friction reward: {-self.friction}')
 
         return torch.tensor([reward], device=DEVICE, dtype=torch.float32)
 
@@ -274,24 +299,31 @@ class Environment():
         # check if the agent chose to mark the position as a bifurcation point
         # Add the last segment (last two points) from the current path to a new path in the paths list
         if action_id == len(self.action_space)+1: # bifurcate
-            self.paths.append(self.paths[self.head_id][-2:])
-            # draw point in bifurcation points channel
-            self.img.draw_point(self.paths[self.head_id][-1], radius=3, channel=4)
+            if len(self.paths) + len(self.finished_paths) == 100:
+                terminated = True
+                observation = None
+                reward = torch.tensor([0.0], device=DEVICE, dtype=torch.float32)
+            else:
+                self.paths.append(self.paths[self.head_id][-2:])
+                # draw point in bifurcation points channel
+                self.img.draw_point(self.paths[self.head_id][-1], radius=3, channel=4)
 
-            # compute reward based on distance from nearest true bifurcation point
-            diffs = self.branch_points_copy - self.paths[self.head_id][-1][None]
-            sq_dists = torch.einsum('ij,ij->i', diffs, diffs)
-            min_dist = torch.sqrt(torch.min(sq_dists))
+                # compute reward based on distance from nearest true bifurcation point
+                diffs = self.branch_points_copy - self.paths[self.head_id][-1][None]
+                sq_dists = torch.einsum('ij,ij->i', diffs, diffs)
+                min_dist = torch.sqrt(torch.min(sq_dists))
 
-            # if the agent correctly labels a branch point, remove that point from the list.
-            if min_dist <= self.radius: # this threshold is chosen arbitrarily
-                # remove closest branch point
-                # TODO: what happens when all the points are correcly labelled?
-                self.branch_points_copy = torch.cat((self.branch_points_copy[:torch.argmin(sq_dists)], self.branch_points_copy[torch.argmin(sq_dists)+1:]))
+                # if the agent correctly labels a branch point, remove that point from the list.
+                if min_dist <= self.radius: # this threshold is chosen arbitrarily
+                    # remove closest branch point
+                    # TODO: what happens when all the points are correcly labelled?
+                    self.branch_points_copy = torch.cat((self.branch_points_copy[:torch.argmin(sq_dists)], self.branch_points_copy[torch.argmin(sq_dists)+1:]))
 
-            reward = self.get_reward(bifurcate_dist=min_dist, verbose=verbose)
-            observation = self.get_state()
-            # don't move to the new path head until after taking a step on the current path
+                #TODO: train without bifurcate action
+                reward = self.get_reward(bifurcate_dist=min_dist, verbose=verbose)
+                # reward = torch.tensor([0.0], device=DEVICE, dtype=torch.float32)
+                observation = self.get_state()
+                # don't move to the new path head until after taking a step on the current path
             
         # check if the action is terminate path
         elif action_id == len(self.action_space):
@@ -313,20 +345,26 @@ class Environment():
 
         if terminate_path:
             observation = None
+            travel_dist = np.linalg.norm(self.paths[self.head_id][-1] - self.paths[self.head_id][0])
 
             if accidental_terminate:
-                reward = torch.tensor([0.], device=DEVICE)
+                # reward = torch.tensor([0.], device=DEVICE)
+                #TODO: test using distance from origin for terminate reward
+                reward = self.get_reward(accidental_terminate=True, verbose=verbose)
             else:
-                # # compute reward based on distance from nearest terminal point
-                # diffs = self.terminals_copy - self.paths[self.head_id][-1][None]
-                # sq_dists = torch.einsum('ij,ij->i', diffs, diffs)
-                # min_dist = torch.sqrt(torch.min(sq_dists))
-                # # if the agent correctly labels a terminal point, remove that point from the list.
-                # if min_dist <= self.radius: # this threshold is chosen arbitrarily
-                #     # remove closest branch point
-                #     self.terminals_copy = torch.cat((self.terminals_copy[:torch.argmin(sq_dists)], self.terminals_copy[torch.argmin(sq_dists)+1:]))
-                # reward = self.get_reward(terminate_dist=min_dist, verbose=verbose)
-                reward = torch.tensor([0.], device=DEVICE) # turn off terminate reward calculation
+                # compute reward based on distance from nearest terminal point
+                diffs = self.terminals_copy - self.paths[self.head_id][-1][None]
+                sq_dists = torch.einsum('ij,ij->i', diffs, diffs)
+                min_dist = torch.sqrt(torch.min(sq_dists))
+                # if the agent correctly labels a terminal point, remove that point from the list.
+                if min_dist <= self.radius: # this threshold is chosen arbitrarily
+                    # remove closest branch point
+                    self.terminals_copy = torch.cat((self.terminals_copy[:torch.argmin(sq_dists)], self.terminals_copy[torch.argmin(sq_dists)+1:]))
+                reward = self.get_reward(terminate_dist=min_dist, verbose=verbose)
+                
+                #TODO: train without terminate reward 
+                # reward = torch.tensor([0.], device=DEVICE) # turn off terminate reward calculation
+
 
             # remove the path from 'paths' and add it to 'ended_paths'
             self.finished_paths.append(self.paths.pop(self.head_id))
@@ -352,7 +390,8 @@ class Environment():
 
             # draw the segment
             segment = self.paths[self.head_id][-2:, :3]
-            self.img.draw_line_segment(segment, width=0, channel=3)
+            travel_dist = np.linalg.norm(self.paths[self.head_id][-1] - self.paths[self.head_id][0])
+            self.img.draw_line_segment(segment, width=0, channel=3, value=travel_dist/100.0) # divide the brightness value of the segment by 100 to make the values closer to a range of [0,1]
             self.bundle_density.draw_line_segment(segment, width=self.step_width)
 
             # get the new patch centered on the old streamline head
@@ -401,12 +440,14 @@ class Environment():
         # reset bundle density
         self.bundle_density = torch.zeros_like(self.true_density.data)
         self.bundle_density = Image(self.bundle_density)
-        # self.img.data[3:] = torch.zeros((3,)+self.img.data.shape[1:]) # zero out path, bifurcation, and terminal point channels
+        self.img.data[3:] = torch.zeros((3,)+self.img.data.shape[1:]) # zero out path, bifurcation, and terminal point channels
         # self.img.data[3:] = torch.zeros((2,)+self.img.data.shape[1:]) # zero out path, and bifurcation point channels
-        self.img.data[3:] = torch.zeros((1,)+self.img.data.shape[1:]) # zero out path #TODO: changed for testing
+        # self.img.data[3:] = torch.zeros((1,)+self.img.data.shape[1:]) # zero out path #TODO: changed for testing
         for i in range(len(self.paths)):
             for j in range(len(self.paths[i])-1):
                 segment = torch.stack((self.paths[i][j], self.paths[i][j+1]), dim=0)
+                travel_dist = np.linalg.norm(self.paths[self.head_id][j] - self.paths[self.head_id][0])
+                self.img.draw_line_segment(segment, width=0, channel=3, value=travel_dist/100.0)
                 self.img.draw_line_segment(segment, width=0, channel=3)
                 self.bundle_density.draw_line_segment(segment, width=self.step_width)
 

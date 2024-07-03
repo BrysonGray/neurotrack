@@ -13,7 +13,55 @@ import numpy as np
 from scipy.linalg import expm
 from skimage.draw import line_nd
 from skimage.filters import gaussian
+from skimage.morphology import dilation, cube
 import utils
+
+
+def make_line_segment(segment, width, value=1.0, binary=False):
+    """ Generate an image of a line segment with width.
+
+    Parameters
+    ----------
+    segment : array_like
+        array with two three dimensional points (shape: 2x3)
+    
+    width : scalar
+        segment width
+    
+    Returns
+    -------
+    X : torch.Tensor
+        A patch with the new line segment starting at its center.
+    """
+    # get the center of the patch from the segment endpoints
+    # center = segment.sum(axis=0) / 2 # TODO: center should actually be the start of the line and rounded to the nearest pixel
+    segment = segment[1] - segment[0]
+    segment_length = torch.sqrt(torch.sum(segment**2))
+
+    # the patch should contain both line end points plus some blur
+    L = int(torch.ceil(segment_length)) + 1 # The radius of the patch is the whole line length since the line starts at patch center.
+    overhang = int(2*width) # include space beyond the end of the line
+    patch_radius = L + overhang
+
+    patch_size = 2*patch_radius + 1
+    X = torch.zeros((patch_size,patch_size,patch_size))
+    # get endpoints
+    start_ = torch.Tensor([patch_radius]*3) # the patch center is the start point rounded to the nearest pixel
+    # start = torch.round(segment_length*direction + c).to(int)
+    end = torch.round(start_ + segment).to(int)
+    line = line_nd(start_, end, endpoint=True)
+    X[line] = float(value)
+
+    # if width is 0, don't blur
+    if width > 0:
+        if binary:
+            X = torch.tensor(dilation(X, cube(int(width))))
+        else:
+            sigma = width/2
+            X = torch.tensor(gaussian(X, sigma=sigma))
+            X /= torch.amax(X)
+    
+    return X
 
 
 class Image:
@@ -92,10 +140,10 @@ class Image:
         # patch = patch[:, 1:-1, 1:-1, 1:-1]
 
         return patch, padding
+    
 
-
-    def draw_line_segment(self, segment, width, channel=-1, value=1.0):
-        """ Draw a line segment with width.
+    def draw_line_segment(self, segment, width, channel=-1, value=1.0, binary=False):
+        """ Add an image patch with the new line segment to the existing bundle estimate.
 
         Parameters
         ----------
@@ -105,36 +153,15 @@ class Image:
         width : scalar
             segment width
         """
-        # get the center of the patch from the segment endpoints
-        # center = segment.sum(axis=0) / 2 # TODO: center should actually be the start of the line and rounded to the nearest pixel
-        start = torch.round(segment[0]).to(int)
-        segment = segment[1] - segment[0]
-        segment_length = torch.sqrt(torch.sum(segment**2))
+        # create the patch with the new line segment starting at its center.
+        X = make_line_segment(segment, width, value, binary)
 
-        # the patch should contain both line end points plus some blur
-        L = int(torch.ceil(segment_length)) + 1 # The radius of the patch is the whole line length since the line starts at patch center.
-        overhang = int(2*width) # include space beyond the end of the line
-        patch_radius = L + overhang
-
-        patch_size = 2*patch_radius + 1
-        X = torch.zeros((patch_size,patch_size,patch_size))
-        # get endpoints
-        start_ = torch.Tensor([patch_radius]*3) # the patch center is the start point rounded to the nearest pixel
-        # start = torch.round(segment_length*direction + c).to(int)
-        end = torch.round(start_ + segment).to(int)
-        line = line_nd(start_, end, endpoint=True)
-        X[line] = float(value)
-
-        # if width is 0, don't blur
-        if width > 0:
-            sigma = width/2
-            X = torch.tensor(gaussian(X, sigma=sigma))
-            X /= torch.amax(X)
-
-        # TODO: When I crop, I should not need to interpolate since center will be integer coordinates.
-        patch, padding = self.crop(start, patch_radius, interp=False, pad=False) # patch is a view of self.data (c x h x w x d)
+        # get the patch centered on the new segment start point from the current image.
+        center = torch.round(segment[0]).to(int)
+        patch_radius = int((X.shape[0] - 1)/2)
+        patch, padding = self.crop(center, patch_radius, interp=False, pad=False) # patch is a view of self.data (c x h x w x d)
+        # if the patch overlaps with the image boundary, it must be cropped to fit
         new_patch = X[padding[0]:X.shape[0]-padding[1], padding[2]:X.shape[1]-padding[3], padding[4]:X.shape[2]-padding[5]]
-        # new_patch /= torch.amax(new_patch, dim=(0,1,2))
 
         # add segment to patch
         patch[channel] = torch.maximum(new_patch, patch[channel])

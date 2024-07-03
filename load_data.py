@@ -95,8 +95,8 @@ def load_data(img_dir, label_file, pixelsize=[1.0,1.0,1.0], downsample_factor=1.
         density.draw_line_segment(s[:,:3], width=s[0,-1].item()/2)
 
     mask = torch.zeros_like(density.data)
-    mask[density.data>np.exp(-3)] = 1.0
-    mask = torch.tensor(dilation(mask, cube(10)[None]))
+    mask[density.data>np.exp(-1)] = 1.0
+    boundary = torch.tensor(dilation(mask, cube(10)[None]))
 
     # # get points
     # points = label.points[:,:3]
@@ -114,4 +114,4 @@ def load_data(img_dir, label_file, pixelsize=[1.0,1.0,1.0], downsample_factor=1.
     # density = density.unsqueeze(0)
     # mask = mask.unsqueeze(0)
 
-    return stack, density.data, mask, branch_points, terminals
+    return stack, mask, boundary, branch_points, terminals

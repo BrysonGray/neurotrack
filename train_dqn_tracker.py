@@ -29,8 +29,7 @@ def main(args):
     ----------
     args : json
     """
-    img_file = args["image"]
-    label_file = args["label"]
+    img_dir = args["img_dir"]
     seeds = args["seeds"]
     model = args["model"] if "model" in args else None
     n_seeds = args["n_seeds"] if "n_seeds" in args else 1
@@ -49,40 +48,35 @@ def main(args):
     num_episodes = args["num_episodes"] if "num_episodes" in args else 100
     pixelsize = args["pixelsize"] if "pixelsize" in args else [1.0, 1.0, 1.0]
     outdir = args["outdir"] if "outdir" in args else "./outputs"
+    branching = args["branching"] if "branching" in args else True
     patch_radius = 17
     directions = np.load('/home/brysongray/tractography/neuron_trx/action_space_30_dir.npy')
 
-    img, density, mask, branch_points, terminals = load_data(img_file, label_file, pixelsize=pixelsize, inverse=True)
+    if isinstance(branching, str):
+        str_to_bool = {"true":True, "false":False}
+        try:
+            branching = str_to_bool[branching.casefold()]
+        except KeyError:
+            print("The argument 'branching' must be either 'True' or 'False' or int.")
 
-    # alphas = np.arange(start=1.0,stop=6.0,step=1.0)
-    # betas = np.arange(start=0.0, stop=5.5, step=0.5)
-    # frictions = np.arange(start=0., stop=1.2, step=0.2)
-    # for alpha in alphas:
-    #     for beta in betas:
-    #         if beta > alpha:
-    #             continue
-    #         for friction in frictions:
-    #             if alpha == 1.0 and beta == 0.0 and friction == 0.0:
-    #                 continue
 
-    env = Environment(img,
+    # img, density, mask, branch_points, terminals = load_data(img_file, label_file, pixelsize=pixelsize, inverse=True)
+
+    env = Environment(img_dir,
                     patch_radius,
                     seeds,
-                    mask,
-                    density,
-                    branch_points,
-                    terminals,
                     directions,
                     n_seeds=n_seeds,
                     step_size=step_size,
                     step_width=step_width,
-                    max_len=10000,
+                    max_len=1000,
                     alpha=alpha,
                     beta=beta,
-                    friction=friction)
+                    friction=friction,
+                    branching=branching)
 
-    dqn_model = DQNModel(in_channels=6,
-                        n_actions=len(directions)+2,
+    dqn_model = DQNModel(in_channels=4,
+                        n_actions=len(directions)+1,
                         input_size=(2*patch_radius+1),
                         lr=lr,
                         step_size=torch.tensor(step_size))
@@ -103,7 +97,7 @@ def main(args):
                     eps_decay=eps_decay,
                     save_snapshots=True,
                     show=False,
-                    name=f'alpha-{alpha:.1f}_b-{beta:.1f}_f-{friction:.1f}_n-{n_seeds}',
+                    name=f'alpha-{alpha:.2f}_b-{beta:.2f}_f-{friction:.2f}_n-{n_seeds}',
                     output=outdir)
 
     return

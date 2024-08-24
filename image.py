@@ -8,25 +8,29 @@ Author: Bryson Gray
 2024
 
 '''
+import matplotlib
+from matplotlib import widgets
 import torch
 import numpy as np
-from scipy.linalg import expm
 from skimage.draw import line_nd
 from skimage.filters import gaussian
 from skimage.morphology import dilation, cube
-import utils
 
+from dqn_tracker import DEVICE
 
-def make_line_segment(segment, width, value=1.0, binary=False):
+def make_line_segment(segment, width, binary=False, value=1.0):
     """ Generate an image of a line segment with width.
 
     Parameters
     ----------
-    segment : array_like
+    segment: torch.Tensor
         array with two three dimensional points (shape: 2x3)
-    
-    width : scalar
+    width: scalar
         segment width
+    binary: bool
+        Make a line mask rather than a blurred idealized line.
+    value: float
+        If binary is set to True, set the line brightness to this value. Default is 1.0.
     
     Returns
     -------
@@ -46,9 +50,9 @@ def make_line_segment(segment, width, value=1.0, binary=False):
     patch_size = 2*patch_radius + 1
     X = torch.zeros((patch_size,patch_size,patch_size))
     # get endpoints
-    start_ = torch.Tensor([patch_radius]*3) # the patch center is the start point rounded to the nearest pixel
+    start_ = torch.tensor([patch_radius]*3) # the patch center is the start point rounded to the nearest pixel
     # start = torch.round(segment_length*direction + c).to(int)
-    end = torch.round(start_ + segment).to(int)
+    end = torch.round(start_ + segment.cpu()).to(dtype=torch.int)
     line = line_nd(start_, end, endpoint=True)
     X[line] = float(value)
 
@@ -61,7 +65,7 @@ def make_line_segment(segment, width, value=1.0, binary=False):
             X = torch.tensor(gaussian(X, sigma=sigma))
             X /= torch.amax(X)
     
-    return X
+    return X.to(device=segment.device)
 
 
 class Image:
@@ -97,13 +101,13 @@ class Image:
             padding : ndarray
                 Length that patch overlaps with image boundaries on each end of each dimension.
         """
-        i,j,k = [int(np.round(x)) for x in center]
+        i,j,k = [int(torch.round(x)) for x in center]
         shape = self.data.shape[1:]
 
         # get amount of padding for each face
         zpad_top = zpad_btm = ypad_front = ypad_back = xpad_left = xpad_right = 0
 
-        # radius = radius + 1 # leave one pixel to be cropped at the end to remove interpolation padding 
+        # radius = radius + 1 # leave one pixel to be cropped at the end to remove interpolation padding
 
         if (i + radius) > shape[0]-1:
             zpad_btm = i + radius - (shape[0]-1)
@@ -133,7 +137,7 @@ class Image:
 
         if pad:
             patch_size = 2*radius+1
-            patch_ = torch.ones((self.data.shape[0], patch_size, patch_size, patch_size)) * value
+            patch_ = torch.ones((self.data.shape[0], patch_size, patch_size, patch_size), device=DEVICE) * value
             patch_[:, zpad_top:patch_size - zpad_btm, ypad_front:patch_size - ypad_back, xpad_left:patch_size - xpad_right] = patch
             patch = patch_
 
@@ -153,11 +157,12 @@ class Image:
         width : scalar
             segment width
         """
+        
         # create the patch with the new line segment starting at its center.
-        X = make_line_segment(segment, width, value, binary)
+        X = make_line_segment(segment, width, binary, value)
 
         # get the patch centered on the new segment start point from the current image.
-        center = torch.round(segment[0]).to(int)
+        center = torch.round(segment[0]).to(torch.int)
         patch_radius = int((X.shape[0] - 1)/2)
         patch, padding = self.crop(center, patch_radius, interp=False, pad=False) # patch is a view of self.data (c x h x w x d)
         # if the patch overlaps with the image boundary, it must be cropped to fit
@@ -180,7 +185,7 @@ class Image:
         patch, padding = self.crop(point, radius=radius, interp=False, pad=False)
         new_patch = X[padding[0]:X.shape[0]-padding[1], padding[2]:X.shape[1]-padding[3], padding[4]:X.shape[2]-padding[5]]
         new_patch /= torch.amax(new_patch, dim=(0,1,2))
-        patch[channel] = torch.maximum(new_patch, patch[channel])
+        patch[channel] = torch.maximum(new_patch.to(device=patch.device), patch[channel])
 
         return
 

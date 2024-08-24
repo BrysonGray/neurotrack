@@ -3,6 +3,11 @@
 """
 Soft actor-critic tractography model functions
 
+References
+-----------
+Reinforcement Learning: an Introduction, Sutton and Barto;
+https://spinningup.openai.com/en/latest/algorithms/sac.html
+
 Author: Bryson Gray
 2024
 """
@@ -10,17 +15,13 @@ Author: Bryson Gray
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import copy
-import random
+import torch.optim as optim
 import math
 import os
 import matplotlib
 import matplotlib.pyplot as plt
-from collections import deque, namedtuple
 from itertools import count
 from tqdm import tqdm
-from scipy.stats import vonmises_fisher
-
 is_ipython = 'inline' in matplotlib.get_backend()
 if is_ipython:
     from IPython import display
@@ -85,36 +86,21 @@ def plot_returns(episode_returns, show_result=False):
             # display.display(plt.gcf())
             display.display(plt.figure(), display_id=2)
 
-# class ReplayMemory():
-
-#     def __init__(self, capacity):
-#         self.memory = deque([],maxlen=capacity)
-#         self.Transition = namedtuple('Transition',
-#                         ('state', 'action', 'next_state', 'reward', 'done'))
-
-#     def push(self, *args):
-#         """Save a transition"""
-#         self.memory.append(self.Transition(*args))
-
-#     def sample(self, batch_size):
-#         return random.sample(self.memory, batch_size)
-
-#     def __len__(self):
-#         return len(self.memory)
     
 class ReplayMemory():
     def __init__(self, capacity, obs_shape, action_shape):
 
-        self.obs = torch.empty((capacity, *obs_shape), dtype=torch.float32)
-        self.last_steps = torch.empty((capacity, 3), dtype=torch.float32)
-        self.actions = torch.empty((capacity, *action_shape), dtype=torch.float32)
-        self.next_obs = torch.empty((capacity, *obs_shape), dtype=torch.float32)
-        self.next_steps = torch.empty((capacity, 3))
-        self.rewards = torch.empty((capacity, 1), dtype=torch.float32)
-        self.dones = torch.empty((capacity, 1), dtype=torch.bool)
+        self.obs = torch.empty((capacity, *obs_shape), dtype=torch.float32, device='cpu')
+        self.last_steps = torch.empty((capacity, 3), dtype=torch.float32, device='cpu')
+        self.actions = torch.empty((capacity, *action_shape), dtype=torch.float32, device='cpu')
+        self.next_obs = torch.empty((capacity, *obs_shape), dtype=torch.float32, device='cpu')
+        self.next_steps = torch.empty((capacity, 3), device='cpu')
+        self.rewards = torch.empty((capacity, 1), dtype=torch.float32, device='cpu')
+        self.dones = torch.empty((capacity, 1), dtype=torch.bool, device='cpu')
 
         self.idx = 0
         self.full = False
+        self.capacity = capacity
     
     def push(self, obs, last_step, action, next_obs, next_step, reward, done):
         """Save a transition to replay memory"""
@@ -129,17 +115,21 @@ class ReplayMemory():
         self.idx = (self.idx + 1) % self.capacity
         self.full = self.idx == 0 or self.full
     
-    def sample(self, batch_size):
+    def sample(self, batch_size, replacement=True):
         sample_range = self.capacity if self.full else self.idx
-        idxs = torch.randint(sample_range, size=batch_size)
+        if replacement:
+            idxs = torch.randint(sample_range, size=(batch_size,))
+        else:
+            perm = torch.randperm(sample_range)
+            idxs = perm[:batch_size]
 
-        obs = self.obs[idxs]
-        last_steps = self.last_steps[idxs]
-        actions = self.actions[idxs]
-        next_obs = self.next_obs[idxs]
-        next_steps = self.next_steps
-        rewards = self.rewards[idxs]
-        dones = self.dones[idxs]
+        obs = self.obs[idxs].to(device=DEVICE)
+        last_steps = self.last_steps[idxs].to(device=DEVICE)
+        actions = self.actions[idxs].to(device=DEVICE)
+        next_obs = self.next_obs[idxs].to(device=DEVICE)
+        next_steps = self.next_steps[idxs].to(device=DEVICE)
+        rewards = self.rewards[idxs].to(device=DEVICE)
+        dones = self.dones[idxs].to(device=DEVICE)
 
         return obs, last_steps, actions, next_obs, next_steps, rewards, dones
     
@@ -151,24 +141,22 @@ class Critic(nn.Module):
     """
     Double Deep Q-Network CNN critic network model. This takes a state and an action as input,
     where the action is a direction in R^3 and an integer choice in {0,1,2} which represent
-    step, terminate, and branch, respectively.
+    step, terminate, and branch, respectively, and outputs a value.
 
     Parameters
     ----------
     in_channels : int
         Number of channels in the input image.
-    n_actions : int
-        Number of actions in the action space
     input_size : int
         Input image size of one dimension. Used to
         calculate the number of input features in the fully connected layer.
         Note the input must have equal height, width, and depth.
+    n : int
+        Channel size multiplier.
     """
 
-    def __init__(self, in_channels, input_size, step_size=torch.tensor([1.0,1.0,1.0]), n=1):
+    def __init__(self, in_channels, input_size, n=1):
         super().__init__()
-
-        self.step_size = step_size.to(dtype=torch.float32, device=DEVICE)
 
         # calculate the size of the convolution output for input to Linear
         shape_out = lambda x, k, s: ((x - k)/s + 1)//1
@@ -177,7 +165,8 @@ class Critic(nn.Module):
         n_features = int(32*n * h**3)
 
         # convolution layers
-        self.conv1 = nn.Conv3d(in_channels + 7, 16*n, 3, stride=2) # 3 channels added to in_channels for components of previous step direction and 4 more for the action
+        # 3 channels added to in_channels for components of previous step direction and 3 more for the action (chosen direction)
+        self.conv1 = nn.Conv3d(in_channels + 6, 16*n, 3, stride=2)
         self.norm1 = nn.BatchNorm3d(16*n)
         self.conv2 = nn.Conv3d(16*n, 32*n, 3, stride=2)
         self.norm2 = nn.BatchNorm3d(32*n)
@@ -185,15 +174,15 @@ class Critic(nn.Module):
         # fully connected layers
         self.fc1 = nn.Linear(n_features, 512)
         self.fc2 = nn.Linear(512, 128)
-        self.fc3 = nn.Linear(128, 1)
+        self.fc3 = nn.Linear(128, 3)
 
-    def forward(self, obs, step, action):
+    def forward(self, obs, last_step, direction):
         """
         Parameters
         ----------
         obs : torch.Tensor
-            Observtion of the image patch with shape (M, 3, L, L, L), where L is the side length of the patch.
-        step : torch.Tensor
+            Observtion of the image patch with shape (M, C, L, L, L), where L is the side length of the patch.
+        last_step : torch.Tensor
             Last step direction with shape (M, 3)
         action : torch.Tensor
             The action taken. This has shape (M, 4) where the first 3 components of each
@@ -201,9 +190,9 @@ class Critic(nn.Module):
 
         """
         # concatenate previous step direction components
-        x = torch.concatenate((obs, torch.ones((x.shape[0], 1, x.shape[2], x.shape[3], x.shape[4]), device=DEVICE)*step[:,:,None,None,None]), dim=1)
-        # concatenate action
-        x = torch.concatenate((x, torch.ones((x.shape[0], 1, x.shape[2], x.shape[3], x.shape[4]), device=DEVICE)*action[:,:,None,None,None]), dim=1)
+        x = torch.concatenate((obs, torch.ones((obs.shape[0], 1, obs.shape[2], obs.shape[3], obs.shape[4]), device=DEVICE)*last_step[:,:,None,None,None]), dim=1)
+        # concatenate new step direction
+        x = torch.concatenate((x, torch.ones((x.shape[0], 1, x.shape[2], x.shape[3], x.shape[4]), device=DEVICE)*direction[:,:,None,None,None]), dim=1)
         x = F.relu(self.norm1(self.conv1(x)))
         x = F.relu(self.norm2(self.conv2(x)))
 
@@ -216,10 +205,24 @@ class Critic(nn.Module):
     
 
 class Actor(nn.Module):
+    """
+    Policy network model. This takes a state observation as input (image, last step), and outputs two distributions:
+    one noraml distribution for step direction, and a categorical distribution for choice of
+    step, branch, and terminate.
 
-    def __init__(self, in_channels, input_size, step_size=torch.tensor([1.0,1.0,1.0]), n=1):
+    Parameters
+    ----------
+    in_channels : int
+        Number of channels in the input image.
+    input_size : int
+        Input image size of one dimension. Used to
+        calculate the number of input features in the fully connected layer.
+        Note the input must have equal height, width, and depth.
+    n : int
+        Channel size multiplier.
+    """
+    def __init__(self, in_channels, input_size, n=1):
         super().__init__()
-        self.step_size = step_size.to(dtype=torch.float32, device=DEVICE)
 
         # calculate the size of the convolution output for input to Linear
         shape_out = lambda x, k, s: ((x - k)/s + 1)//1
@@ -241,47 +244,55 @@ class Actor(nn.Module):
         self.fc3 = nn.Linear(128, 9)
     
     def forward(self, obs, step):
-        # x,p = state
-        # w = (p[:,1] - p[:,0]) / self.step_size
-        
-        x = torch.concatenate((obs, torch.ones((x.shape[0], 1, x.shape[2], x.shape[3], x.shape[4]), device=DEVICE)*step[:,:,None,None,None]), dim=1)
-        x = F.relu(self.norm1(self.conv1(x)))
-        x = F.relu(self.norm2(self.conv2(x)))
+        obs = obs.to(device=DEVICE)
+        step = step.to(device=DEVICE)
+        x = torch.concatenate((obs, torch.ones((obs.shape[0], 1, obs.shape[2], obs.shape[3], obs.shape[4]), device=DEVICE)*step[:,:,None,None,None]), dim=1)
+        x = self.conv1(x)
+        x = self.norm1(x)
+        x = F.relu(x)
+        # x = F.relu(self.norm1(self.conv1(x)))
+        # x = F.relu(self.norm2(self.conv2(x)))
+        x = self.conv2(x)
+        x = self.norm2(x)
+        x = F.relu(x)
 
         x = torch.flatten(x, 1) # flatten all dimensions except batch
         x = F.relu(self.fc1(x))
         x = F.relu(self.fc2(x))
         x = self.fc3(x)
         
-        mu = x[:3] # the step direction is equal to mu / ||mu||
-        sigma = F.relu(x[3:6]) # standard deviation must be positive
-        choice = x[6:] # logits
+        mu, std2, choice = torch.split(x, [3,3,3], dim=1) # the step direction will be mu / ||mu||
+        # std2 = torch.sigmoid(std)
+        std2 = torch.exp(std2)
+        cov = torch.stack([torch.diagflat(s) for s in std2])
 
-        direction_dist = torch.distributions.Normal(mu, sigma)
-        choice_dist = torch.distributions.Categorical(choice)
+        direction_dist = torch.distributions.MultivariateNormal(mu, cov)
+        choice_dist = torch.nn.functional.softmax(choice, dim=1)
 
         return direction_dist, choice_dist
 
 
 class SACModel():
-    def __init__(self, in_channels, input_size, start_steps=1000, lr=0.005, gamma=0.99, entropy_coeff=0.2, step_size=torch.tensor([1.0,1.0,1.0])):
+    def __init__(self, in_channels, input_size, start_steps=10000, lr=0.001, gamma=0.99, entropy_coeff=0.2):
     
-        self.actor = Actor(in_channels, input_size, step_size).to(DEVICE)
-        self.Q1 = Critic(in_channels, input_size, step_size).to(DEVICE)
-        self.Q2 = Critic(in_channels, input_size, step_size).to(DEVICE)
-        self.Q1_target = Critic(in_channels, input_size, step_size).to(DEVICE)
-        self.Q2_target = Critic(in_channels, input_size, step_size).to(DEVICE)
+        self.actor = Actor(in_channels, input_size).to(DEVICE)
+        self.Q1 = Critic(in_channels, input_size).to(DEVICE)
+        self.Q2 = Critic(in_channels, input_size).to(DEVICE)
+        self.Q1_target = Critic(in_channels, input_size).to(DEVICE)
+        self.Q2_target = Critic(in_channels, input_size).to(DEVICE)
         # initialize the Q1 and Q2 target networks with the same params as Q1 and Q2
-        self.Q1_target.load_state_dict(self.Q1.state_dict()) 
+        self.Q1_target.load_state_dict(self.Q1.state_dict())
         self.Q2_target.load_state_dict(self.Q2.state_dict())
 
-        self.Q1_optimizer = torch.optim.AdamW(self.Q1.parameters(), lr=lr, amsgrad=True)
-        self.Q2_optimizer = torch.optim.AdamW(self.Q2.parameters(), lr=lr, amsgrad=True)
-        self.actor_optimizer = torch.optim.AdamW(self.actor.parameters(), lr=lr, amsgrad=True)
+        self.Q1_optimizer = optim.AdamW(self.Q1.parameters(), lr=lr, amsgrad=True) # type: ignore
+        self.Q2_optimizer = optim.AdamW(self.Q2.parameters(), lr=lr, amsgrad=True) # type: ignore
+        self.actor_optimizer = optim.AdamW(self.actor.parameters(), lr=lr, amsgrad=True) # type: ignore
 
-        self.lrscheduler = torch.optim.lr_scheduler.StepLR(self.optimizer, step_size=1, gamma=0.9993)
+        self.criterion = nn.MSELoss()
 
-        # self.memory = ReplayMemory(10000, )
+        # self.lrscheduler = torch.optim.lr_scheduler.StepLR(self.Q1_optimizer, step_size=1, gamma=0.9993)
+
+        self.memory = ReplayMemory(10000, obs_shape=(in_channels,input_size,input_size,input_size), action_shape=(4,))
 
         self.start_steps = start_steps # random steps taken before beginning to sample from the policy
         self.gamma = gamma # discount factor
@@ -297,153 +308,176 @@ class SACModel():
 
 
     def select_action(self, obs, last_step, steps_done=0, sample=True):
+        batch_size = obs.shape[0]
         if steps_done < self.start_steps:
-            direction = torch.randn((3,))
-            direction = direction / torch.sum(direction**2)**0.5
+            direction = torch.randn((batch_size, 3))
+            direction = direction / (torch.linalg.norm(direction, dim=1, keepdims=True) + torch.finfo(torch.float).eps)
             # Do not use a uniform distribution over choices because our prior expectation is it
-            # will step much more often than branching or terminating a patch. It should also
+            # will step much more often than branching or terminating a path. It should also
             # terminate slightly more than branch otherwise an episode could run indefinitely.
-            choice = torch.multinomial(torch.tensor([0.98, 0.024, 0.016]), num_samples=1)
+            choice_dist = torch.tensor([0.98, 0.012, 0.008])[None] * torch.ones((batch_size, 1))
+            choice = torch.multinomial(choice_dist, num_samples=1) # (batch_size, 1)
         else:
-            direction_dist, categorical_dist = self.actor(obs, last_step)
+            direction_dist, choice_dist = self.actor(obs, last_step) 
             if sample:
                 direction = direction_dist.rsample()
-                choice = categorical_dist.rsample()
+                direction = direction / (torch.linalg.norm(direction, dim=1)[:,None] + torch.finfo(torch.float).eps)
+                choice = torch.multinomial(choice_dist, num_samples=batch_size, replacement=True) # (batch_size, 1)
             else:
                 direction = direction_dist.mean
-                choice = torch.argmax(categorical_dist.probs)
+                direction = direction / (torch.linalg.norm(direction, dim=1)[:,None] + torch.finfo(torch.float).eps)
+                choice = torch.argmax(choice_dist, dim=1)[:,None] # (batch_size, 1)
 
-            
-        return direction, choice
+        action = torch.cat((direction, choice), dim=-1)
+
+        return action.to(device=DEVICE)
 
 
-    def optimize_Q(self, obs, step, actions, next_obs, next_step, rewards, dones):
-        """ Do one optimization step
+    def optimize_Q(self, obs, last_steps, actions, next_obs, next_steps, rewards, dones):
+        """ Do one Q function optimization step
         
         """
         # compute targets
-        direction_dist, choice_dist = self.select_action(next_obs, next_step)
-        next_direction = direction_dist.rsample()
-        next_choice = choice_dist.rsample()
-        log_prob = direction_dist.log_prob(next_direction).sum(-1, keepdim=True) + choice_dist.log_prob(next_choice)
+        # sample next actions from the current policy
+        next_action = self.select_action(next_obs, next_steps)
+        next_direction = next_action[...,:3]
+        next_choice = next_action[...,3].to(dtype=torch.int)
 
-        action = torch.cat((next_direction, next_choice), dim=-1)
-        Q1_target_vals = self.Q1_target(next_obs, next_step, action)
-        Q2_target_vals = self.Q2_target(next_obs, next_step, action)
-        targets = rewards + self.gamma * torch.logical_not(dones) * (torch.minimum(Q1_target_vals, Q2_target_vals) - self.entropy_coeff * log_prob)
+        # get log-probs of next actions
+        direction_dist, choice_dist = self.actor(next_obs, next_steps)
+        log_prob = direction_dist.log_prob(next_direction) + torch.log(choice_dist[range(len(next_choice)),next_choice]) #choice_dist.log_prob(next_choice)
+        log_prob = log_prob.detach()
 
-        Q1_vals = self.Q1(obs, step, action)
-        Q2_vals = self.Q2(obs, step, action)
+        # get target q-values
+        Q1_target_vals_vec = self.Q1_target(next_obs, next_steps, next_direction) # vector of q-values for each choice
+        Q2_target_vals_vec = self.Q2_target(next_obs, next_steps, next_direction)
+        Q1_target_vals = Q1_target_vals_vec[range(len(next_choice)),next_choice]
+        Q2_target_vals = Q2_target_vals_vec[range(len(next_choice)),next_choice]
+        targets = rewards.squeeze() + self.gamma * torch.logical_not(dones.squeeze()) * (torch.minimum(Q1_target_vals, Q2_target_vals) - self.entropy_coeff * log_prob)
+        targets = targets.detach()
 
-        criterion = nn.MSELoss()
-
-        Q1_loss = criterion(Q1_vals, targets)
-        Q2_loss = criterion(Q2_vals, targets)
-
+        # compute q-values to compare against targets
+        Q1_vals_vec = self.Q1(obs, last_steps, actions[:,:3])
+        Q1_vals = Q1_vals_vec[range(len(actions)), actions[:,3].to(dtype=torch.int)]
+        Q1_loss = self.criterion(Q1_vals, targets)
         self.Q1_optimizer.zero_grad()
-        self.Q2_optimizer.zero_grad()
-
         Q1_loss.backward()
-        Q2_loss.backward()
-
-        # In-place gradient clipping
         torch.nn.utils.clip_grad_norm_(self.Q1.parameters(), 1)
-        torch.nn.utils.clip_grad_norm_(self.Q2.parameters(), 1)
-
         self.Q1_optimizer.step()
-        self.Q2_optimizer.step()
+
+        Q2_vals_vec = self.Q2(obs, last_steps, actions[:,:3])
+        Q2_vals = Q2_vals_vec[range(len(actions)), actions[:,3].to(dtype=torch.int)]
+        Q2_loss = self.criterion(Q2_vals, targets)
+        self.Q2_optimizer.zero_grad()
+        Q2_loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.Q2.parameters(), 1)
+        self.Q2_optimizer.step()        
 
         return
     
-    def optimize_policy(self, obs, step):
 
-        direction_dist, choice_dist = self.select_action(obs, step)
-        direction = direction_dist.rsample()
-        choice = choice_dist.rsample()
-        action = torch.cat((direction, choice), dim=-1)
-        log_prob = direction_dist.log_prob(direction).sum(-1, keepdim=True) + choice_dist.log_prob(choice)
+    def optimize_policy(self, obs, last_steps):
+        """ Do one policy function optimization step. """
+        # sample actions from policy
+        action = self.select_action(obs, last_steps)
+        direction = action[...,:3]
+        choice = action[...,3].to(dtype=torch.int)
 
-        Q1_vals = self.Q1(obs, step, action)
-        Q2_vals = self.Q1(obs, step, action)
+        # get log-probs of actions
+        direction_dist, choice_dist = self.actor(obs, last_steps)
+        log_prob = direction_dist.log_prob(direction) + torch.log(choice_dist[range(len(choice)),choice]) # choice_dist.log_prob(choice)
 
-        Q_min = torch.minimum(Q1_vals,Q2_vals)
+        # get expected Q-vals
+        Q1_vals_vec = self.Q1(obs, last_steps, direction)
+        Q2_vals_vec = self.Q1(obs, last_steps, direction)
+        expected_Q1 = torch.einsum('ij,ij->i', Q1_vals_vec, choice_dist)
+        expected_Q2 = torch.einsum('ij,ij->i', Q2_vals_vec, choice_dist)
+        Q_min = torch.minimum(expected_Q1,expected_Q2)
 
-        loss = (self.entropy_coeff.detach() * log_prob - Q_min).mean()
+        # entropy regularized Q values
+        loss = (self.entropy_coeff * log_prob - Q_min).mean() # The loss function is multiplied by -1 to do gradient ascent instead of decent.
 
         self.actor_optimizer.zero_grad()
         loss.backward()
+
+        torch.nn.utils.clip_grad_norm_(self.actor.parameters(), 1)
+
         self.actor_optimizer.step()
 
-        return
+        return loss.cpu()
     
 
-    def train(self, env, episodes=100, batch_size=128, gamma=0.99, tau=0.001, alpha=0.001, eps_start=0.9, eps_end=0.01,
-              eps_decay=1000, save_snapshots=True, output='./outputs', name='config0', show=False):
+    def train(self,
+              env,
+              episodes=100,
+              batch_size=100,
+              update_after=1000,
+              update_every=50,
+              tau=0.995,
+              save_snapshots=True,
+              output='./outputs',
+              name='config0',
+              show=False):
 
         steps_done = 0
         episode_durations = []
         episode_returns = []
         losses = []
         grad_norms = []
-        lr_vals = []
-        eps = []
+        # lr_vals = []
         mae = []
         bending_energy = []
         friction = []
         n_paths = []
-        if not os.path.exists(output):
-            os.makedirs(output)
+
+        if not os.path.exists(os.path.join(output, name)):
+            os.makedirs(os.path.join(output, name))
+        output = os.path.join(output, name)
+
         # Train the Network
         for i in tqdm(range(episodes)):
             env.reset()
-            state = env.get_state()
-            state = (state[0].to(dtype=torch.float32, device=DEVICE),\
-                     state[1].to(dtype=torch.float32, device=DEVICE))
+            obs, last_step = env.get_state()
             ep_return = 0
             for t in count():
-                action = self.select_action(state, steps_done, eps_start, eps_end, eps_decay) # returns an index for action_space
+                action = self.select_action(obs, last_step, steps_done, sample=True)[0] # shape (4)
                 steps_done += 1
                 # take step, get observation and reward, and move index to next streamline
                 observation, reward, terminated = env.step(action)
-                ep_return += reward
+                ep_return += reward.detach().cpu()
 
-                next_state = observation
-                next_state = (next_state[0].to(dtype=torch.float32, device=DEVICE),\
-                                next_state[1].to(dtype=torch.float32, device=DEVICE))
-
-                # TODO: change for testing, 6/18
-                # if terminated: # episode terminated
-                #     next_state = None
-                # else:
-                #     next_state = observation # if the streamline terminated then observation is None
-                #     if next_state is not None:
-                #         next_state = (next_state[0].to(dtype=torch.float32, device=DEVICE),\
-                #                       next_state[1].to(dtype=torch.float32, device=DEVICE))
-
-
+                next_obs, next_step = observation
                 # Store the transition in memory
-                self.memory.push(state, action, next_state, reward)
+                self.memory.push(obs.detach().cpu(), last_step.detach().cpu(), action.detach().cpu(), next_obs.detach().cpu(), next_step.detach().cpu(), reward.detach().cpu(), terminated)
+                
+                # Perform updates once there is sufficient transitions saved.
+                if steps_done >= update_after:
+                    if steps_done % update_every == 0:
+                        obs, last_steps, actions, next_obs, next_steps, rewards, dones = self.memory.sample(batch_size, replacement=True)
 
-                # Perform one step of the optimization (on the policy network)
-                loss = self.optimize_model(batch_size, gamma)
-                if loss:
-                    if steps_done%50 == 0:
-                        losses.append(loss)
-                        
-                        total_norm = 0
-                        for p in self.policy_net.parameters():
-                            param_norm = p.grad.data.norm(2)
-                            total_norm += param_norm.item() ** 2
-                        total_norm = total_norm ** (1. / 2)
-                        grad_norms.append(total_norm)
+                        # Perform one step of the optimization on the Q networks.
+                        self.optimize_Q(obs, last_steps, actions, next_obs, next_steps, rewards, dones)
+                        # Soft update of the target network's weights
+                        # θ′ ← τ θ + (1 −τ )θ′
+                        for Q,Q_target in zip([self.Q1, self.Q2], [self.Q1_target, self.Q2_target]):
+                            Q_state_dict = Q.state_dict()
+                            Q_target_state_dict = Q_target.state_dict()
+                            for key in Q_state_dict:
+                                Q_target_state_dict[key] = Q_state_dict[key]*tau + Q_target_state_dict[key]*(1-tau)
+                            Q_target.load_state_dict(Q_target_state_dict)
 
-                # Soft update of the target network's weights
-                # θ′ ← τ θ + (1 −τ )θ′
-                target_net_state_dict = self.target_net.state_dict()
-                policy_net_state_dict = self.policy_net.state_dict()
-                for key in policy_net_state_dict:
-                    target_net_state_dict[key] = policy_net_state_dict[key]*tau + target_net_state_dict[key]*(1-tau)
-                self.target_net.load_state_dict(target_net_state_dict)
+                        # Perform one step of optimization on the policy network
+                        loss = self.optimize_policy(obs, last_steps)
+
+                        # record policy function loss
+                        if loss:
+                            losses.append(loss)
+                            total_norm = 0
+                            for p in self.actor.parameters():
+                                param_norm = p.grad.norm(2) # type: ignore
+                                total_norm = total_norm + param_norm.detach().item() ** 2
+                            total_norm = total_norm ** (1. / 2)
+                            grad_norms.append(total_norm)
 
                 if terminated:
                     episode_durations.append(t + 1)
@@ -451,7 +485,8 @@ class SACModel():
                     n_paths.append(len(env.finished_paths))
                     # save global matching error
                     # mae.append(torch.mean(torch.abs(env.bundle_density.data - env.true_density.data)))
-                    mae.append(torch.mean(torch.abs(env.img.data[3] - env.true_density.data)))
+                    mae_ = torch.mean(torch.abs(env.img.data[3] - env.true_density.data)).cpu()
+                    mae.append(mae_)
                     # save global bending energy
                     friction.append(torch.sum(torch.tensor([len(path) for path in env.finished_paths])))
                     bending_energy_ = []
@@ -474,7 +509,9 @@ class SACModel():
                             torch.save(img_out, os.path.join(output, f'bundle_density_ep{i%6}.pt'))
                             if env.branching:
                                 torch.save(env.img.data[4].detach().clone(), os.path.join(output, f'bifurcations_ep{i%6}.pt'))
-                            torch.save(target_net_state_dict, os.path.join(output, f'model_state_dict_{name}.pt'))
+                            torch.save(self.actor.state_dict(), os.path.join(output, f'policy_state_dict_{name}.pt'))
+                            torch.save(self.Q1_target.state_dict(), os.path.join(output, f'Q1_state_dict_{name}.pt'))
+                            torch.save(self.Q2_target.state_dict(), os.path.join(output, f'Q2_state_dict_{name}.pt'))
                             torch.save(episode_durations, os.path.join(output, f'episode_durations_{name}.pt'))
                             torch.save(episode_returns, os.path.join(output, f'episode_returns_{name}.pt'))
                             torch.save(mae, os.path.join(output, f'matching_error_{name}.pt'))
@@ -484,20 +521,16 @@ class SACModel():
 
                             torch.save(losses, os.path.join(output, f'loss_{name}.pt'))
                             torch.save(grad_norms, os.path.join(output, f'grad_norms_{name}.pt'))
-                            torch.save(lr_vals, os.path.join(output, f'lr_{name}.pt'))
-                            eps.append(eps_end + (eps_start - eps_end) * math.exp(-1. * steps_done / eps_decay))
-                            torch.save(eps, os.path.join(output, f'eps_{name}.pt'))
+                            # torch.save(lr_vals, os.path.join(output, f'lr_{name}.pt'))
                     break
 
                 # if not terminated, move to the next state
-                state = env.get_state() # the head of the next streamline
-                state = (state[0].to(dtype=torch.float32, device=DEVICE),\
-                        state[1].to(dtype=torch.float32, device=DEVICE))
+                obs, last_step = env.get_state() # the head of the next streamline
                 
-            if len(self.memory) > batch_size:
-                self.lrscheduler.step()
-                lr = self.lrscheduler.get_last_lr()
-                lr_vals.append(lr)
+            # if len(self.memory) > batch_size:
+            #     self.lrscheduler.step()
+            #     lr = self.lrscheduler.get_last_lr()
+            #     lr_vals.append(lr)
 
         print('Complete')
         if show:
@@ -510,16 +543,18 @@ class SACModel():
     def inference(self, env, out=None):
 
             env.reset()
-            state = env.get_state()
-            state = (state[0].to(dtype=torch.float32, device=DEVICE),\
-                     state[1].to(dtype=torch.float32, device=DEVICE))
+
+            obs, last_step = env.get_state()
+            obs = obs.to(dtype=torch.float32, device=DEVICE)
+            last_step = last_step.to(dtype=torch.float32, device=DEVICE)
+
             ep_return = 0
             i = 0
             plt.ioff()
             
             while True:
                 # get action
-                action = self.select_action(state, greedy=True)
+                action = self.select_action(obs, last_step, sample=False)
 
                 # take step, get observation and reward, and move index to next streamline
                 observation, reward, terminated = env.step(action) 
@@ -531,9 +566,9 @@ class SACModel():
 
                 else:
                     # if not terminated, move to the next state
-                    state = env.get_state() # the head of the next streamline
-                    state = (state[0].to(dtype=torch.float32, device=DEVICE),\
-                            state[1].to(dtype=torch.float32, device=DEVICE))
+                    obs, last_step = env.get_state()
+                    obs = obs.to(dtype=torch.float32, device=DEVICE)
+                    last_step = last_step.to(dtype=torch.float32, device=DEVICE)
                     if out is not None and i%10 == 0:
                         plt.figure(0)
                         plt.imshow(env.img.data[-1].amax(dim=0), cmap='hot', alpha=0.5)#, int(paths[env.head_id][-1, 0])])

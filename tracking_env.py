@@ -10,10 +10,6 @@ Author: Bryson Gray
 import os
 import numpy as np
 import torch
-import scipy
-from skimage.draw import line_nd
-from skimage.filters import gaussian
-from skimage.morphology import dilation, cube
 from image import Image, make_line_segment
 
 
@@ -401,9 +397,9 @@ class Environment():
         self.head_id = 0
         self.finished_paths = []
 
-        # reset bundle density
-        self.bundle_density = torch.zeros_like(self.true_density.data)
-        self.bundle_density = Image(self.bundle_density)
+        # # reset bundle density
+        # self.bundle_density = torch.zeros_like(self.true_density.data)
+        # self.bundle_density = Image(self.bundle_density)
         if self.branching:
             self.img.data = torch.cat((self.img.data, torch.zeros((2,)+self.img.data.shape[1:])), dim=0) # add 2 channels for path, and bifurcation points.
         else:

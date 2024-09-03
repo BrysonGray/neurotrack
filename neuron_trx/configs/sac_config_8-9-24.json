@@ -1,0 +1,15 @@
+{
+    "img_dir": "/home/brysongray/tractography/neuron_trx/training_data/straight_line/",
+    "outdir": "./outputs",
+    "name": "sac_test_8-22-24",
+    "seeds": [[50,50,50]],
+    "n_seeds": 1,
+    "step_size": 2.0,
+    "step_width": 3.0,
+    "tau": 0.995,
+    "lr": 0.0002,
+    "alpha": 10.0,
+    "beta": 0.0,
+    "friction": 0.0,
+    "num_episodes": 1500
+}

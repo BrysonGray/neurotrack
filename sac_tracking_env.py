@@ -18,28 +18,29 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 torch.manual_seed(0)
 
 def binary_matching_error(new_patch, old_patch, true_patch, step_width=1.0):
-    # Calculate the precision of the new estimate: TP/(TP+FP), where TP and FP are true positive
+    # Calculate the precision of the new estimate: TP/(TP+FP), where TP and FP are true positive and false positive
     # pixels and false positive pixels. I want to make it possible to give a penalty for self-overlap. Ordinarily it will be considered FP.
 
     # binarize patches
     new_patch = new_patch > 0.0
     old_patch = old_patch > 0.0
     true_patch = true_patch > 0.0
-    # get the new segment minus its intersection with old_patch
+    # get the intersection with old_patch
     new_and_old = torch.logical_and(new_patch, old_patch)
+    # get the new segment minus its intersection with old_patch
     new_and_not_old = torch.logical_and(new_patch, ~new_and_old)
 
-    # get the intersection with old_patch
     # First find TP. This is the sum of the intersection between true_density and new_density.
     TP = torch.sum(torch.logical_and(true_patch, new_and_not_old))
 
     # since the new segment begins at the endpoint of the last segment, there is always some overlap.
     # The minimum overlap is equal to the side length of the path cross-section cubed. So I will subtract it from the total and the intersection.
-    correction = step_width**3 # TODO: this is not the true minimum, diagonal steps overlap less.
+    #correction = step_width**3 # TODO: this is not the true minimum, diagonal steps overlap less.
     
-    tot = torch.sum(new_patch) - correction
+    tot = torch.sum(new_patch) #- correction
     precision = (TP / tot) # precision = TP/(TP + FP)
-    self_overlap = (torch.sum(new_and_old) - correction) / tot # fraction of positives that were already labeled positive.
+    # self_overlap = (torch.sum(new_and_old) - correction) / tot # fraction of positives that were already labeled positive.
+    self_overlap = (torch.sum(new_and_old)) / tot # fraction of positives that were already labeled positive.
 
     return precision, self_overlap
 
@@ -213,7 +214,7 @@ class Environment():
         return patch[None], last_step[None]
 
 
-    def get_reward(self, matching_precision=None, self_overlap=None, bifurcate=False, terminate=False, verbose=False, sigmaf=1.0, sigmab=0.4):
+    def get_reward(self, matching_precision=None, self_overlap=None, bifurcate=False, terminate=False, verbose=False, sigmaf=10.0, sigmab=0.4):
         """ Get the reward for the current state. The reward depends on the streamline smoothness and
         the change in distance between the streamline density and true denisty maps.
 
@@ -255,9 +256,11 @@ class Environment():
             q = self.paths[self.head_id][-1]
             q_ = self.paths[self.head_id][-2]
             q__ = self.paths[self.head_id][-3]
-            P = - torch.sum((q - q_)**2)/(2*sigmaf**2) - torch.sum((q - 2*q_ + q__)**2) / (2*sigmab**2) #- 1.0 # prior likelihood
-            P_norm = self.step_size**2 / (2*sigmaf**2) + (2*self.step_size)**2 / (2*sigmab**2)
-            P = P/P_norm
+            P = 0.0
+            if len(self.paths[self.head_id]) > 3: # ignore the prior for the first step.
+                P = - torch.sum((q - q_)**2)/(2*sigmaf**2) - torch.sum((q - 2*q_ + q__)**2) / (2*sigmab**2) #- 1.0 # prior likelihood
+                # P_norm = self.step_size**2 / (2*sigmaf**2) + (2*self.step_size)**2 / (2*sigmab**2)
+                # P = P/P_norm
             # reward = self.alpha*(M - self_overlap) + self.beta*P # TODO: self_overlap needs to be corrected.
             reward = self.alpha*M + self.beta*P
             if verbose:
@@ -299,7 +302,7 @@ class Environment():
         choice = action[...,3]
         # check if the agent chose to mark the position as a bifurcation point
         # Add the last segment (last two points) from the current path to a new path in the paths list
-        if choice == 1: # branch
+        if choice == 2: # branch
             if len(self.paths) + len(self.finished_paths) == max_paths: # too many branches
                 terminated = True
                 observation = self.get_state(terminate=True)
@@ -315,14 +318,14 @@ class Environment():
                 # don't move to the new path head until after taking a step on the current path
             
         # check if the action is terminate path
-        elif choice == 2:
+        elif choice == 1:
             terminate_path = True
             observation = self.get_state(terminate=True)
             # TODO: try different rewards
             reward = torch.tensor([0.0], device=DEVICE, dtype=torch.float32)
             
         else: # decide if path terminates accidentally
-            new_position = self.paths[self.head_id][-1] + self.step_size*direction
+            new_position = self.paths[self.head_id][-1] + direction
 
             out_of_bound = any([x >= y or x < 0 for x,y in zip(torch.round(new_position), self.img.data.shape[1:])])
             if out_of_bound:

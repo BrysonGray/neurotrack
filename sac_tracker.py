@@ -12,16 +12,20 @@ Author: Bryson Gray
 2024
 """
 
+import matplotlib
+import matplotlib.pyplot as plt
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
+from torch.utils.tensorboard.writer import SummaryWriter
+
 import os
-import matplotlib
-import matplotlib.pyplot as plt
 from itertools import count
 from tqdm import tqdm
-from torch.utils.tensorboard.writer import SummaryWriter
+
+from replay_memory import ReplayMemory
+
 is_ipython = 'inline' in matplotlib.get_backend()
 if is_ipython:
     from IPython import display
@@ -86,55 +90,9 @@ def plot_returns(episode_returns, show_result=False):
             # display.display(plt.gcf())
             display.display(plt.figure(), display_id=2)
 
-    
-class ReplayMemory():
-    def __init__(self, capacity, obs_shape, action_shape):
 
-        self.obs = torch.empty((capacity, *obs_shape), dtype=torch.float32, device='cpu')
-        self.last_steps = torch.empty((capacity, 3), dtype=torch.float32, device='cpu')
-        self.actions = torch.empty((capacity, *action_shape), dtype=torch.float32, device='cpu')
-        self.next_obs = torch.empty((capacity, *obs_shape), dtype=torch.float32, device='cpu')
-        self.next_steps = torch.empty((capacity, 3), device='cpu')
-        self.rewards = torch.empty((capacity, 1), dtype=torch.float32, device='cpu')
-        self.dones = torch.empty((capacity, 1), dtype=torch.bool, device='cpu')
-
-        self.idx = 0
-        self.full = False
-        self.capacity = capacity
-    
-    def push(self, obs, last_step, action, next_obs, next_step, reward, done):
-        """Save a transition to replay memory"""
-        self.obs[self.idx] = obs
-        self.last_steps[self.idx] = last_step
-        self.actions[self.idx] = action
-        self.next_obs[self.idx] = next_obs
-        self.next_steps[self.idx] = next_step
-        self.rewards[self.idx] = reward
-        self.dones[self.idx] = done
-
-        self.idx = (self.idx + 1) % self.capacity
-        self.full = self.idx == 0 or self.full
-    
-    def sample(self, batch_size, replacement=True):
-        sample_range = self.capacity if self.full else self.idx
-        if replacement:
-            idxs = torch.randint(sample_range, size=(batch_size,))
-        else:
-            perm = torch.randperm(sample_range)
-            idxs = perm[:batch_size]
-
-        obs = self.obs[idxs].to(device=DEVICE)
-        last_steps = self.last_steps[idxs].to(device=DEVICE)
-        actions = self.actions[idxs].to(device=DEVICE)
-        next_obs = self.next_obs[idxs].to(device=DEVICE)
-        next_steps = self.next_steps[idxs].to(device=DEVICE)
-        rewards = self.rewards[idxs].to(device=DEVICE)
-        dones = self.dones[idxs].to(device=DEVICE)
-
-        return obs, last_steps, actions, next_obs, next_steps, rewards, dones
-    
-    def __len__(self):
-        return self.capacity if self.full else self.idx
+def shape_out(input_size, kernel_size, stride):
+    return ((input_size - kernel_size)/stride + 1)//1
 
 
 class Critic(nn.Module):
@@ -155,27 +113,22 @@ class Critic(nn.Module):
         Channel size multiplier.
     """
 
-    def __init__(self, in_channels, input_size, n=1):
+    def __init__(self, in_channels, input_size, n_filters=16):
         super().__init__()
         
         # calculate the size of the convolution output for input to Linear
-        shape_out = lambda x, k, s: ((x - k)/s + 1)//1
-        c1 = 16
-        k1 = 3
-        s1=2
-        c2 = 32
-        k2 = 3
-        s2=2
+        c1, k1, s1 = (n_filters, 3, 2)
+        c2, k2, s2 = (n_filters*2, 3, 2)
         h = shape_out(input_size, k1, s1) # first conv
         h = shape_out(h, k2, s2) # second conv
-        n_features = int(c2*n * h**3)
+        n_features = int(c2 * h**3)
 
         # convolution layers
         # 3 channels added to in_channels for components of previous step direction and 3 more for the action (chosen direction)
-        self.conv1 = nn.Conv3d(in_channels + 6, c1*n, k1, stride=s1)
-        self.norm1 = nn.BatchNorm3d(c1*n)
-        self.conv2 = nn.Conv3d(c1*n, c2*n, k2, stride=s2)
-        self.norm2 = nn.BatchNorm3d(c2*n)
+        self.conv1 = nn.Conv3d(in_channels + 6, c1, k1, stride=s1)
+        self.norm1 = nn.BatchNorm3d(c1)
+        self.conv2 = nn.Conv3d(c1, c2, k2, stride=s2)
+        self.norm2 = nn.BatchNorm3d(c2)
 
         # fully connected layers
         self.fc1 = nn.Linear(n_features, 256)
@@ -229,26 +182,21 @@ class Actor(nn.Module):
     n : int
         Channel size multiplier.
     """
-    def __init__(self, in_channels, input_size, n=1):
+    def __init__(self, in_channels, input_size, n_filters=16):
         super().__init__()
 
         # calculate the size of the convolution output for input to Linear
-        shape_out = lambda x, k, s: ((x - k)/s + 1)//1
-        c1 = 16
-        k1 = 3
-        s1=2
-        c2 = 32
-        k2 = 3
-        s2=2
+        c1, k1, s1 = (n_filters, 3, 2)
+        c2, k2, s2 = (n_filters*2, 3, 2)
         h = shape_out(input_size, k1, s1) # first conv
         h = shape_out(h, k2, s2) # second conv
-        n_features = int(c2*n * h**3)
+        n_features = int(c2 * h**3)
 
         # convolution layers
-        self.conv1 = nn.Conv3d(in_channels + 3, c1*n, k1, stride=s1) # 3 channels added to in_channels for components of previous step direction
-        self.norm1 = nn.BatchNorm3d(c1*n)
-        self.conv2 = nn.Conv3d(c1*n, c2*n, k2, stride=s2)
-        self.norm2 = nn.BatchNorm3d(c2*n)
+        self.conv1 = nn.Conv3d(in_channels + 3, c1, k1, stride=s1) # 3 channels added to in_channels for components of previous step direction
+        self.norm1 = nn.BatchNorm3d(c1)
+        self.conv2 = nn.Conv3d(c1, c2, k2, stride=s2)
+        self.norm2 = nn.BatchNorm3d(c2)
 
         # fully connected layers
         self.fc1 = nn.Linear(n_features, 256)
@@ -275,7 +223,8 @@ class Actor(nn.Module):
         x = F.relu(self.fc2(x))
         x = self.fc3(x)
         
-        mu, log_std2, choice = torch.split(x, [3,3,3], dim=1) # the step direction will be mu / ||mu||
+        mu, log_std2, choice = torch.split(x, [3,3,3], dim=1)
+        mu = torch.tanh(mu) # put a boundary on the length of a step.
         log_std2 = torch.tanh(log_std2) * 3
         std2 = torch.exp(log_std2)
         cov = torch.stack([torch.diagflat(s) for s in std2])
@@ -288,13 +237,20 @@ class Actor(nn.Module):
 
 
 class SACModel():
-    def __init__(self, in_channels, input_size, start_steps=10000, lr=0.001, gamma=0.99, entropy_coeff=0.2):
+    def __init__(self,
+                 in_channels,
+                 input_size,
+                 start_steps=10000,
+                 lr=0.001,
+                 gamma=0.99,
+                 entropy_coeff=0.2,
+                 n_filters=16):
     
-        self.actor = Actor(in_channels, input_size).to(DEVICE)
-        self.Q1 = Critic(in_channels, input_size).to(DEVICE)
-        self.Q2 = Critic(in_channels, input_size).to(DEVICE)
-        self.Q1_target = Critic(in_channels, input_size).to(DEVICE)
-        self.Q2_target = Critic(in_channels, input_size).to(DEVICE)
+        self.actor = Actor(in_channels, input_size, n_filters).to(DEVICE)
+        self.Q1 = Critic(in_channels, input_size, n_filters).to(DEVICE)
+        self.Q2 = Critic(in_channels, input_size, n_filters).to(DEVICE)
+        self.Q1_target = Critic(in_channels, input_size, n_filters).to(DEVICE)
+        self.Q2_target = Critic(in_channels, input_size, n_filters).to(DEVICE)
         # initialize the Q1 and Q2 target networks with the same params as Q1 and Q2
         self.Q1_target.load_state_dict(self.Q1.state_dict())
         self.Q2_target.load_state_dict(self.Q2.state_dict())
@@ -342,7 +298,9 @@ class SACModel():
                 direction = direction_dist.mean
                 # direction = direction / (torch.linalg.norm(direction, dim=1)[:,None] + torch.finfo(torch.float).eps)
                 choice = torch.argmax(choice_dist, dim=1)[:,None] # (batch_size, 1)
-
+        
+        # TODO: Test no branching or terminate action
+        choice = torch.zeros((batch_size,1), device=direction.device)
         action = torch.cat((direction, choice), dim=-1)
 
         return action.to(device=DEVICE)
@@ -360,9 +318,10 @@ class SACModel():
 
         # get log-probs of next actions
         direction_dist, choice_dist = self.actor(next_obs, next_steps)
-        choice_log_prob = torch.log(choice_dist[range(len(next_choice)),next_choice])
-        choice_log_prob = torch.where(choice_log_prob.isinf(), 0.0, choice_log_prob)
-        log_prob = direction_dist.log_prob(next_direction) + choice_log_prob
+        # TODO: Test no branching or terminate action
+        # choice_log_prob = torch.log(choice_dist[range(len(next_choice)),next_choice])
+        # choice_log_prob = torch.where(choice_log_prob.isinf(), 0.0, choice_log_prob)
+        log_prob = direction_dist.log_prob(next_direction) #+ choice_log_prob
         log_prob = log_prob.detach()
 
         # get target q-values
@@ -379,7 +338,7 @@ class SACModel():
         Q1_loss = self.criterion(Q1_vals, targets)
         self.Q1_optimizer.zero_grad()
         Q1_loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.Q1.parameters(), 1)
+        # torch.nn.utils.clip_grad_norm_(self.Q1.parameters(), 1)
         self.Q1_optimizer.step()
 
         Q2_vals_vec = self.Q2(obs, last_steps, actions[:,:3])
@@ -387,7 +346,7 @@ class SACModel():
         Q2_loss = self.criterion(Q2_vals, targets)
         self.Q2_optimizer.zero_grad()
         Q2_loss.backward()
-        torch.nn.utils.clip_grad_norm_(self.Q2.parameters(), 1)
+        # torch.nn.utils.clip_grad_norm_(self.Q2.parameters(), 1)
         self.Q2_optimizer.step()        
 
         return
@@ -402,15 +361,19 @@ class SACModel():
 
         # get log-probs of actions
         direction_dist, choice_dist = self.actor(obs, last_steps)
-        choice_log_prob = torch.log(choice_dist[range(len(choice)), choice])
-        choice_log_prob = torch.where(choice_log_prob.isinf(), 0.0, choice_log_prob)
-        log_prob = direction_dist.log_prob(direction) + choice_log_prob
+        # TODO: Test no branching or terminate action
+        # choice_log_prob = torch.log(choice_dist[range(len(choice)), choice])
+        # choice_log_prob = torch.where(choice_log_prob.isinf(), 0.0, choice_log_prob)
+        log_prob = direction_dist.log_prob(direction) #+ choice_log_prob
 
         # get expected Q-vals
         Q1_vals_vec = self.Q1(obs, last_steps, direction)
-        Q2_vals_vec = self.Q1(obs, last_steps, direction)
-        expected_Q1 = torch.einsum('ij,ij->i', Q1_vals_vec, choice_dist)
-        expected_Q2 = torch.einsum('ij,ij->i', Q2_vals_vec, choice_dist)
+        Q2_vals_vec = self.Q2(obs, last_steps, direction)
+        # TODO: Test no branching or terminate action
+        # expected_Q1 = torch.einsum('ij,ij->i', Q1_vals_vec, choice_dist)
+        # expected_Q2 = torch.einsum('ij,ij->i', Q2_vals_vec, choice_dist)
+        expected_Q1 = Q1_vals_vec[:,0]
+        expected_Q2 = Q2_vals_vec[:,0]
         Q_min = torch.minimum(expected_Q1,expected_Q2)
 
         # entropy regularized Q values
@@ -438,13 +401,11 @@ class SACModel():
               name='config0',
               show=False):
 
-        global steps_done
         steps_done = 0
-        global num_updates
         num_updates = 0
-        episode_durations = []
+        gr_max = 0
         episode_returns = []
-        returns_avg = [0.0]*99 # running average starts on episode 100
+        # episode_durations = []
         # losses = []
         # grad_norms = []
         # lr_vals = []
@@ -465,7 +426,7 @@ class SACModel():
             obs, last_step = env.get_state()
             ep_return = 0
             for t in count():
-                action = self.select_action(obs, last_step, steps_done, sample=True)[0] # shape (4)
+                action = self.select_action(obs, last_step, steps_done, sample=True)[0] # get 0th axis to remove batch dim
                 steps_done += 1
                 # take step, get observation and reward, and move index to next streamline
                 observation, reward, terminated = env.step(action)
@@ -516,9 +477,6 @@ class SACModel():
                 if terminated:
                     # episode_durations.append(t + 1)
                     episode_returns.append(ep_return)
-                    if len(episode_returns) >= 100:
-                        mean = torch.tensor(episode_returns)[-100:].mean().item()
-                        returns_avg.append(mean)
                     # n_paths.append(len(env.finished_paths))
                     # save global recall (TP / (TP + FN))
                     true_neuron = env.true_density.data > 0.0
@@ -526,9 +484,11 @@ class SACModel():
                     TP = torch.logical_and(true_neuron, labeled_neuron)
                     tot = true_neuron.sum() # (TP + FN)
                     gr = torch.sum(TP/tot)
+                    if gr > gr_max:
+                        gr_max = gr
                     writer.add_scalar("num steps", t+1, steps_done)
                     writer.add_scalar("returns", ep_return, steps_done)
-                    writer.add_scalar("returns", returns_avg[i], steps_done)
+                    # writer.add_scalar("returns", returns_avg[i], steps_done)
                     writer.add_scalar("num paths", len(env.finished_paths), steps_done)
                     writer.add_scalar("global recall", gr, steps_done)
                     # global_recall.append(gr)
@@ -548,12 +508,12 @@ class SACModel():
                     # bending_energy.append(torch.sum(torch.tensor(bending_energy_)))
                     writer.add_scalar("bending energy", torch.sum(torch.tensor(bending_energy_)), steps_done)
                     
-                    if show:
-                        plot_durations(episode_durations)
-                        plot_returns(episode_returns)
+                    # if show:
+                    #     plot_durations(episode_durations)
+                    #     plot_returns(episode_returns)
 
                     # if the average return increases, save the model dicts
-                    if (returns_avg[-1] - returns_avg[-2]) > 0.0:
+                    if gr == gr_max:
                         model_dicts = {"policy_state_dict": self.actor.state_dict(),
                                         "Q1_state_dict": self.Q1_target.state_dict(),
                                         "Q2_state_dict": self.Q2_target.state_dict(),}
@@ -561,15 +521,15 @@ class SACModel():
 
                     if i % 10 == 0:
                         fig, ax = plt.subplots(1,3, figsize=[p*2 for p in plt.rcParams["figure.figsize"]])
-                        img = env.img.data[:3].permute(1,2,3,0).cpu()
                         path = env.img.data[3].cpu()
-                        ax[0].imshow(img.amax(dim=0))
-                        ax[0].imshow(path.amax(dim=0), cmap='plasma', alpha=0.5)
-                        ax[1].imshow(img.amax(dim=1))
-                        ax[1].imshow(path.amax(dim=1), cmap='plasma', alpha=0.5)
-                        ax[2].imshow(img.amax(dim=2))
-                        ax[2].imshow(path.amax(dim=2), cmap='plasma', alpha=0.5)
-                        fig.suptitle(f"Return: {ep_return.item():.4f}, Length: {t+1}, Recall: {gr:.4f}, N-Paths: {len(env.finished_paths)}")
+                        mask = env.mask.data[0].cpu()
+                        true_density = env.true_density.data[0].cpu()
+                        toshow = torch.stack([path,true_density,mask], dim=-1)
+                        ax[0].imshow(toshow.amax(0))
+                        ax[1].imshow(toshow.amax(1))
+                        ax[2].imshow(toshow.amax(2))
+                        fig.suptitle(f"Return: {ep_return.item():.4f}, Length: {t+1},\n\
+                                       Recall: {gr:.4f}, N-Paths: {len(env.finished_paths)}")
                         writer.add_figure("Sample Path", fig, global_step=steps_done)      
                     # if save_snapshots:
                         # if i%17 == 0:

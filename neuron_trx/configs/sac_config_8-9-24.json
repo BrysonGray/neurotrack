@@ -8,7 +8,7 @@
     "step_width": 3.0,
     "tau": 0.995,
     "lr": 0.0002,
-    "alpha": 10.0,
+    "alpha": 50.0,
     "beta": 0.0,
     "friction": 0.0,
     "num_episodes": 1500

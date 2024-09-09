@@ -169,11 +169,10 @@ if __name__ == "__main__":
     parser.add_argument('-l', '--length', type=int, default=100, required=False, help="Expected length of each neuron in number of segments.")
     parser.add_argument('-w', '--width', type=int, default=3, required=False, help="Width of a neuron in pixels.")
     parser.add_argument('-n', '--noise', type=float, default=0.05, required=False, help="Standard deviation of Gaussian random noise relative to the maximum signal value.")
-    parser.add_argument('-u', '--uniform_len', type=bool, required=False, default=False,
-                        help="Choose whether all simulated neurons have the same number of segments or a random distribution of lengths.")
+    parser.add_argument('-u', '--uniform_len', action="store_true", required=False, help="Choose whether all simulated neurons have the same number of segments or a random distribution of lengths.")
     parser.add_argument('--seed', type=int, default=0, required=False, help="Random seed used for creating random paths.")
     parser.add_argument('-k', '--kappa', type=float, default=20.0, required=False, help="Concentration parameter for step direction distribution function.")
-    parser.add_argument('-r', '--random_start', type=bool, default=True, required=False, help="Whether the starting step is random. If false, set to the +x direction")
+    parser.add_argument('-r', '--random_start', action="store_true", required=False, help="Whether the starting step is random. If false, set to the +x direction")
     args = parser.parse_args()
 
     rng = np.random.default_rng(args.seed)
@@ -182,6 +181,16 @@ if __name__ == "__main__":
         if not os.path.exists(args.out):
             os.makedirs(args.out)
         size = (args.size,)*3
+
+        print(f"size: {size}\n\
+        length: {args.length}\n\
+        step size: {args.stepsize}\n\
+        width: {args.width}\n\
+        noise: {args.noise}\n\
+        uniform_len: {args.uniform_len}\n\
+        kappa: {args.kappa}\n\
+        random_start: {args.random_start}\n")
+        
         neuron = make_neuron_img(size,
                                 length=args.length,
                                 step_size=args.stepsize,

@@ -2,10 +2,11 @@
 
 """ Interface for interactively evaluating the tracking environment """
 
-import torch
-import matplotlib.pyplot as plt
 from IPython import display
 from image import Image
+import matplotlib.pyplot as plt
+import numpy as np
+import torch
 
 def manual_step(env, step_size=2.0):
     plt.ioff()
@@ -65,3 +66,57 @@ def manual_step(env, step_size=2.0):
         display.display(plt.gcf())
 
 
+def show_state(env, z=None, finished=False, path_id=0, t=-1):
+    
+    if finished:
+        paths = env.finished_paths
+    else:
+        paths = env.paths
+        path_id = env.head_id
+
+    state, _ = env.img.crop(paths[path_id][t], env.radius, pad=True, value=0.0)
+    state = state.detach().clone()
+    true_density_patch, _ = env.true_density.crop(paths[path_id][t], env.radius, pad=True)
+    bundle_density_patch, _ = env.bundle_density.crop(paths[path_id][t], env.radius, pad=True)
+    mask = Image(env.mask)
+    mask_patch, _ = mask.crop(paths[path_id][t], env.radius, interp=False, pad=True)
+    I = np.array(env.img.data.to('cpu'))
+    D = np.array(env.true_density.data.to('cpu'))
+    O = np.array(state.to('cpu'))
+    T = np.array(true_density_patch.to('cpu'))
+    B = np.array(bundle_density_patch.to('cpu'))
+    M = np.array(mask_patch.to('cpu'))
+    if z is not None:
+        z_ = state.shape[2]//2
+        I = I[:, z]
+        D = D[0,z]
+        O = O[:, z_]
+        T = T[0,z_]
+        B = B[0,z_]
+        M = M[0,z_]
+    else: # display a maximum intensity projection along z
+        I = I.max(axis=1)
+        D = D[0].max(axis=0)
+        O = O.max(axis=1)
+        T = T[0].max(axis=0)
+        B = B[0].max(axis=0)
+        M = M[0].max(axis=0)
+    plt.cla()
+    fig, ax = plt.subplots(1,3)
+    ax[0].imshow(I[3], cmap='hot', alpha=0.5) #, int(paths[env.head_id][-1, 0])])
+    ax[0].imshow(I[:3].transpose(1,2,0), alpha=0.5) #, int(paths[env.head_id][-1, 0])])
+    ax[0].axis('off')
+    ax[1].imshow(O[:3].transpose(1,2,0), alpha=0.75)
+    ax[1].imshow(O[3], alpha=0.25, cmap='hot') #, env.radius//2])
+    ax[1].axis('off')
+    toshow = np.stack((B, T, M), axis=-1)
+    ax[2].imshow(toshow)
+    ax[2].axis('off')
+
+    display.display(fig)
+
+def get_closest_dir(action_space, dir):
+    d = np.dot(action_space, dir[:,None])
+    idx = d.argmax()
+
+    return idx

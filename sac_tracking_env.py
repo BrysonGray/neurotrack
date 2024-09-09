@@ -128,17 +128,17 @@ class Environment():
 
     def __init__(
             self,
-            img_dir,
-            radius,
-            seeds,
-            n_seeds=1,
-            step_size=1.0,
-            step_width=1.0,
-            max_len=10000,
-            alpha=1.0,
-            beta=1e-3,
-            friction=1e-4,
-            branching=True):
+            img_dir: str,
+            radius: int,
+            seeds: list[tuple[int, int, int]],
+            n_seeds: int = 1,
+            step_size: float = 1.0,
+            step_width: float = 1.0,
+            max_len: int = 10000,
+            alpha: float = 1.0,
+            beta: float = 1e-3,
+            friction: float = 1e-4,
+            branching: bool = True):
         
         self.head_id = 0
         self.n_resets = 0 # count number of resets
@@ -147,8 +147,6 @@ class Environment():
         self.img = Image(img.to(device=DEVICE))
         self.radius = radius
         self.seeds = seeds
-        if self.seeds.ndim == 1:
-            self.seeds = self.seeds[None]
         self.mask = mask
         self.true_density = Image(true_density.to(device=DEVICE))
         # make copies of the branch and terminal points so these can be changed while saving the originals

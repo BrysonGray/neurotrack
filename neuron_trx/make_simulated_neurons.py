@@ -20,7 +20,10 @@ def get_next_point(q0: np.ndarray, q1: np.ndarray, kappa: float, step_size: floa
         rng = np.random.default_rng()
     last_step = (q1 - q0) / step_size
     vmf = scipy.stats.vonmises_fisher(last_step, kappa)
-    next_point = q1 + vmf.rvs(1, random_state=rng)[0] * step_size
+    step = vmf.rvs(1, random_state=rng)[0]
+    step[0] = 0.0
+    step = step/(np.linalg.norm(step) + np.finfo(float).eps)
+    next_point = q1 + step * step_size
 
     return next_point
 
@@ -68,7 +71,8 @@ def get_path(start, boundary, kappa=20.0, rng=None, length=100, step_size=1.0, u
 
     # first step
     if random_start:
-        step = rng.random(3)
+        step = rng.normal(0.0, 1.0, 3)
+        step[0] = 0.0
         step = step / sum(step**2)**0.5
     else:
         step = np.array([0.0,0.0,1.0])
@@ -94,19 +98,20 @@ def draw_path(img, path, width, binary):
 
     segments = torch.stack((path[:-1],path[1:]), dim=1)
     for s in segments:
-        img.draw_line_segment(s, width=width, binary=binary)
+        img.draw_line_segment(s, width=width, binary=binary, channel=0)
 
     return img
 
 
 def make_neuron_img(size: Tuple[int,...],
                     length: int,
-                    step_size: float = 2.0,
+                    step_size: float = 1.0,
                     width: float = 3.0,
                     kappa: float = 20.0,
                     noise: float = 0.05,
                     uniform_len: bool = False,
                     random_start: bool = True,
+                    binary: bool = False,
                     rng=None) -> dict:
     """ Make simulated neuron 3D image. 
 
@@ -145,14 +150,16 @@ def make_neuron_img(size: Tuple[int,...],
     path = get_path(start, boundary=boundary, kappa=kappa, rng=rng, length=length, step_size=step_size, uniform_len=uniform_len,
                     random_start=random_start)
 
-    img = draw_path(img, path, width=width, binary=False)
+    img = draw_path(img, path, width=width, binary=False, )
     img_data = torch.cat((img.data, img.data, img.data), dim=0)
     sigma = img_data.amax() * noise
     img_data = img_data + torch.randn(img_data.shape)*sigma # add noise
     img_data = (img_data - img_data.amin()) / (img_data.amax() - img_data.amin()) # rescale to [0,1]
     img = image.Image(img_data)
 
-    neuron_mask = draw_path(mask, path, width=width, binary=True)
+    neuron_mask = draw_path(mask, path, width=width, binary=binary)
+    if binary:
+        tracking_mask = neuron_mask.data[0] > np.exp(-1)
     tracking_mask = binary_dilation(neuron_mask.data[0], cube(18))
     tracking_mask = image.Image(tracking_mask[None])
 
@@ -164,7 +171,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('-o', '--out', type=str, help='Output directory.')
     parser.add_argument('-c', '--count', help="Number of images to create.", type=int, default=100, required=False)
-    parser.add_argument('-s', '--size', type=int, default=101, required=False, help="Size along each image dimension (the image is a cube).")
+    parser.add_argument('-s', '--size', type=int, default="101 101 101", nargs='+', required=False, help="Size along each image dimension (the image is a cube).")
     parser.add_argument('-t', '--stepsize', type=float, default=2.0, required=False, help="Length of each path segment in pixels.")
     parser.add_argument('-l', '--length', type=int, default=100, required=False, help="Expected length of each neuron in number of segments.")
     parser.add_argument('-w', '--width', type=int, default=3, required=False, help="Width of a neuron in pixels.")
@@ -173,24 +180,27 @@ if __name__ == "__main__":
     parser.add_argument('--seed', type=int, default=0, required=False, help="Random seed used for creating random paths.")
     parser.add_argument('-k', '--kappa', type=float, default=20.0, required=False, help="Concentration parameter for step direction distribution function.")
     parser.add_argument('-r', '--random_start', action="store_true", required=False, help="Whether the starting step is random. If false, set to the +x direction")
+    parser.add_argument('-b', '--binary', action="store_true", required=False, help="Whether the neuron label is binary or a line with Gaussian filter applied.")
     args = parser.parse_args()
 
     rng = np.random.default_rng(args.seed)
 
-    for i in tqdm(range(args.count)):
-        if not os.path.exists(args.out):
-            os.makedirs(args.out)
-        size = (args.size,)*3
+    if not os.path.exists(args.out):
+        os.makedirs(args.out)
+    # size = (args.size,)*3
+    size = tuple(args.size)
 
-        print(f"size: {size}\n\
-        length: {args.length}\n\
-        step size: {args.stepsize}\n\
-        width: {args.width}\n\
-        noise: {args.noise}\n\
-        uniform_len: {args.uniform_len}\n\
-        kappa: {args.kappa}\n\
-        random_start: {args.random_start}\n")
-        
+    print(f"size: {size}\n\
+    length: {args.length}\n\
+    step size: {args.stepsize}\n\
+    width: {args.width}\n\
+    noise: {args.noise}\n\
+    uniform_len: {args.uniform_len}\n\
+    kappa: {args.kappa}\n\
+    random_start: {args.random_start}\n\
+    binary: {args.binary}\n")
+
+    for i in tqdm(range(args.count)):    
         neuron = make_neuron_img(size,
                                 length=args.length,
                                 step_size=args.stepsize,

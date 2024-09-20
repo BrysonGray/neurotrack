@@ -11,7 +11,7 @@ import tifffile as tf
 import os
 import numpy as np
 import torch
-import utils
+from data_utils import interp
 import sys
 from neurom.io.utils import load_morphology
 sys.path.append('/home/brysongray/tractography')
@@ -34,14 +34,14 @@ def load_data(img_dir, label_file, pixelsize=[1.0,1.0,1.0], downsample_factor=1.
     x_ = [torch.arange(start=0.0, end=x*d, step=scale) for x,d in zip(img.shape[1:], pixelsize[1:])]
     phii = torch.stack(torch.meshgrid(x_, indexing='ij'))
 
-    img = utils.interp(x, img, phii, interp2d=True) # channels along the first axis
+    img = interp(x, img, phii, interp2d=True) # channels along the first axis
     stack.append(img)
     # now do the rest
     for i in range(len(files)-1):
         img = tf.imread(os.path.join(img_dir,files[i+1])).transpose(2,0,1).astype(np.float32)
         # downsample x,y first to reduce memory
         # img = img[::downsample_factor, ::downsample_factor]
-        img = utils.interp(x, img, phii, interp2d=True) # channels along the first axis
+        img = interp(x, img, phii, interp2d=True) # channels along the first axis
         stack.append(img)
     stack = torch.tensor(np.array(stack))
     stack = torch.permute(stack, (1,0,2,3)) # reshape to c x h x w x d
@@ -96,7 +96,7 @@ def load_data(img_dir, label_file, pixelsize=[1.0,1.0,1.0], downsample_factor=1.
 
     mask = torch.zeros_like(density.data)
     mask[density.data>np.exp(-1)] = 1.0
-    boundary = torch.tensor(dilation(mask, cube(10)[None]))
+    boundary = torch.tensor(dilation(mask, cube(10)))
 
     # # get points
     # points = label.points[:,:3]

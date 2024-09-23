@@ -14,7 +14,7 @@ from skimage.draw import line_nd
 from skimage.filters import gaussian
 from skimage.morphology import dilation, cube
 
-from env import env_utils
+from environments import env_utils
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 

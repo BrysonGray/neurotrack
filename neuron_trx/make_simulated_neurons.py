@@ -141,8 +141,8 @@ def make_neuron_img(size: Tuple[int,...],
 
     img = torch.zeros((1,)+size)
     img = image.Image(img)
-    mask = torch.zeros_like(img.data)
-    mask = image.Image(mask)
+    canvas = torch.zeros_like(img.data)
+    canvas = image.Image(canvas)
 
     start = tuple([x//2 for x in size]) # start in the center
     boundary = np.array([[0,0,0],
@@ -157,13 +157,14 @@ def make_neuron_img(size: Tuple[int,...],
     img_data = (img_data - img_data.amin()) / (img_data.amax() - img_data.amin()) # rescale to [0,1]
     img = image.Image(img_data)
 
-    neuron_mask = draw_path(mask, path, width=width, binary=binary)
-    if binary:
-        tracking_mask = neuron_mask.data[0] > np.exp(-1)
-    tracking_mask = binary_dilation(neuron_mask.data[0], cube(18))
-    tracking_mask = image.Image(tracking_mask[None])
+    neuron_density = draw_path(canvas, path, width=width, binary=binary)
+    neuron_label = image.Image(neuron_density.data > np.exp(-1))
+    # if binary:
+    #     tracking_mask = neuron.data[0] > np.exp(-1)
+    # tracking_mask = binary_dilation(neuron_mask.data[0], cube(18))
+    # tracking_mask = image.Image(tracking_mask[None])
 
-    return {"image": img.data, "neuron_mask": neuron_mask.data, "tracking_mask": tracking_mask.data}
+    return {"image": img.data, "neuron": neuron_density.data, "neuron_mask": neuron_label.data}
 
 
 if __name__ == "__main__":

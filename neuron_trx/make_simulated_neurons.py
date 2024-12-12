@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-
+#%%
 """ make simulated neuron images """
 import numpy as np
 import torch
@@ -21,7 +21,7 @@ def get_next_point(q0: np.ndarray, q1: np.ndarray, kappa: float, step_size: floa
     last_step = (q1 - q0) / step_size
     vmf = scipy.stats.vonmises_fisher(last_step, kappa)
     step = vmf.rvs(1, random_state=rng)[0]
-    step[0] = 0.0
+    # step[0] = 0.0 # for paths constrained to a 2d slice
     step = step/(np.linalg.norm(step) + np.finfo(float).eps)
     next_point = q1 + step * step_size
 
@@ -29,7 +29,15 @@ def get_next_point(q0: np.ndarray, q1: np.ndarray, kappa: float, step_size: floa
 
 
 # compute neuron segment end points 
-def get_path(start, boundary, kappa=20.0, rng=None, length=100, step_size=1.0, uniform_len=False, random_start=True):
+def get_path(start,
+             boundary,
+             kappa=20.0,
+             rng=None,
+             length=100,
+             step_size=1.0,
+             uniform_len=False,
+             random_start=True,
+             branch=False):
     """
     Get the neuron segment endpoints starting at a seed point,
     and ending if the path exits the boundary or reaches the path length.
@@ -111,8 +119,9 @@ def make_neuron_img(size: Tuple[int,...],
                     noise: float = 0.05,
                     uniform_len: bool = False,
                     random_start: bool = True,
+                    rng=None,
                     binary: bool = False,
-                    rng=None) -> dict:
+                    num_branches: int=0) -> dict:
     """ Make simulated neuron 3D image. 
 
     Parameters
@@ -149,16 +158,30 @@ def make_neuron_img(size: Tuple[int,...],
                          [size[0]-1, size[1]-1, size[2]-1]])
     path = get_path(start, boundary=boundary, kappa=kappa, rng=rng, length=length, step_size=step_size, uniform_len=uniform_len,
                     random_start=random_start)
+    paths = [path]
+    branch_points = []
+    for i in range(num_branches):
+        start_idx = np.random.randint(len(path))
+        branch_start = paths[0][start_idx]
+        branch_points.append(branch_start)
+        branch_start = tuple(int(np.round(t)) for t in branch_start)
+        new_path = get_path(branch_start, boundary=boundary, kappa=kappa, rng=rng, length=length, step_size=step_size, uniform_len=uniform_len,
+                    random_start=True)
+        paths.append(new_path)
 
-    img = draw_path(img, path, width=width, binary=False, )
+    for i,path in enumerate(paths):
+        img = draw_path(img, path, width=width, binary=False, )
     img_data = torch.cat((img.data, img.data, img.data), dim=0)
     sigma = img_data.amax() * noise
     img_data = img_data + torch.randn(img_data.shape)*sigma # add noise
     img_data = (img_data - img_data.amin()) / (img_data.amax() - img_data.amin()) # rescale to [0,1]
     img = image.Image(img_data)
 
-    neuron_density = draw_path(canvas, path, width=width, binary=binary)
-    neuron_label = image.Image(neuron_density.data > np.exp(-1))
+    for path in paths:
+        neuron_density = draw_path(canvas, path, width=width, binary=binary)
+    neuron_label = image.Image((neuron_density.data > np.exp(-1)).to(dtype=int))
+    for point in branch_points:
+        neuron_label.draw_point(torch.from_numpy(point), radius=3, binary=True, value=2)
     # if binary:
     #     tracking_mask = neuron.data[0] > np.exp(-1)
     # tracking_mask = binary_dilation(neuron_mask.data[0], cube(18))
@@ -166,7 +189,7 @@ def make_neuron_img(size: Tuple[int,...],
 
     return {"image": img.data, "neuron": neuron_density.data, "neuron_mask": neuron_label.data}
 
-
+#%%
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
@@ -182,6 +205,7 @@ if __name__ == "__main__":
     parser.add_argument('-k', '--kappa', type=float, default=20.0, required=False, help="Concentration parameter for step direction distribution function.")
     parser.add_argument('-r', '--random_start', action="store_true", required=False, help="Whether the starting step is random. If false, set to the +x direction")
     parser.add_argument('-b', '--binary', action="store_true", required=False, help="Whether the neuron label is binary or a line with Gaussian filter applied.")
+    parser.add_argument('--branches', type=int, default=0, required=False, help="The number of branches each neuron will have.")
     args = parser.parse_args()
 
     rng = np.random.default_rng(args.seed)
@@ -199,7 +223,8 @@ if __name__ == "__main__":
     uniform_len: {args.uniform_len}\n\
     kappa: {args.kappa}\n\
     random_start: {args.random_start}\n\
-    binary: {args.binary}\n")
+    binary: {args.binary}\n\
+    branches: {args.branches}\n")
 
     for i in tqdm(range(args.count)):    
         neuron = make_neuron_img(size,
@@ -210,5 +235,21 @@ if __name__ == "__main__":
                                 uniform_len=args.uniform_len,
                                 kappa=args.kappa,
                                 random_start=args.random_start,
-                                rng=rng)
+                                binary=args.binary,
+                                rng=rng,
+                                num_branches=args.branches)
         torch.save(neuron, os.path.join(args.out, f"img_{i}.pt"))
+
+#%%
+rng = np.random.default_rng(0)
+neuron = make_neuron_img((151,151,151),
+                        length=50,
+                        step_size=2.0,
+                        width=3,
+                        noise=0.05,
+                        uniform_len=False,
+                        kappa=20.0,
+                        random_start=True,
+                        binary=False,
+                        rng=rng,
+                        num_branches=1)

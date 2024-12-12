@@ -88,7 +88,7 @@ class Image:
 
         if pad:
             patch_size = 2*radius+1
-            patch_ = torch.ones((self.data.shape[0], patch_size, patch_size, patch_size), device=DEVICE) * value
+            patch_ = torch.ones((self.data.shape[0], patch_size, patch_size, patch_size), device=self.data.device) * value
             patch_[:, zpad_top:patch_size - zpad_btm, ypad_front:patch_size - ypad_back, xpad_left:patch_size - xpad_right] = patch
             patch = patch_
 
@@ -121,24 +121,28 @@ class Image:
         X = X[padding[0]:X.shape[0]-padding[1], padding[2]:X.shape[1]-padding[3], padding[4]:X.shape[2]-padding[5]]
 
         # add segment to patch
-        patch[channel] = torch.maximum(X, patch[channel])
+        if binary:
+            # set the new patch to the minimum values between arrays X excluding zeros.
+            patch[channel] = torch.where(X*patch[channel] > 0, torch.minimum(X,patch[channel]), torch.maximum(X,patch[channel]))
+        else:
+            patch[channel] = torch.maximum(X, patch[channel])
         new_patch = patch[channel].clone()
 
         return old_patch, new_patch
     
     
-    def draw_point(self, point: torch.Tensor, radius: float = 3.0, channel: int = -1, binary: bool = False):
+    def draw_point(self, point: torch.Tensor, radius: float = 3.0, channel: int = -1, binary: bool = False, value: int = 1):
         c = round(radius)
         patch_size = 2*c+1
         if binary:
-            X = torch.ones((patch_size,patch_size,patch_size))
+            X = torch.ones((patch_size,patch_size,patch_size)) * value
         else:
             X = torch.zeros((patch_size,patch_size,patch_size))
             X[c,c,c] = 1.0
             X = torch.tensor(gaussian(X, sigma=radius))
+            X = (X / torch.amax(X)) * value
         patch, padding = self.crop(point, radius=c, interp=False, pad=False)
         new_patch = X[padding[0]:X.shape[0]-padding[1], padding[2]:X.shape[1]-padding[3], padding[4]:X.shape[2]-padding[5]]
-        new_patch /= torch.amax(new_patch, dim=(0,1,2))
         patch[channel] = torch.maximum(new_patch.to(device=patch.device), patch[channel])
 
         return

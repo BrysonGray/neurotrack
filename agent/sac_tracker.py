@@ -24,7 +24,7 @@ import os
 from itertools import count
 from tqdm import tqdm
 
-from replay_memory import ReplayMemory
+from memory.buffer import ReplayBuffer
 
 is_ipython = 'inline' in matplotlib.get_backend()
 if is_ipython:
@@ -204,7 +204,7 @@ class SACModel():
 
         # self.lrscheduler = torch.optim.lr_scheduler.StepLR(self.Q1_optimizer, step_size=1, gamma=0.9993)
 
-        self.memory = ReplayMemory(10000, obs_shape=(in_channels,input_size,input_size,input_size), action_shape=(3,))
+        self.memory = ReplayBuffer(10000, obs_shape=(in_channels,input_size,input_size,input_size), action_shape=(3,))
 
         self.start_steps = start_steps # random steps taken before beginning to sample from the policy
         self.gamma = gamma # discount factor

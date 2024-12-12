@@ -10,10 +10,13 @@ Author: Bryson Gray
 '''
 import torch
 import numpy as np
-from scipy.linalg import expm
 from skimage.draw import line_nd
 from skimage.filters import gaussian
-import utils
+from skimage.morphology import dilation, cube
+
+from environments import env_utils
+
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 class Image:
@@ -44,16 +47,18 @@ class Image:
             
             Returns
             -------
-            cropped_img : ndarray
+            patch  : ndarray
                 Cropped image
+            padding : ndarray
+                Length that patch overlaps with image boundaries on each end of each dimension.
         """
-        i,j,k = [int(np.round(x)) for x in center]
+        i,j,k = [int(torch.round(x)) for x in center]
         shape = self.data.shape[1:]
 
         # get amount of padding for each face
         zpad_top = zpad_btm = ypad_front = ypad_back = xpad_left = xpad_right = 0
 
-        # radius = radius + 1 # leave one pixel to be cropped at the end to remove interpolation padding 
+        # radius = radius + 1 # leave one pixel to be cropped at the end to remove interpolation padding
 
         if (i + radius) > shape[0]-1:
             zpad_btm = i + radius - (shape[0]-1)
@@ -83,17 +88,17 @@ class Image:
 
         if pad:
             patch_size = 2*radius+1
-            patch_ = torch.ones((self.data.shape[0], patch_size, patch_size, patch_size)) * value
+            patch_ = torch.ones((self.data.shape[0], patch_size, patch_size, patch_size), device=self.data.device) * value
             patch_[:, zpad_top:patch_size - zpad_btm, ypad_front:patch_size - ypad_back, xpad_left:patch_size - xpad_right] = patch
             patch = patch_
 
         # patch = patch[:, 1:-1, 1:-1, 1:-1]
 
         return patch, padding
+    
 
-
-    def draw_line_segment(self, segment, width, channel=-1):
-        """ Draw a line segment with width.
+    def draw_line_segment(self, segment, width, channel=3, value=1.0, binary=False):
+        """ Add an image patch with the new line segment to the existing bundle estimate.
 
         Parameters
         ----------
@@ -103,41 +108,44 @@ class Image:
         width : scalar
             segment width
         """
-        # get the center of the patch from the segment endpoints
-        # center = segment.sum(axis=0) / 2 # TODO: center should actually be the start of the line and rounded to the nearest pixel
-        start = torch.round(segment[0]).to(int)
-        segment = segment[1] - segment[0]
-        segment_length = torch.sqrt(torch.sum(segment**2))
+        
+        # create the patch with the new line segment starting at its center.
+        X = env_utils.make_line_segment(segment, width, binary, value)
 
-        # the patch should contain both line end points plus some blur
-        L = int(torch.ceil(segment_length)) + 1 # The radius of the patch is the whole line length since the line starts at patch center.
-        overhang = int(2*width) # include space beyond the end of the line
-        patch_radius = L + overhang
-
-        patch_size = 2*patch_radius + 1
-        X = torch.zeros((patch_size,patch_size,patch_size))
-        # get endpoints
-        start_ = torch.Tensor([patch_radius]*3) # the patch center is the start point rounded to the nearest pixel
-        # start = torch.round(segment_length*direction + c).to(int)
-        end = torch.round(start_ + segment).to(int)
-        line = line_nd(start_, end, endpoint=True)
-        X[line] = 1.0
-
-        # if width is 0, don't blur
-        if width > 0:
-            sigma = width/2
-            X = torch.tensor(gaussian(X, sigma=sigma))
-
-        # TODO: When I crop, I should not need to interpolate since center will be integer coordinates.
-        patch, padding = self.crop(start, patch_radius, interp=False, pad=False) # patch is a view of self.data (c x h x w x d)
-        new_patch = X[padding[0]:X.shape[0]-padding[1], padding[2]:X.shape[1]-padding[3], padding[4]:X.shape[2]-padding[5]]
-        new_patch /= torch.amax(new_patch, dim=(0,1,2))
+        # get the patch centered on the new segment start point from the current image.
+        center = torch.round(segment[0]).to(torch.int)
+        patch_radius = int((X.shape[0] - 1)/2)
+        patch, padding = self.crop(center, patch_radius, interp=False, pad=False) # patch is a view of self.data (c x h x w x d)
+        old_patch = patch[channel].clone()
+        # if the patch overlaps with the image boundary, it must be cropped to fit
+        X = X[padding[0]:X.shape[0]-padding[1], padding[2]:X.shape[1]-padding[3], padding[4]:X.shape[2]-padding[5]]
 
         # add segment to patch
-        patch[channel] = torch.maximum(new_patch, patch[channel])
+        if binary:
+            # set the new patch to the minimum values between arrays X excluding zeros.
+            patch[channel] = torch.where(X*patch[channel] > 0, torch.minimum(X,patch[channel]), torch.maximum(X,patch[channel]))
+        else:
+            patch[channel] = torch.maximum(X, patch[channel])
+        new_patch = patch[channel].clone()
+
+        return old_patch, new_patch
+    
+    
+    def draw_point(self, point: torch.Tensor, radius: float = 3.0, channel: int = -1, binary: bool = False, value: int = 1):
+        c = round(radius)
+        patch_size = 2*c+1
+        if binary:
+            X = torch.ones((patch_size,patch_size,patch_size)) * value
+        else:
+            X = torch.zeros((patch_size,patch_size,patch_size))
+            X[c,c,c] = 1.0
+            X = torch.tensor(gaussian(X, sigma=radius))
+            X = (X / torch.amax(X)) * value
+        patch, padding = self.crop(point, radius=c, interp=False, pad=False)
+        new_patch = X[padding[0]:X.shape[0]-padding[1], padding[2]:X.shape[1]-padding[3], padding[4]:X.shape[2]-padding[5]]
+        patch[channel] = torch.maximum(new_patch.to(device=patch.device), patch[channel])
 
         return
-
 
 def draw_neurite_tree(img, segments):
     """ Draw all segments to reconstruct a whole neurite tree.

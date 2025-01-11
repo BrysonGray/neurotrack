@@ -335,26 +335,27 @@ class Environment():
                 for id in section_ids:
                     section += torch.where(true_patch_label == id, 1, 0)
                 true_patch_masked = true_patch * section
+                if new_label != current_label and new_label in section_ids:
+                    self.path_labels[self.head_id] = new_label
             else:
                 true_patch_masked = true_patch
-
-            if new_label != current_label and new_label in section_ids:
-                self.path_labels[self.head_id] = new_label
+                if new_label != current_label:
+                    self.path_labels[self.head_id] = new_label
 
             step_accuracy = -env_utils.density_error_change(true_patch_masked[0], old_patch, new_patch)
             reward = self.get_reward(status, step_accuracy, verbose)
 
             observation = self.get_state() 
 
-            self.head_id = (self.head_id + 1)%len(self.paths)
+            # self.head_id = (self.head_id + 1)%len(self.paths) # only move to the next path if the current path is terminated.
 
             # decide if path branches
             if self.classifier is not None:
-                out = self.classifier(observation[:,:3])
+                out = self.classifier(observation[:,:3, 10:25, 10:25, 10:25])
                 out = torch.nn.functional.sigmoid(out.squeeze())
-                if out > 0.6: # create branch
+                if out > 0.5: # create branch
                     distances = torch.linalg.norm(torch.stack(self.roots) - new_position, dim=1)
-                    if not torch.any(distances < 2.0):
+                    if not torch.any(distances < 3.0):
                         self.paths.append(new_position[None])
                         self.path_labels.append(0)
                         self.roots.append(new_position)
@@ -362,26 +363,27 @@ class Environment():
         return observation, reward, terminated
 
 
-    def reset(self):
-        # reset the agent to the next image or seed and reset the path.
-        self.seed_idx += 1
-        self.seed_idx = self.seed_idx % len(self.seeds) # type: ignore
-        if self.seed_idx == 0:
-            self.img_idx += 1
-            self.img_idx = self.img_idx % len(self.img_files)
+    def reset(self, move_to_next=True):
+        if move_to_next:
+            # reset the agent to the next image or seed and reset the path.
+            self.seed_idx += 1
+            self.seed_idx = self.seed_idx % len(self.seeds) # type: ignore
+            if self.seed_idx == 0:
+                self.img_idx += 1
+                self.img_idx = self.img_idx % len(self.img_files)
 
-        # load the next image
-        print(f"Loading image {self.img_files[self.img_idx]}")
-        neuron_data = torch.load(self.img_files[self.img_idx], weights_only=False)
-        img = neuron_data["image"]
-        self.img = Image(img.to(device=DEVICE))
-        neuron_density = neuron_data["neuron_density"]
-        self.true_density = Image(neuron_density.to(device=DEVICE))
-        section_labels = neuron_data["section_labels"]
-        self.section_labels = Image(section_labels.to(device=DEVICE))
-        self.mask = neuron_data["branch_mask"]
-        self.seeds = neuron_data["seeds"]
-        self.graph = neuron_data["graph"]
+                # load the next image
+                print(f"Loading image {self.img_files[self.img_idx]}")
+                neuron_data = torch.load(self.img_files[self.img_idx], weights_only=False)
+                img = neuron_data["image"]
+                self.img = Image(img.to(device=DEVICE))
+                neuron_density = neuron_data["neuron_density"]
+                self.true_density = Image(neuron_density.to(device=DEVICE))
+                section_labels = neuron_data["section_labels"]
+                self.section_labels = Image(section_labels.to(device=DEVICE))
+                self.mask = neuron_data["branch_mask"]
+                self.seeds = neuron_data["seeds"]
+                self.graph = neuron_data["graph"]
 
         seed = torch.tensor(self.seeds[self.seed_idx]) # type: ignore
         self.r = 0.0 # radius around center to randomly place starting points

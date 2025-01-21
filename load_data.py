@@ -15,7 +15,6 @@ import torch
 from data_utils import interp
 import sys
 from neurom.io.utils import load_morphology
-sys.path.append('/home/brysongray/tractography')
 from image import Image
 from skimage.morphology import dilation, cube
 
@@ -166,12 +165,18 @@ def draw_path(img, path, width, binary):
     return img
 
 
-def draw_neuron(segments, shape, width, noise):
+def draw_neuron(segments, shape, width, noise, neuron_color=None, background_color=None):
 
     img = Image(torch.zeros((1,)+shape))
     for s in segments:
         img.draw_line_segment(s[:,:3], width=width, binary=False, channel=0)
-    img_data = torch.cat((img.data, img.data, img.data), dim=0)
+    if neuron_color is None:
+        neuron_color = (1.0, 1.0, 1.0)
+
+    img_data = torch.cat((neuron_color[0]*img.data, neuron_color[1]*img.data, neuron_color[2]*img.data), dim=0)
+    if background_color is not None:
+        img_data = img_data + torch.ones_like(img_data) * background_color[:,None,None,None]
+        img_data /= img_data.amax()
     sigma = img_data.amax() * noise
     img_data = img_data + torch.randn(img_data.shape)*sigma # add noise
     img_data = (img_data - img_data.amin()) / (img_data.amax() - img_data.amin()) # rescale to [0,1]
@@ -180,7 +185,7 @@ def draw_neuron(segments, shape, width, noise):
     return img
 
 
-def load_labels(labels_file, adjust=True):
+def read_swc(labels_file):
     print(f"loading file: {labels_file}")
     try:
         with open(labels_file, 'r') as f:
@@ -191,11 +196,17 @@ def load_labels(labels_file, adjust=True):
 
     lines = [line for line in lines if not line.startswith('#') and line.strip()]
     lines = [line.split() for line in lines]
-    lines = [list(map(int, line[:2])) + list(map(float, line[2:6])) + [int(line[6])] for line in lines]
+    swc_list = [list(map(int, line[:2])) + list(map(float, line[2:6])) + [int(line[6])] for line in lines]
+
+    return swc_list
+
+
+def parse_swc_list(swc_list, adjust=True):
+
     graph = {}
-    for parent in lines:
+    for parent in swc_list:
         children = []
-        for child in lines:
+        for child in swc_list:
             if child[6] == parent[0]:
                 children.append(child[0])
         graph[parent[0]] = children
@@ -212,14 +223,14 @@ def load_labels(labels_file, adjust=True):
             section_id = key+1
             section_graph[section_id] = []
         elif len(value) == 1:
-            sections[i].append([lines[key-1][2:5], lines[value[0]-1][2:5]])
+            sections[i].append([swc_list[key-1][2:5], swc_list[value[0]-1][2:5]])
         else:
             for child in value:
                 if child == key + 1:
-                    sections[i].append([lines[key-1][2:5], lines[child-1][2:5]])
+                    sections[i].append([swc_list[key-1][2:5], swc_list[child-1][2:5]])
                 else:
                     sections[child] = []
-                    sections[child].append([lines[key-1][2:5], lines[child-1][2:5]])
+                    sections[child].append([swc_list[key-1][2:5], swc_list[child-1][2:5]])
                     section_graph[section_id].append(child)
 
     # get average segment length
@@ -233,7 +244,7 @@ def load_labels(labels_file, adjust=True):
     terminals = []
     for key, value in graph.items():
         if len(value) == 0:
-            terminals.append(lines[key-1][2:5])
+            terminals.append(swc_list[key-1][2:5])
         elif len(value) > 1:
             # check the remaining length of each section starting from the current key
             lengths = []
@@ -244,15 +255,15 @@ def load_labels(labels_file, adjust=True):
                 while len(graph[i]) > 0:
                     i += 1
                     # length += 1
-                lengths.append(np.linalg.norm(np.array(lines[i-1][2:5]) - np.array(lines[key-1][2:5])))
+                lengths.append(np.linalg.norm(np.array(swc_list[i-1][2:5]) - np.array(swc_list[key-1][2:5])))
                 # lengths.append(length)
             # if at least two sections have avg_lengths greater than 1, then the current key is a branch
             if key == 1:
                 if sum([l > 2*avg_length for l in lengths]) > 2:
-                    branches.append(lines[key-1][2:5])
+                    branches.append(swc_list[key-1][2:5])
             else:
                 if sum([l > 2*avg_length for l in lengths]) > 1:
-                    branches.append(lines[key-1][2:5])
+                    branches.append(swc_list[key-1][2:5])
 
     branches = np.array(branches)
     branches = np.stack((branches[:,2], branches[:,1], branches[:,0]), axis=1)
@@ -272,17 +283,18 @@ def load_labels(labels_file, adjust=True):
 
         for id, section in sections.items():
             section = (section - min) * scale + np.array([10.0, 10.0, 10.0])
-            sections[id] = torch.from_numpy(section) # type: ignore #
         branches = (branches - min) * scale + np.array([10.0, 10.0, 10.0])
         terminals = (terminals - min) * scale + np.array([10.0, 10.0, 10.0])
+    
+    for id, section in sections.items():
+        sections[id] = torch.from_numpy(section) # type: ignore #
 
     return sections, section_graph, branches, terminals, scale
 
 
-def draw_neuron_from_swc(labels_file):
+def draw_neuron_from_swc(swc_list, adjust=True, background_color=None, neuron_color=None):
 
-    # segments, branches, terminals = load_data.parse_labels(labels_file)
-    sections, graph, branches, terminals, scale = load_labels(labels_file, adjust=True)
+    sections, graph, branches, terminals, scale = parse_swc_list(swc_list, adjust=adjust)
 
     segments = []
     for section in sections.values():
@@ -293,10 +305,11 @@ def draw_neuron_from_swc(labels_file):
     shape = shape.to(int) + torch.tensor([10, 10, 10])  # type: ignore
     shape = tuple(shape.tolist())
 
-    img = load_data.draw_neuron(segments, shape=shape, width=3, noise=0.05)
-    density = load_data.make_neuron_density(segments, shape, width=3)
-    section_labels = load_data.make_section_labels(sections, shape, width=6)
-    mask = load_data.make_neuron_mask(density, threshold=5.0)
+    img = draw_neuron(segments, shape=shape, width=3, noise=0.05,
+                      neuron_color=neuron_color, background_color=background_color)
+    density = make_neuron_density(segments, shape, width=3)
+    section_labels = make_section_labels(sections, shape, width=6)
+    mask = make_neuron_mask(density, threshold=5.0)
 
     branch_mask = Image(torch.zeros_like(mask))
     for point in branches:

@@ -11,7 +11,7 @@ from typing import Tuple
 from tqdm import tqdm
 from skimage.morphology import binary_dilation, cube
 
-sys.path.append(os.path.dirname(sys.path[0]))
+sys.path.append('../')
 import image
 
 
@@ -109,6 +109,74 @@ def draw_path(img, path, width, binary):
         img.draw_line_segment(s, width=width, binary=binary, channel=0)
 
     return img
+
+
+def make_swc_list(size: Tuple[int,...],
+                    length: int,
+                    step_size: float = 1.0,
+                    width: float = 3.0,
+                    kappa: float = 20.0,
+                    noise: float = 0.05,
+                    uniform_len: bool = False,
+                    random_start: bool = True,
+                    rng=None,
+                    binary: bool = False,
+                    num_branches: int=0) -> dict:
+    """ Make simulated neuron tree in the format of an swc list. 
+
+    Parameters
+    ----------
+    size: tuple of int
+        Size of the image
+    length: int
+        Number of segments used to draw the neuron.
+    step_size: float, optional
+        Length of each path segment in pixels. Default is 2.0.
+    width: float, optional
+        Width of the neuron in pixels.
+    noise: float, optional
+        Standard deviation of Gaussian random noise relative to the maximum signal value. Default is 0.05.
+    uniform_len: bool, optional
+        Whether the neuron length is fixed or sampled from a distribution with mean equal to length.
+
+    Returns
+    -------
+    images: tuple of image.Image
+        The neuron image, a binary mask of the neuron, and a mask used to define out-of-bounds for tracking training.
+
+    """
+    if rng is None:
+        rng = np.random.default_rng()
+
+    img = torch.zeros((1,)+size)
+    img = image.Image(img)
+    canvas = torch.zeros_like(img.data)
+    canvas = image.Image(canvas)
+
+    start = tuple([x//2 for x in size]) # start in the center
+    boundary = np.array([[0,0,0],
+                         [size[0]-1, size[1]-1, size[2]-1]])
+    path = get_path(start, boundary=boundary, kappa=kappa, rng=rng, length=length, step_size=step_size, uniform_len=uniform_len,
+                    random_start=random_start)
+    graph = [[i+1, i] for i in range(len(path))]
+    paths = [path]
+    branch_points = []
+    for i in range(num_branches):
+        start_idx = np.random.randint(len(path)-1)
+        branch_start = paths[0][start_idx]
+        branch_points.append(branch_start)
+        branch_start = tuple(int(np.round(t)) for t in branch_start)
+        new_path = get_path(branch_start, boundary=boundary, kappa=kappa, rng=rng, length=length, step_size=step_size, uniform_len=uniform_len,
+                    random_start=True)
+        graph.append([graph[-1][0]+1, start_idx+1])
+        for i in np.arange(graph[-1][0], graph[-1][0] + len(new_path)-1):
+            graph.append([i+1, i])
+        paths.append(new_path)
+    paths = np.concatenate(paths)
+
+    swc_list = [[graph[i][0], 0]+list(paths[i])+[3.0, graph[i][1]] for i in range(len(graph))]
+    
+    return swc_list
 
 
 def make_neuron_img(size: Tuple[int,...],

@@ -14,7 +14,7 @@ from matplotlib import category
 import torch
 
 from image import Image
-from . import env_utils
+import env_utils
 
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")

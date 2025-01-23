@@ -13,7 +13,10 @@ from typing import Literal
 from matplotlib import category
 import torch
 
-from image import Image
+from pathlib import Path
+import sys
+sys.path.insert(1, str(Path(__file__).parent))
+from data.image import Image
 import env_utils
 
 
@@ -324,24 +327,27 @@ class Environment():
             overhang = int(2*self.step_width) # include space beyond the end of the line
             patch_radius = L + overhang
             true_patch, _ = self.true_density.crop(center, patch_radius, interp=False, pad=False)
-            true_patch_label, _ = self.section_labels.crop(center, patch_radius, interp=False, pad=False)
 
-            new_label = int(true_patch_label[0, patch_radius, patch_radius, patch_radius].item())
-            current_label = self.path_labels[self.head_id]
-            # here mask out any sections that are not the current section or its children
-            if current_label != 0:
-                section_ids = [current_label, *self.graph[current_label]]
-                section = torch.zeros_like(true_patch)
-                for id in section_ids:
-                    section += torch.where(true_patch_label == id, 1, 0)
-                true_patch_masked = true_patch * section
-                if new_label != current_label and new_label in section_ids:
-                    self.path_labels[self.head_id] = new_label
-            else:
-                true_patch_masked = true_patch
-                if new_label != current_label:
-                    self.path_labels[self.head_id] = new_label
+            # mask out competing paths
+            # true_patch_label, _ = self.section_labels.crop(center, patch_radius, interp=False, pad=False)
 
+            # new_label = int(true_patch_label[0, patch_radius, patch_radius, patch_radius].item())
+            # current_label = self.path_labels[self.head_id]
+            # # here mask out any sections that are not the current section or its children
+            # if current_label != 0:
+            #     section_ids = [current_label, *self.graph[current_label]]
+            #     section = torch.zeros_like(true_patch)
+            #     for id in section_ids:
+            #         section += torch.where(true_patch_label == id, 1, 0)
+            #     true_patch_masked = true_patch * section
+            #     if new_label != current_label and new_label in section_ids:
+            #         self.path_labels[self.head_id] = new_label
+            # else:
+            #     true_patch_masked = true_patch
+            #     if new_label != current_label:
+            #         self.path_labels[self.head_id] = new_label
+
+            true_patch_masked = true_patch # don't mask
             step_accuracy = -env_utils.density_error_change(true_patch_masked[0], old_patch, new_patch)
             reward = self.get_reward(status, step_accuracy, verbose)
 

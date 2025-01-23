@@ -16,7 +16,7 @@ import numpy as np
 
 from sac_tracking_env import Environment
 from sac_tracker import SACModel
-from load_data import load_data
+from data.load_data import load_data
 
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")

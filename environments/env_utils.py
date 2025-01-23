@@ -57,7 +57,7 @@ def make_line_segment(segment, width, binary=False, value=1.0):
         else:
             sigma = width/2
             X = torch.tensor(gaussian(X, sigma=sigma))
-            X /= torch.amax(X)
+            X = X / torch.amax(X) * value
     
     return X.to(device=segment.device)
 

@@ -3,7 +3,7 @@
 """ Interface for interactively evaluating the tracking environment """
 
 from IPython import display
-from image import Image
+from data.image import Image
 import matplotlib.pyplot as plt
 import numpy as np
 import torch

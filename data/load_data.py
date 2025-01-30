@@ -13,10 +13,10 @@ import tifffile as tf
 import os
 import numpy as np
 import torch
-from data.data_utils import interp
+from data_utils import interp
 import sys
 from neurom.io.utils import load_morphology
-from data.image import Image
+from image import Image
 from skimage.filters import gaussian 
 from skimage.morphology import dilation, cube
 
@@ -175,14 +175,18 @@ def draw_neuron(segments,
                 neuron_color=None,
                 background_color=None,
                 random_brightness=False,
-                binary=False):
+                binary=False,
+                rng=None):
+    
+    if rng is None:
+        rng = np.random.default_rng()
 
     img = Image(torch.zeros((1,)+shape))
     value =  1.0
     for s in segments:
         if random_brightness:
             y0 = 0.5
-            value = y0 + (1.0 - y0) * np.random.rand(1).item()
+            value = y0 + (1.0 - y0) * rng.uniform(0.0, 1.0, size=1).item()
         img.draw_line_segment(s[:,:3], width=width, binary=binary, channel=0, value=value)
     if neuron_color is None:
         neuron_color = (1.0, 1.0, 1.0)
@@ -192,7 +196,7 @@ def draw_neuron(segments,
         img_data = img_data + torch.ones_like(img_data) * background_color[:,None,None,None]
         img_data /= img_data.amax()
     sigma = img_data.amax() * noise
-    img_data = img_data + torch.randn(img_data.shape)*sigma # add noise
+    img_data = img_data + torch.from_numpy(rng.normal(size=img_data.shape))*sigma # add noise
     img_data = (img_data - img_data.amin()) / (img_data.amax() - img_data.amin()) # rescale to [0,1]
     img = Image(img_data)
 
@@ -215,7 +219,7 @@ def read_swc(labels_file):
     return swc_list
 
 
-def parse_swc_list(swc_list, adjust=True):
+def parse_swc_list(swc_list, adjust=True, transpose=True):
 
     graph = {}
     for parent in swc_list:
@@ -232,7 +236,8 @@ def parse_swc_list(swc_list, adjust=True):
     for key, value in graph.items():
         if len(value) == 0:
             sections[i] = np.array(sections[i]) # type: ignore #
-            sections[i] = np.stack((sections[i][...,2], sections[i][...,1], sections[i][...,0]), axis=2) #type: ignore #
+            if transpose:
+                sections[i] = np.stack((sections[i][...,2], sections[i][...,1], sections[i][...,0]), axis=2) #type: ignore #
             i = key+1 # go to the section whose first segment corresponds to the next key
             section_id = key+1
             section_graph[section_id] = []
@@ -280,10 +285,11 @@ def parse_swc_list(swc_list, adjust=True):
                     branches.append(swc_list[key-1][2:5])
 
     branches = np.array(branches)
-    if len(branches) > 0:
+    if transpose and len(branches) > 0:
         branches = np.stack((branches[:,2], branches[:,1], branches[:,0]), axis=1)
     terminals = np.array(terminals)
-    terminals = np.stack((terminals[:,2], terminals[:,1], terminals[:,0]), axis=1)
+    if transpose:
+        terminals = np.stack((terminals[:,2], terminals[:,1], terminals[:,0]), axis=1)
 
     scale = 1
     if adjust:
@@ -298,11 +304,10 @@ def parse_swc_list(swc_list, adjust=True):
 
         for id, section in sections.items():
             section = (section - min) * scale + np.array([10.0, 10.0, 10.0])
-        branches = (branches - min) * scale + np.array([10.0, 10.0, 10.0])
+            sections[id] = torch.from_numpy(section) # type: ignore #
+        if len(branches) > 0:
+            branches = (branches - min) * scale + np.array([10.0, 10.0, 10.0])
         terminals = (terminals - min) * scale + np.array([10.0, 10.0, 10.0])
-    
-    for id, section in sections.items():
-        sections[id] = torch.from_numpy(section) # type: ignore #
 
     return sections, section_graph, branches, terminals, scale
 
@@ -315,7 +320,11 @@ def draw_neuron_from_swc(swc_list,
                          background_color=None,
                          neuron_color=None,
                          random_brightness=False,
-                         binary=False):
+                         binary=False,
+                         rng=None):
+    
+    if rng is None:
+        rng = np.random.default_rng()
 
     sections, graph, branches, terminals, scale = parse_swc_list(swc_list, adjust=adjust)
 
@@ -325,12 +334,13 @@ def draw_neuron_from_swc(swc_list,
     segments = torch.concatenate(segments)
 
     shape = torch.ceil(torch.amax(segments, dim=(0,1)))
-    shape = shape.to(int) + torch.tensor([10, 10, 10])  # type: ignore
+    shape = shape.to(torch.int)
+    shape = shape + torch.tensor([10, 10, 10])  # type: ignore
     shape = tuple(shape.tolist())
 
     img = draw_neuron(segments, shape=shape, width=width, noise=noise, neuron_color=neuron_color,
                       background_color=background_color, random_brightness=random_brightness,
-                      binary=binary)
+                      binary=binary, rng=rng)
 
     density = make_neuron_density(segments, shape, width=width)
     section_labels = make_section_labels(sections, shape, width=2*width)
@@ -340,7 +350,7 @@ def draw_neuron_from_swc(swc_list,
         neuron_coords = torch.nonzero(section_labels.data)
         dropout_density = 0.001
         size = int(dropout_density * len(neuron_coords))
-        rand_ints = torch.randint(0, len(neuron_coords), size=(size,))
+        rand_ints = rng.integers(0, len(neuron_coords), size=(size,))
         dropout_points = neuron_coords[rand_ints]
         dropout_img = torch.zeros_like(img.data)
         dropout_img[:, *dropout_points[:,1:].T] = 1.0

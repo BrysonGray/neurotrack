@@ -5,7 +5,6 @@ import argparse
 import json
 import numpy as np
 import os
-from pyro import param
 import scipy
 from skimage.morphology import binary_dilation, cube
 import torch
@@ -146,11 +145,6 @@ def make_swc_list(size: Tuple[int,...],
     if rng is None:
         rng = np.random.default_rng()
 
-    img = torch.zeros((1,)+size)
-    img = image.Image(img)
-    canvas = torch.zeros_like(img.data)
-    canvas = image.Image(canvas)
-
     start = tuple([x//2 for x in size]) # start in the center
     boundary = np.array([[0,0,0],
                          [size[0]-1, size[1]-1, size[2]-1]])
@@ -160,7 +154,7 @@ def make_swc_list(size: Tuple[int,...],
     paths = [path]
     branch_points = []
     for i in range(num_branches):
-        start_idx = np.random.randint(len(path)-1)
+        start_idx = rng.integers(0, len(path)-1)
         branch_start = paths[0][start_idx]
         branch_points.append(branch_start)
         branch_start = tuple(int(np.round(t)) for t in branch_start)
@@ -309,6 +303,8 @@ if __name__ == "__main__":
                                  random_start=random_start,
                                  rng=rng,
                                  num_branches=branches) # make simulated neuron paths.
+        color = np.array([1.0, 1.0, 1.0])
+        background = np.array([0., 0., 0.])
         if random_contrast:
             color = np.random.rand(3)
             color /= np.linalg.norm(color)

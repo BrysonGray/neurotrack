@@ -16,7 +16,7 @@ import torch
 from pathlib import Path
 import sys
 sys.path.insert(1, str(Path(__file__).parent))
-from data.image import Image
+from data_prep.image import Image
 import env_utils
 
 
@@ -78,14 +78,12 @@ class Environment():
             self,
             img_path: str,
             radius: int,
-            seeds: list[tuple[int, int, int]] | None = None,
             step_size: float = 1.0,
             step_width: float = 1.0,
             max_len: int = 10000,
             alpha: float = 1.0,
             beta: float = 1e-3,
             friction: float = 1e-4,
-            branching: bool = True,
             classifier=None):
         
         if os.path.isdir(img_path):
@@ -94,7 +92,6 @@ class Environment():
             self.img_files = [img_path]
 
         self.img_idx = 0
-        print(f"Loading image {self.img_files[self.img_idx]}")
         neuron_data = torch.load(self.img_files[self.img_idx], weights_only=False)
         img = neuron_data["image"]
         self.img = Image(img.to(device=DEVICE))
@@ -111,7 +108,6 @@ class Environment():
         self.step_size = step_size
         self.step_width = step_width
         self.max_len = max_len
-        self.branching = branching
         self.classifier = classifier
 
         self.seed_idx = 0
@@ -133,10 +129,7 @@ class Environment():
         # we will want to save completed paths
         self.finished_paths = []
 
-        if self.branching:
-            self.img.data = torch.cat((self.img.data, torch.zeros((2,)+self.img.data.shape[1:], device=DEVICE)), dim=0) # add 2 channels for path, and bifurcation points.
-        else:
-            self.img.data = torch.cat((self.img.data, torch.zeros((1,)+self.img.data.shape[1:], device=DEVICE)), dim=0) # add 1 channel for path.
+        self.img.data = torch.cat((self.img.data, torch.zeros((1,)+self.img.data.shape[1:], device=DEVICE)), dim=0) # add 1 channel for path.
         
         self.head_id = 0 # head id keeps track of the current path since there may be multiple paths per episode 
         self.img.draw_point(self.paths[self.head_id][-1], radius=(self.step_width-1)//2, channel=3, binary=False)
@@ -163,36 +156,23 @@ class Environment():
             terminate_path = True
             status = "out_of_image"
         else:
-            # out_of_mask = ~self.mask[(0,)+tuple([int(torch.round(x)) for x in new_position])]
             turn_around = False
             if len(self.paths[self.head_id]) > 1:
                 s = torch.stack((self.paths[self.head_id][-1], new_position)) - self.paths[self.head_id][-2:]
                 cos_dist = torch.dot(s[1]/torch.linalg.norm(s[1]), s[0]/torch.linalg.norm(s[0]))
                 angle = torch.arccos(cos_dist)
                 turn_around = angle > 3*torch.pi/4
-            # label = None
-            # if self.classifier is not None:
-            #     patch, _ = self.img.crop(new_position, self.radius, pad=True, value=0.0)
-            #     out = self.classifier(patch[None])
-            #     label = torch.argmax(out).squeeze()
-                # out = torch.nn.functional.sigmoid(out.squeeze())
-                # label = out > 0.5
 
             too_long = len(self.paths[self.head_id]) > self.max_len
 
             if too_long:
                 terminate_path = True
                 status = "too_long"
-            # elif label is not None:
-            #     if not label:
-            #         terminate_path = True
-            #         status = "choose_stop"
+
             elif turn_around:
                 terminate_path = True
                 status = "choose_stop"
-            # elif out_of_mask:
-            #     terminate_path = True
-            #     status = "out_of_mask"
+
         return terminate_path, status
     
 
@@ -379,7 +359,6 @@ class Environment():
                 self.img_idx = self.img_idx % len(self.img_files)
 
                 # load the next image
-                print(f"Loading image {self.img_files[self.img_idx]}")
                 neuron_data = torch.load(self.img_files[self.img_idx], weights_only=False)
                 img = neuron_data["image"]
                 self.img = Image(img.to(device=DEVICE))
@@ -403,11 +382,7 @@ class Environment():
         self.roots = [seed[0]]
         self.path_labels = [0] # a list of path labels. 0 means the path is not yet labeled.
         self.finished_paths = []
-
-        if self.branching:
-            self.img.data = torch.cat((self.img.data[:3], torch.zeros((2,)+self.img.data.shape[1:], device=DEVICE)), dim=0) # add 2 channels for path, and bifurcation points.
-        else:
-            self.img.data = torch.cat((self.img.data[:3], torch.zeros((1,)+self.img.data.shape[1:], device=DEVICE)), dim=0) # add 1 channel for path.
+        self.img.data = torch.cat((self.img.data[:3], torch.zeros((1,)+self.img.data.shape[1:], device=DEVICE)), dim=0) # add 1 channel for path.
 
         self.head_id = 0
         self.img.draw_point(self.paths[self.head_id][-1], radius=(self.step_width-1)//2, channel=3, binary=False)

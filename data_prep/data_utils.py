@@ -172,18 +172,3 @@ def dft_read(dft_filename, verbose=False):
                   "curves in", toc-tic, "seconds.")
 
         return list_curves, list_colors
-
-
-def get_xy_angle(list_curves):
-    """input: a list of curves as Nx3 lists of coordinates
-        output: list of Nx1 orientations as angles from the positive x direction in the xy plane"""
-
-    list_angles = []
-    for i in range(len(list_curves)):
-        vectors = []
-        for j in range(list_curves[i].shape[0] - 1):
-            vectors.append(list_curves[i][j+1,:] - list_curves[i][j,:])
-        vectors = np.array(vectors)
-        list_angles.append(np.arctan(vectors[:,1] / vectors[:,0]))
-    
-    return list_angles

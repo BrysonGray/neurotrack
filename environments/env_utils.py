@@ -8,58 +8,7 @@ Author: Bryson Gray
 """
 import matplotlib.pyplot as plt
 from IPython import display
-from skimage.draw import line_nd
-from skimage.filters import gaussian
-from skimage.morphology import dilation, cube
 import torch
-
-def make_line_segment(segment, width, binary=False, value=1.0):
-    """ Generate an image of a line segment with width.
-
-    Parameters
-    ----------
-    segment: torch.Tensor
-        array with two three dimensional points (shape: 2x3)
-    width: scalar
-        segment width
-    binary: bool
-        Make a line mask rather than a blurred idealized line.
-    value: float
-        If binary is set to True, set the line brightness to this value. Default is 1.0.
-    
-    Returns
-    -------
-    X : torch.Tensor
-        A patch with the new line segment starting at its center.
-    """
-    
-    segment = segment[1] - segment[0]
-    segment_length = torch.sqrt(torch.sum(segment**2))
-
-    # the patch should contain both line end points plus some blur
-    L = int(torch.ceil(segment_length)) + 1 # The radius of the patch is the whole line length since the line starts at patch center.
-    overhang = int(2*width) # include space beyond the end of the line
-    patch_radius = L + overhang
-
-    patch_size = 2*patch_radius + 1
-    X = torch.zeros((patch_size,patch_size,patch_size))
-    # get endpoints
-    start_ = torch.tensor([patch_radius]*3) # the patch center is the start point rounded to the nearest pixel
-    # start = torch.round(segment_length*direction + c).to(int)
-    end = torch.round(start_ + segment.cpu()).to(dtype=torch.int)
-    line = line_nd(start_, end, endpoint=True)
-    X[line] = float(value)
-
-    # if width is 0, don't blur
-    if width > 0:
-        if binary:
-            X = torch.tensor(dilation(X, cube(int(width))))
-        else:
-            sigma = width/2
-            X = torch.tensor(gaussian(X, sigma=sigma))
-            X = X / torch.amax(X) * value
-    
-    return X.to(device=segment.device)
 
 
 def binary_matching_error(new_patch: torch.Tensor, old_patch: torch.Tensor, true_patch: torch.Tensor) -> float:

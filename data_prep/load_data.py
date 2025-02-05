@@ -21,46 +21,60 @@ from skimage.filters import gaussian
 from skimage.morphology import dilation, cube
 
 
+# def parse_labels(file, scale=1.0):
+#     # load label
+#     label = load_morphology(file)
 
-def parse_labels(file, scale=1.0):
-    # load label
-    label = load_morphology(file)
+#     segments = []
+#     branch_points = []
+#     terminals = []
+#     ids = []
+#     for i in range(len(label.sections)):
+#         points = label.sections[i].points
+#         starts = []
+#         ends = []
+#         for ii in range(len(points)-1):
+#             if np.all(points[ii,:3] == points[ii+1,:3]):
+#                 continue
+#             else:
+#                 starts.append(points[ii])
+#                 ends.append(points[ii+1])
+#         segments_ = np.stack((starts, ends), axis=1)
+#         r = (segments_[:,0,-1]+segments_[:,1,-1])/2
+#         segments_[:,:,-1] = np.stack((r,r), axis=-1)
 
-    segments = []
-    branch_points = []
-    terminals = []
-    ids = []
-    for i in range(len(label.sections)):
-        points = label.sections[i].points
-        starts = []
-        ends = []
-        for ii in range(len(points)-1):
-            if np.all(points[ii,:3] == points[ii+1,:3]):
-                continue
-            else:
-                starts.append(points[ii])
-                ends.append(points[ii+1])
-        segments_ = np.stack((starts, ends), axis=1)
-        r = (segments_[:,0,-1]+segments_[:,1,-1])/2
-        segments_[:,:,-1] = np.stack((r,r), axis=-1)
+#         segments.append(segments_)
+#         if len(label.sections[i].children) > 0:
+#             branch_points.append(segments_[-1,1,:3])
+#         else:
+#             terminals.append(segments_[-1,1,:3])
 
-        segments.append(segments_)
-        if len(label.sections[i].children) > 0:
-            branch_points.append(segments_[-1,1,:3])
-        else:
-            terminals.append(segments_[-1,1,:3])
+#     segments = np.concatenate(segments, axis=0)
 
-    segments = np.concatenate(segments, axis=0)
+#     # rescale points
+#     segments = np.stack((segments[:,:,2], segments[:,:,1]/scale, segments[:,:,0]/scale, segments[...,-1]), axis=-1)
+#     branch_points = torch.from_numpy(np.array(branch_points))
+#     branch_points = torch.stack((branch_points[:,2], branch_points[:,1]/scale, branch_points[:,0]/scale), dim=-1)
 
-    # rescale points
-    segments = np.stack((segments[:,:,2], segments[:,:,1]/scale, segments[:,:,0]/scale, segments[...,-1]), axis=-1)
-    branch_points = torch.from_numpy(np.array(branch_points))
-    branch_points = torch.stack((branch_points[:,2], branch_points[:,1]/scale, branch_points[:,0]/scale), dim=-1)
+#     terminals = torch.from_numpy(np.array(terminals))
+#     terminals = torch.stack((terminals[:,2], terminals[:,1]/scale, terminals[:,0]/scale), dim=-1)
 
-    terminals = torch.from_numpy(np.array(terminals))
-    terminals = torch.stack((terminals[:,2], terminals[:,1]/scale, terminals[:,0]/scale), dim=-1)
+#     return segments, branch_points, terminals
 
-    return segments, branch_points, terminals
+
+# def load_data(img_dir, label_file, pixelsize=[1.0,1.0,1.0], downsample_factor=1.0, inverse=False):
+   
+#     stack = load_img_stack(img_dir, pixelsize=pixelsize, downsample_factor=downsample_factor, inverse=inverse)
+
+#     segments, branch_points, terminals = parse_labels(label_file, scale=pixelsize[0]*downsample_factor)
+
+#     # create density image
+#     density = make_neuron_density(segments, stack.shape[1:])
+
+#     mask = make_neuron_mask(density, threshold=1.0)
+#     boundary = torch.tensor(dilation(mask, cube(10)))
+
+#     return stack, mask, boundary, branch_points, terminals
 
 
 def load_img_stack(img_dir, pixelsize=[1.0,1.0,1.0], downsample_factor=1.0, inverse=False):
@@ -138,21 +152,6 @@ def make_section_labels(sections, shape, width=3):
             labels.draw_line_segment(segment[:,:3], width=width, channel=0, binary=True, value=i)
     
     return labels
-
-
-def load_data(img_dir, label_file, pixelsize=[1.0,1.0,1.0], downsample_factor=1.0, inverse=False):
-   
-    stack = load_img_stack(img_dir, pixelsize=pixelsize, downsample_factor=downsample_factor, inverse=inverse)
-
-    segments, branch_points, terminals = parse_labels(label_file, scale=pixelsize[0]*downsample_factor)
-
-    # create density image
-    density = make_neuron_density(segments, stack.shape[1:])
-
-    mask = make_neuron_mask(density, threshold=1.0)
-    boundary = torch.tensor(dilation(mask, cube(10)))
-
-    return stack, mask, boundary, branch_points, terminals
 
 
 def draw_path(img, path, width, binary):

@@ -16,7 +16,7 @@ import numpy as np
 
 from tracking_env import Environment
 from dqn_tracker import DQNModel
-from data.load_data import load_data
+from data_prep.load_data import load_data
 
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")

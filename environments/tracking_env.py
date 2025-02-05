@@ -10,7 +10,7 @@ Author: Bryson Gray
 import os
 import numpy as np
 import torch
-from data.image import Image, make_line_segment
+from data_prep.image import Image, make_line_segment
 
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")

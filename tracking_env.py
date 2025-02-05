@@ -12,7 +12,7 @@ import torch
 import scipy
 from skimage.draw import line_nd
 from skimage.filters import gaussian
-from data.image import Image
+from data_prep.image import Image
 
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")

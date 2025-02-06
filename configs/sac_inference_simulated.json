@@ -1,9 +1,9 @@
 {
-    "img_path": "/Users/brysongray/data/simulated_neurons/3d_no_artifacts_b-1",
+    "img_path": "/home/brysongray/data/simulated_neurons/3d_no_artifacts_b-1",
     "outdir": "sac_inference_outputs",
     "name": "simulated_dataset",
-    "classifier_weights" : "/Users/brysongray/alienware/tractography/pretrained_models/neurom_no_artifacts_classifier/resnet_classifier_01-25-25_checkpoint-12.pt",
-    "sac_weights": "/Users/brysongray/alienware/tractography/pretrained_models/model_state_dicts_3d_no_artifacts_b-0_01-23-25_it-6000.pt",
+    "classifier_weights" : "/home/brysongray/tractography/pretrained_models/neurom_no_artifacts_classifier/resnet_classifier_01-25-25_checkpoint-12.pt",
+    "sac_weights": "/home/brysongray/tractography/outputs_test/model_state_dicts_3d_no_artifacts_b-0_01-23-25_it-6000.pt",
     "step_size": 2.0,
     "step_width": 3.0
 }

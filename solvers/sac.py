@@ -472,7 +472,6 @@ def inference(env, actor, outdir, n_trials=5, show=True):
                     action = direction_dist.sample()[0]
 
                 next_obs, reward, terminated = env.step(action)
-                ep_return += reward.cpu().item()
 
                 if terminated:
                     labeled_neuron = env.img.data[3].detach().cpu() > 0.3 

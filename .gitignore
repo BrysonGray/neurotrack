@@ -130,3 +130,8 @@ dmypy.json
 
 # Mac files
 ._.DS_Store
+.DS_Store
+
+# Training data and model weights
+*.pt
+*.csv

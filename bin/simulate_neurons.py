@@ -11,8 +11,8 @@ from tqdm import tqdm
 sys.path.append(str(Path(__file__).parents[1]))
 from data_prep import generate, draw, load
 
-if __name__ == "__main__":
 
+def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('-i', '--json', type=str, help='Path to input parameters json file.')
     args = parser.parse_args()
@@ -35,7 +35,7 @@ if __name__ == "__main__":
 
     if labels_dir is not None: # Load existing neuron trees as swc files
         print(f"Loading existing neuron trees as swc files...\n\
-              labels_dir: {labels_dir}")
+            labels_dir: {labels_dir}")
         files = [f for x in os.walk(labels_dir) for f in glob(os.path.join(x[0], "*.swc"))]
         swc_lists = []
         for f in files:
@@ -75,13 +75,13 @@ if __name__ == "__main__":
             print("done")
 
     print(f"width: {width}\n\
-          random_contrast: {random_contrast}\n\
-          random_brightness: {random_brightness}\n\
-          dropout: {dropout}\n\
-          noise: {noise}\n\
-          binary: {binary}\n\
-          seed: {seed}\n\
-          Drawing neuron images and saving to {out}...")
+        random_contrast: {random_contrast}\n\
+        random_brightness: {random_brightness}\n\
+        dropout: {dropout}\n\
+        noise: {noise}\n\
+        binary: {binary}\n\
+        seed: {seed}\n\
+        Drawing neuron images and saving to {out}...")
     
     for swc_list in swc_lists:
         color = np.array([1.0, 1.0, 1.0])
@@ -104,3 +104,9 @@ if __name__ == "__main__":
         torch.save(swc_data, os.path.join(out, f"img_{i}.pt"))
 
     print("done")
+
+    return
+
+
+if __name__ == "__main__":
+    main()

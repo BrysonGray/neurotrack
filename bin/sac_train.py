@@ -20,8 +20,7 @@ dtype = torch.float32
 date = datetime.now().strftime("%m-%d-%y")
 
 
-if __name__ == "__main__":
-
+def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('-i', '--json', type=str, help='Path to input parameters json file.')
     args = parser.parse_args()
@@ -110,3 +109,9 @@ if __name__ == "__main__":
           updates_per_step=1, update_every=1, n_episodes=n_episodes, n_trials=5)
     
     print("Done!")
+    
+    return
+
+
+if __name__ == "__main__":
+    main()

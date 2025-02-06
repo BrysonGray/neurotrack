@@ -18,8 +18,6 @@ def manual_step(env, step_size=2.0):
                     'p': torch.tensor([1.0, 0.0, 0.0]),
                     'l': torch.tensor([-1.0, 0.0, 0.0])}
     
-    # img = env.img.data[:3].amax(dim=1).permute(1,2,0).cpu()
-    # ax[0].imshow(img)
     fig, ax = plt.subplots(1,3)
     while True:
         action = input("Choose an action: ")

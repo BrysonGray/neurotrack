@@ -1,3 +1,7 @@
+"""
+Train a Soft Actor-Critic (SAC) model for neuron tracing.
+"""
+
 import argparse
 from datetime import datetime
 import json
@@ -21,6 +25,52 @@ date = datetime.now().strftime("%m-%d-%y")
 
 
 def main():
+
+    """
+    Main function to train a Soft Actor-Critic (SAC) model for tractography.
+    This function parses input parameters from a JSON file, initializes the environment,
+    neural network models, optimizers, and other necessary components, and then trains
+    the SAC model using the specified parameters.
+    
+    JSON Configuration Parameters
+    -----------------------------
+    img_path : str
+        Path to the input image.
+    outdir : str
+        Directory to save output results.
+    name : str
+        Name for the training session.
+    step_size : float, optional
+        Step size for the environment (default is 1.0).
+    step_width : float, optional
+        Step width for the environment (default is 1.0).
+    batchsize : int, optional
+        Batch size for training (default is 256).
+    tau : float, optional
+        Soft update parameter for target networks (default is 0.005).
+    gamma : float, optional
+        Discount factor for future rewards (default is 0.99).
+    lr : float, optional
+        Learning rate for optimizers (default is 0.001).
+    alpha : float, optional
+        The weight applied to the accuracy component of reward. (default is 1.0).
+    beta : float, optional
+        The weight applied to the reward prior (default is 1e-3).
+    friction : float, optional
+        Weight applied to the friction component of reward (default is 1e-4).
+    n_episodes : int, optional
+        Number of training episodes (default is 100).
+    init_temperature : float, optional
+        Initial temperature for SAC entropy (default is 0.005).
+    target_entropy : float, optional
+        Target entropy for SAC (default is 0.0).
+    classifier_weights : str, optional
+        Path to pre-trained classifier weights.
+    sac_weights : str, optional
+        Path to pre-trained SAC model weights.
+    """
+    
+
     parser = argparse.ArgumentParser()
     parser.add_argument('-i', '--json', type=str, help='Path to input parameters json file.')
     args = parser.parse_args()
@@ -31,8 +81,6 @@ def main():
     img_path = params["img_path"]
     outdir = params["outdir"]
     name = params["name"]
-    model = params["model"] if "model" in params else None
-    n_seeds = params["n_seeds"] if "n_seeds" in params else 1
     step_size = params["step_size"] if "step_size" in params else 1.0
     step_width = params["step_width"] if "step_width" in params else 1.0
     batch_size = params["batchsize"] if "batchsize" in params else 256

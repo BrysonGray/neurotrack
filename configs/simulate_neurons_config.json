@@ -1,6 +1,6 @@
 {   
-    "out": "/home/brysongray/tractography/data_prep/training_data/simulated_neurons/3d_no_artifacts_b-0",
-    "count": 1000,
+    "out": "/Users/brysongray/data/simulated_neurons/3d_no_artifacts_b-1",
+    "count": 10,
     "size": 101,
     "length": 20,
     "stepsize": 3.0,

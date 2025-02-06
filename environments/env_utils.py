@@ -12,8 +12,26 @@ import torch
 
 
 def binary_matching_error(new_patch: torch.Tensor, old_patch: torch.Tensor, true_patch: torch.Tensor) -> float:
-    # Calculate the precision of the new estimate: TP/(TP+FP), where TP and FP are true positive and false positive
-    # pixels and false positive pixels. I want to make it possible to give a penalty for self-overlap. Ordinarily it will be considered FP.
+    """
+    Calculate the precision of the new estimate.
+    
+    Parameters
+    ----------
+    new_patch : torch.Tensor
+        The new patch tensor to be evaluated.
+    old_patch : torch.Tensor
+        The old patch tensor for comparison.
+    true_patch : torch.Tensor
+        The ground truth patch tensor.
+        
+    Returns
+    -------
+    float
+        The precision of the new patch, calculated as TP / (TP + FP), where TP is the number of true positive pixels 
+        and FP is the number of false positive pixels.
+    """
+    
+    # TODO: Make it possible to give a penalty for self-overlap. Ordinarily it will be considered FP.
 
     # binarize patches
     new_patch = new_patch > 0.0
@@ -34,28 +52,20 @@ def binary_matching_error(new_patch: torch.Tensor, old_patch: torch.Tensor, true
 
 
 def density_error_change(true_density, old_density, new_density):
-    """ Change in the error between true and estimated density maps. Error is mean absolute difference between density maps
-        after normalizing by their sums.
+    """ 
+    Change in the error between true and estimated density maps. Error is the sum of square difference between density maps.
 
-        Parameters
-        ----------
-        true_density : torch.Tensor
-        old_density: torch.Tensor
-        new_density: torch.Tensor
-        
-        Returns
-        -------
-        error_change : scalar
+    Parameters
+    ----------
+    true_density : torch.Tensor
+    old_density: torch.Tensor
+    new_density: torch.Tensor
     
+    Returns
+    -------
+    float
+        The change in sum of square errors between the old and new density maps.
     """
-    # true_density = true_density / (true_density.sum() + np.finfo(float).eps)
-    # old_density = old_density / (old_density.sum() + np.finfo(float).eps)
-    # new_density = new_density / (new_density.sum() + np.finfo(float).eps)
-
-    # old_mad = torch.mean(torch.abs(true_density - old_density))
-    # new_mad = torch.mean(torch.abs(true_density - new_density))
-
-    # TODO: test using sum of square error instead of mean absolute difference
     old = torch.sum((old_density - true_density)**2)
     new = torch.sum((new_density - true_density)**2)
     deltaSSE = (new - old).item()
@@ -65,6 +75,23 @@ def density_error_change(true_density, old_density, new_density):
 
 # plotting functions
 def plot_durations(episode_durations, show_result=False):
+    """
+    Plots the durations of episodes and optionally shows the result.
+    
+    Parameters
+    ----------
+    episode_durations : list of int or float
+        A list containing the durations of each episode.
+    show_result : bool, optional
+        If True, the plot will display the final result. If False, the plot will display the training progress (default is False).
+        
+    Notes
+    -----
+    - The function will plot the episode durations and, if there are at least 100 episodes, it will also plot the 100-episode moving average.
+    - The plot will be updated in real-time during training if `show_result` is False.
+    - The `display` module from IPython is used to update the plot in real-time.
+    """
+    
     plt.figure()
     durations_t = torch.tensor(episode_durations, dtype=torch.float)
     if show_result:
@@ -83,15 +110,31 @@ def plot_durations(episode_durations, show_result=False):
 
     plt.pause(0.001)  # pause a bit so that plots are updated
     if not show_result:
-        # display.display(plt.gcf())
         display.display(plt.figure(),display_id=1)
         display.clear_output(wait=True)
     else:
-        # display.display(plt.gcf(), display_id=True)
         display.display(plt.figure(), display_id=1)
+    
+    return
 
 
 def plot_returns(episode_returns, show_result=False):
+    """
+    Plots the returns of episodes and optionally shows the result.
+    Parameters
+    ----------
+    episode_returns : list or array-like
+        A list or array of episode returns to be plotted.
+    show_result : bool, optional
+        If True, the plot will display the final result. If False, the plot will display the training progress (default is False).
+    Notes
+    -----
+    - The function plots the episode returns and, if the length of `episode_returns` is 100 or more, it also plots the 100-episode moving average.
+    - The plot is updated in real-time with a short pause to ensure the plot is rendered.
+    - When `show_result` is False, the plot is cleared and updated continuously to show training progress.
+    - When `show_result` is True, the plot displays the final result.
+    """
+    
     plt.figure()
     return_t = torch.tensor(episode_returns, dtype=torch.float)
     if show_result:
@@ -110,9 +153,7 @@ def plot_returns(episode_returns, show_result=False):
 
     plt.pause(0.001)  # pause a bit so that plots are updated
     if not show_result:
-        # display.display(plt.gcf())
         display.display(plt.figure(), display_id=2)
         display.clear_output(wait=True)
     else:
-        # display.display(plt.gcf())
         display.display(plt.figure(), display_id=2)

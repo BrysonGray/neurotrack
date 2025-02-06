@@ -9,6 +9,26 @@ sys.path.append(str(Path(__file__).parent))
 from data_utils import interp
 
 def tiff(img_dir, pixelsize=[1.0,1.0,1.0], downsample_factor=1.0, inverse=False):
+    """
+    Load a stack of TIFF images from a directory, downsample them, and optionally invert the pixel values.
+    
+    Parameters
+    ----------
+    img_dir : str
+        Directory containing the TIFF images.
+    pixelsize : list of float, optional
+        Pixel size in each dimension (z, y, x). Default is [1.0, 1.0, 1.0].
+    downsample_factor : float, optional
+        Factor by which to downsample the images. Default is 1.0.
+    inverse : bool, optional
+        If True, invert the pixel values. Default is False.
+        
+    Returns
+    -------
+    torch.Tensor
+        A tensor containing the processed image stack with shape (channels, height, width, depth).
+    """
+    
     # load image stack
     files = os.listdir(img_dir)
     stack = []
@@ -41,7 +61,29 @@ def tiff(img_dir, pixelsize=[1.0,1.0,1.0], downsample_factor=1.0, inverse=False)
     
     return stack
 
+
 def swc(labels_file):
+    """
+    Load and parse an SWC file.
+    
+    Parameters
+    ----------
+    labels_file : str
+        Path to the SWC file to be loaded.
+        
+    Returns
+    -------
+    list of list
+        A list of parsed SWC data, where each sublist contains:
+        [index, type, x, y, z, radius, parent_index].
+        
+    Notes
+    -----
+    The function attempts to read the file with the default encoding first.
+    If it fails, it retries with 'latin1' encoding.
+    Lines starting with '#' or empty lines are ignored.
+    """
+    
     print(f"loading file: {labels_file}")
     try:
         with open(labels_file, 'r') as f:
@@ -58,6 +100,31 @@ def swc(labels_file):
 
 
 def parse_swc_list(swc_list, adjust=True, transpose=True):
+    """
+    Parses a list of SWC data and constructs sections, section graph, branches, and terminals.
+
+    Parameters
+    ----------
+    swc_list : list
+        A list of SWC data where each element is a list representing a node in the SWC format.
+    adjust : bool, optional
+        If True, scales and shifts the coordinates (default is True).
+    transpose : bool, optional
+        If True, transposes the coordinates (default is True).
+
+    Returns
+    -------
+    sections : dict
+        A dictionary where keys are section IDs and values are tensors of section coordinates.
+    section_graph : dict
+        A dictionary representing the graph of sections.
+    branches : torch.Tensor
+        A tensor of branch points.
+    terminals : torch.Tensor
+        A tensor of terminal points.
+    scale : float
+        The scaling factor applied to the coordinates.
+    """
 
     graph = {}
     for parent in swc_list:

@@ -1,3 +1,9 @@
+"""
+Generate and save simulated neuron images, either from existing neuron swc files or
+by generating new simulated neuron trees based on the provided parameters.
+"""
+
+
 import argparse
 from glob import glob
 import json
@@ -13,6 +19,49 @@ from data_prep import generate, draw, load
 
 
 def main():
+
+    """
+    Main function to simulate neuron trees or load existing neuron trees from SWC files,
+    draw neuron images, and save them to the specified output directory.
+
+    JSON Configuration Parameters
+    -----------------------------
+    labels_dir : str, optional
+        Directory containing SWC files of existing neuron trees. If not provided, neuron trees will be simulated.
+    out : str
+        Output directory to save the generated neuron images.
+    width : int
+        Width of the generated neuron images.
+    random_contrast : bool
+        Whether to apply random contrast to the neuron images.
+    dropout : float
+        Density of intensity dropout points for the neuron images.
+    random_brightness : bool
+        Whether to apply random signal to noise ratio to the neuron images.
+    noise : float
+        Amount of noise to add to the neuron images.
+    binary : bool
+        Whether to draw the neuron images as a binary mask.
+    seed : int
+        Seed for the random number generator.
+    count : int, optional
+        Number of neuron trees to simulate. Required if `labels_dir` is not provided.
+    size : int, optional
+        Size of the simulated neuron trees. Required if `labels_dir` is not provided.
+    length : int, optional
+        Length of the simulated neuron trees. Required if `labels_dir` is not provided.
+    stepsize : float, optional
+        Step size for the simulated neuron trees. Required if `labels_dir` is not provided.
+    uniform_len : bool, optional
+        Whether to use uniform length for the simulated neuron trees. Required if `labels_dir` is not provided.
+    kappa : float, optional
+        Kappa parameter for the simulated neuron trees. Required if `labels_dir` is not provided.
+    random_start : bool, optional
+        Whether to use random starting points for the simulated neuron trees. Required if `labels_dir` is not provided.
+    branches : int, optional
+        Number of branches for the simulated neuron trees. Required if `labels_dir` is not provided.
+    """
+    
     parser = argparse.ArgumentParser()
     parser.add_argument('-i', '--json', type=str, help='Path to input parameters json file.')
     args = parser.parse_args()
@@ -52,14 +101,14 @@ def main():
         random_start = parameters["random_start"]
         branches = parameters["branches"]
 
-        print(f"Generating simulated neuron trees...\n\
-            size: {size}\n\
-            length: {length}\n\
-            step size: {stepsize}\n\
-            uniform_len: {uniform_len}\n\
-            kappa: {kappa}\n\
-            random_start: {random_start}\n\
-            branches: {branches}")
+        print(f"Generating simulated neuron trees...\n"
+              f"    size: {size}\n"
+              f"    length: {length}\n"
+              f"    step size: {stepsize}\n"
+              f"    uniform_len: {uniform_len}\n"
+              f"    kappa: {kappa}\n"
+              f"    random_start: {random_start}\n"
+              f"    branches: {branches}")
 
         swc_lists = []
         for i in tqdm(range(count)):
@@ -72,18 +121,20 @@ def main():
                                     rng=rng,
                                     num_branches=branches) # make simulated neuron paths.
             swc_lists.append(swc_list)
-            print("done")
+        print("done\n")
 
-    print(f"width: {width}\n\
-        random_contrast: {random_contrast}\n\
-        random_brightness: {random_brightness}\n\
-        dropout: {dropout}\n\
-        noise: {noise}\n\
-        binary: {binary}\n\
-        seed: {seed}\n\
-        Drawing neuron images and saving to {out}...")
+    print(
+        f"Drawing neuron images and saving to {out}..."
+        f"    width: {width}\n"
+        f"    random_contrast: {random_contrast}\n"
+        f"    random_brightness: {random_brightness}\n"
+        f"    dropout: {dropout}\n"
+        f"    noise: {noise}\n"
+        f"    binary: {binary}\n"
+        f"    seed: {seed}\n"
+    )
     
-    for swc_list in swc_lists:
+    for i in tqdm(range(len(swc_lists))):
         color = np.array([1.0, 1.0, 1.0])
         background = np.array([0., 0., 0.])
         if random_contrast:
@@ -91,7 +142,7 @@ def main():
             color /= np.linalg.norm(color)
             background = np.random.rand(3)
             background = background / np.linalg.norm(background) * 0.01
-        swc_data = draw.neuron_from_swc(swc_list,
+        swc_data = draw.neuron_from_swc(swc_lists[i],
                                         width=width,
                                         noise=noise,
                                         adjust=False,

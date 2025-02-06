@@ -19,59 +19,13 @@ sys.path.insert(1, str(Path(__file__).parent))
 from data_prep.image import Image
 import env_utils
 
-
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+
 class Environment():
-    """ Loads a volume. Takes a list of seeds which
-    which will be cycled through on every call of reset.
-
-    Parameters
-    ----------
-    img_path : str
-        Path to image file or directory.
-    radius : int
-        The radius of a state input image patch along each axis (total width is 2*radius + 1).
-    seeds : ndarray
-        N x 3 array of starting streamline coordinates
-    n_seeds : int, optional
-        Number of seeds per bundle. Default is 1
-    step_size : float, optional
-        Distance taken in each step in units of pixels. Default is 1.0.
-    step_width : float, optional
-        Width of the path segments drawn by the agent. Default is 1.0.
-    max_len : int, optional
-        Maximum number of steps allowed per streamline. Default is 10000
-    alpha : float, optional
-        Density matching reward weight. Default is 1.0
-    beta : float, optional
-        Smoothness reward weight. Default is 1e-3.
-    friction : float, optional
-        Friction reward weight. Default is 1e-4.
-    branching : bool, optional
-        If true, model branching is allowed. Default is True.
-    
-    TODO: update attrubutes
-    Attributes
-    ----------
-    head_id : int
-        Index of the current streamline head out of the whole tracking bundle.
-    img : torch.Tensor
-        Tensor with shape c x h x w x d where the first channels are the input image and the last channel is the streamline density.
-    radius : int
-        The radius of a state input image patch along each axis (total width is 2*radius + 1).
-    paths : torch.Tensor
-        Tensor with shape t x N x 3, where t is the length of the streamlines.
-    mask : torch.Tensor
-        Mask of the true neuron. Tensor  with shape 1 x h x w x d.
-    true_denstiy : torch.Tensor
-        True neuron position as a density. Tensor with shape 1 x h x w x d
-    step_size : float
-        Distance taken in each step in units of pixels.
-    max_len : int
-        Maximum number of steps allowed per streamline
-    n_resets : int
-        Count of the number of episode resets during training.
-
+    """
+    This class represents the environment for soft actor critic (SAC) reinforcement learning applied to tracing antomical structures.
+    It provides methods to initialize the environment, take steps, compute rewards, and reset the environment.
     """
 
     def __init__(
@@ -85,6 +39,80 @@ class Environment():
             beta: float = 1e-3,
             friction: float = 1e-4,
             classifier=None):
+        """
+        Initialize the SAC tracking environment.
+        
+        Parameters
+        ----------
+        img_path : str
+            Path to the image file or directory containing image files.
+        radius : int
+            Radius around the center to randomly place starting points.
+        step_size : float, optional
+            Step size for tracking, by default 1.0.
+        step_width : float, optional
+            Step width for tracking, by default 1.0.
+        max_len : int, optional
+            Maximum length of the path, by default 10000.
+        alpha : float, optional
+            Alpha parameter for tracking, by default 1.0.
+        beta : float, optional
+            Beta parameter for tracking, by default 1e-3.
+        friction : float, optional
+            Friction parameter for tracking, by default 1e-4.
+        classifier : optional
+            Classifier for tracking, by default None.
+            
+        Attributes
+        ----------
+        img_files : list
+            List of image file paths.
+        img_idx : int
+            Index of the current image file.
+        img : Image
+            Image object loaded from the image file.
+        true_density : Image
+            Image object representing the true neuron density.
+        section_labels : Image
+            Image object representing the section labels.
+        mask : tensor
+            Branch mask tensor.
+        seeds : list
+            List of seed points.
+        graph : object
+            Graph object representing the neuron structure.
+        radius : int
+            Radius around the center to randomly place starting points.
+        step_size : float
+            Step size for tracking.
+        step_width : float
+            Step width for tracking.
+        max_len : int
+            Maximum length of the path.
+        classifier : optional
+            Classifier for tracking.
+        seed_idx : int
+            Index of the current seed point.
+        r : float
+            Radius around the center to randomly place starting points.
+        paths : list
+            List of paths, each initialized with a 1 x 3 tensor.
+        roots : list
+            List of path start points.
+        path_labels : list
+            List of path labels. 0 means the path is not yet labeled.
+        alpha : float
+            Weight for the accuracy compononent of reward.
+        beta : float
+            Weight for the prior compenent of the reward.
+        friction : float
+            Friction weight for reward.
+        finished_paths : list
+            List of completed paths.
+        head_id : int
+            Head ID keeps track of the current path since there may be multiple paths per episode.
+        """
+    
         
         if os.path.isdir(img_path):
             self.img_files = [os.path.join(img_path, f) for f in os.listdir(img_path)]
@@ -178,14 +206,17 @@ class Environment():
 
     def get_state(self, terminate=False):
         """ Get the state for the current step at streamline 'head_id'. The state consists of an image patch and
-        streamline density patch centered on the streamline head plus the last three streamline positions.
-
+        streamline density patch centered on the streamline head.
+        
+        Parameters
+        ----------
+        terminate : bool, optional
+            If True, returns a zero tensor representing the terminated state. If False, returns the current state.
+        
         Returns
         -------
         patch : torch.Tensor
             Tensor with shape (c x h x w x d) where the first channels are the input image.
-        last_step : torch.Tensor
-            Tensor with shape 1 x 3 
         """
         if terminate:
             patch = torch.zeros((self.img.data.shape[0],)+(2*self.radius + 1,)*3, device=DEVICE)
@@ -199,18 +230,27 @@ class Environment():
     def get_reward(self, category: Literal["step", "out_of_image", "out_of_mask", "too_long", "choose_stop", "bifurcate"],
                    step_accuracy: float = 0.0,
                    verbose: bool = False) -> torch.Tensor:
-        """ Get the reward for the current state. The reward depends on the streamline smoothness and
-        the change in distance between the streamline density and true denisty maps.
-
+        """
+        Calculate the reward based on the given category and step accuracy.
+        
         Parameters
-        category: str
-            Reward category.
-        step_accuracy: float, Optional
+        ----------
+        category : Literal["step", "out_of_image", "out_of_mask", "too_long", "choose_stop", "bifurcate"]
+            The category of the action taken.
+        step_accuracy : float, optional
+            The accuracy of the step taken, by default 0.0.
+        verbose : bool, optional
+            If True, prints detailed information about the reward calculation, by default False.
             
         Returns
         -------
-        reward : torch.Tensor
-            Tensor with shape 1
+        torch.Tensor
+            The calculated reward as a tensor.
+            
+        Raises
+        ------
+        NameError
+            If the provided category is not recognized.
         """
 
         if category == "out_of_image":
@@ -249,28 +289,28 @@ class Environment():
 
 
     def step(self, action, max_paths=100, verbose=False):
-        """ Take a tracking step for one streamline. Add the new position to the path
-        and the bundle density mask, and compute the reward and new state observation.
-
+        """
+        Perform a single step in the environment.
+        
         Parameters
         ----------
-        direction : torch.Tensor
-            Direction vector with shape (3,).
-        choice : int
-            Categorical choice of {step, branch, terminate}.
-        max_branches : int
-            Maximum number of paths allowed.
-        
+        action : torch.Tensor
+            The action to be taken, representing the direction of movement.
+        max_paths : int, optional
+            The maximum number of paths allowed, by default 100. Not currently implemented.
+        verbose : bool, optional
+            If True, additional information will be printed, by default False.
+            
         Returns
         -------
-        observation : tuple
-            The img patch centered at the new streamline head (a tensor with shape c x h x w x d), and the
-            last three streamline positions.
-        reward : torch.Tensor
-            Tensor with shape 1
+        observation : torch.Tensor
+            The current state of the environment after the step.
+        reward : float
+            The reward obtained from taking the step.
         terminated : bool
-
+            Whether the episode has terminated.
         """
+
         terminate_path = False
         terminated = False
 
@@ -350,6 +390,19 @@ class Environment():
 
 
     def reset(self, move_to_next=True):
+        """
+        Resets the environment state.
+        
+        Parameters
+        ----------
+        move_to_next : bool, optional
+            If True, move to the next image or seed and reset the path. Default is True.
+            
+        Returns
+        -------
+        None
+        """
+        
         if move_to_next:
             # reset the agent to the next image or seed and reset the path.
             self.seed_idx += 1

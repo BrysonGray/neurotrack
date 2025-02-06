@@ -10,6 +10,24 @@ import load
 
 
 def draw_neuron_density(segments, shape, width=3):
+    """
+    Draws neuron density on an image based on given segments.
+    
+    Parameters
+    ----------
+    segments : array-like or torch.Tensor
+        A list or tensor of neuron segments, where each segment is represented by a set of points.
+    shape : tuple of int
+        The shape of the output density image (height, width, depth).
+    width : int, optional
+        The width of the line segments to be drawn, by default 3.
+        
+    Returns
+    -------
+    Image
+        An image object with the neuron density drawn on it.
+    """
+    
     # create density image
     density = Image(torch.zeros((1,)+shape))
 
@@ -24,6 +42,7 @@ def draw_neuron_density(segments, shape, width=3):
 
 def draw_neuron_mask(density, threshold=1.0):
     """ Create a binary mask from the neuron density image.
+    
     Parameters
     ----------
     density: torch.Tensor
@@ -44,6 +63,25 @@ def draw_neuron_mask(density, threshold=1.0):
 
 
 def draw_section_labels(sections, shape, width=3):
+    """
+    Draws discrete labels for each section on an image.
+    
+    Parameters
+    ----------
+    sections : dict
+        A dictionary where keys are section labels and values are lists of segments.
+        Each segment is a numpy array with shape (n, 3) representing the coordinates.
+    shape : tuple
+        The shape of the output image (height, width, depth).
+    width : int, optional
+        The width of the line segments to be drawn, by default 3.
+        
+    Returns
+    -------
+    Image
+        An image object with the drawn sections labeled.
+    """
+    
     # create discrete labels for each section
     labels = Image(torch.zeros((1,)+shape))
     for i, section in sections.items():
@@ -54,6 +92,26 @@ def draw_section_labels(sections, shape, width=3):
 
 
 def draw_path(img, path, width, binary):
+    """
+    Draws a path on the given image.
+    
+    Parameters
+    ----------
+    img : object
+        The image object on which the path will be drawn. It should have a method `draw_line_segment`.
+    path : list or numpy.ndarray or torch.Tensor
+        The path to be drawn. It can be a list of coordinates, a numpy array, or a torch tensor.
+    width : int
+        The width of the line segments to be drawn.
+    binary : bool
+        If True, the line segments will be drawn in binary mode.
+        
+    Returns
+    -------
+    object
+        The image object with the path drawn on it.
+    """
+    
     if isinstance(path, list):
         path = torch.tensor(path)
     elif isinstance(path, np.ndarray):
@@ -66,15 +124,36 @@ def draw_path(img, path, width, binary):
     return img
 
 
-def draw_neuron(segments,
-                shape,
-                width,
-                noise,
-                neuron_color=None,
-                background_color=None,
-                random_brightness=False,
-                binary=False,
-                rng=None):
+def draw_neuron(segments, shape, width, noise, neuron_color=None, background_color=None, random_brightness=False, binary=False, rng=None):
+    """
+    Draws a neuron image based on provided segments and parameters.
+    
+    Parameters
+    ----------
+    segments : list of ndarray
+        List of segments where each segment is an ndarray of shape (N, 3) representing the coordinates of the neuron segments.
+    shape : tuple of int
+        Shape of the output image (height, width).
+    width : int
+        Width of the neuron lines to be drawn.
+    noise : float
+        Standard deviation of the Gaussian noise to be added to the image.
+    neuron_color : tuple of float, optional
+        RGB color of the neuron lines. Each value should be in the range [0, 1]. Default is (1.0, 1.0, 1.0).
+    background_color : tuple of float, optional
+        RGB color of the background. Each value should be in the range [0, 1]. Default is None.
+    random_brightness : bool, optional
+        If True, random brightness will be applied to each segment. Default is False.
+    binary : bool, optional
+        If True, the image will be binary. Default is False.
+    rng : numpy.random.Generator, optional
+        Random number generator instance. Default is None, which uses numpy's default_rng.
+        
+    Returns
+    -------
+    Image
+        An Image object containing the drawn neuron.
+    """
     
     if rng is None:
         rng = np.random.default_rng()
@@ -101,16 +180,52 @@ def draw_neuron(segments,
     return img
 
 
-def neuron_from_swc(swc_list,
-                         width=3,
-                         noise=0.05,
-                         dropout=True,
-                         adjust=True,
-                         background_color=None,
-                         neuron_color=None,
-                         random_brightness=False,
-                         binary=False,
-                         rng=None):
+def neuron_from_swc(swc_list, width=3, noise=0.05, dropout=True, adjust=True, background_color=None, neuron_color=None, random_brightness=False, binary=False, rng=None):
+    """
+    Generate a neuron image from an SWC list.
+    
+    Parameters
+    ----------
+    swc_list : list
+        List of SWC data representing neuron structure.
+    width : int, optional
+        Width of the neuron lines, by default 3.
+    noise : float, optional
+        Amount of noise to add to the neuron image, by default 0.05.
+    dropout : bool, optional
+        Whether to add random signal dropout, by default True.
+    adjust : bool, optional
+        Whether to adjust the SWC data, by default True.
+    background_color : optional
+        Background color of the neuron image, by default None.
+    neuron_color : optional
+        Color of the neuron, by default None.
+    random_brightness : bool, optional
+        Whether to apply random brightness to the neuron image, by default False.
+    binary : bool, optional
+        Whether to generate a binary image, by default False.
+    rng : numpy.random.Generator, optional
+        Random number generator, by default None.
+        
+    Returns
+    -------
+    dict
+        Dictionary containing the following keys:
+        - "image": torch.Tensor
+            The generated neuron image.
+        - "neuron_density": torch.Tensor
+            The density map of the neuron.
+        - "section_labels": torch.Tensor
+            The section labels of the neuron.
+        - "branch_mask": torch.Tensor
+            The branch mask of the neuron.
+        - "seeds": list
+            List of seed points.
+        - "scale": float
+            Scale of the neuron.
+        - "graph": dict
+            Graph representation of the neuron.
+    """
     
     if rng is None:
         rng = np.random.default_rng()

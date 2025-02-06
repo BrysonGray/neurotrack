@@ -5,18 +5,12 @@ class ResNet(nn.Module):
     def __init__(self, block, layers, num_classes = 3):
         super(ResNet, self).__init__()
         self.infilters = 64
-        # self.conv1 = nn.Sequential(
-        #                 nn.Conv3d(3, 64, kernel_size=3, stride=2, padding=1),
-        #                 nn.BatchNorm3d(64),
-        #                 nn.ReLU())
         self.conv1 = nn.Sequential(
                         nn.Conv3d(3, 64, kernel_size=3, stride=1, padding=1),
                         nn.BatchNorm3d(64),
                         nn.ReLU())
-        # self.maxpool = nn.MaxPool3d(kernel_size = 3, stride = 2, padding = 1)
         self.layer0 = self._make_layer(block, 64, layers[0], stride = 1)
         self.layer1 = self._make_layer(block, 128, layers[1], stride = 1)
-        # self.layer2 = self._make_layer(block, 256, layers[2], stride = 2)
         self.layer2 = self._make_layer(block, 256, layers[2], stride = 2)
         self.layer3 = self._make_layer(block, 512, layers[3], stride = 2)
         self.avgpool = nn.AvgPool3d(4, stride=1)
@@ -40,7 +34,6 @@ class ResNet(nn.Module):
 
     def forward(self, x):
         x = self.conv1(x)
-        # x = self.maxpool(x)
         x = self.layer0(x)
         x = self.layer1(x)
         x = self.layer2(x)

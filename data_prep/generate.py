@@ -12,6 +12,28 @@ import draw
 import load
 
 def get_next_point(q0: np.ndarray, q1: np.ndarray, kappa: float, step_size: float=1.0, rng=None) -> np.ndarray:
+    """
+    Generate the next point in a path using a von Mises-Fisher distribution.
+    
+    Parameters
+    ----------
+    q0 : np.ndarray
+        The starting point of the previous step.
+    q1 : np.ndarray
+        The ending point of the previous step.
+    kappa : float
+        The concentration parameter of the von Mises-Fisher distribution.
+    step_size : float, optional
+        The step size for the next point, by default 1.0.
+    rng : np.random.Generator, optional
+        A random number generator instance, by default None.
+        
+    Returns
+    -------
+    np.ndarray
+        The next point in the tractography path.
+    """
+    
     if rng is None:
         rng = np.random.default_rng()
     last_step = (q1 - q0) / step_size
@@ -32,8 +54,7 @@ def get_path(start,
              length=100,
              step_size=1.0,
              uniform_len=False,
-             random_start=True,
-             branch=False):
+             random_start=True):
     """
     Get the neuron segment endpoints starting at a seed point,
     and ending if the path exits the boundary or reaches the path length.
@@ -42,12 +63,12 @@ def get_path(start,
     ----------
     start : Array or list of length 3.
         Path starting coordinate.
-    boundary : (2,3) array
+    boundary : np.ndarray of shape (2, 3)
         Image boundaries. Two vertices marking the minimum and maximum
         values along each dimension.
     kappa : float, optional
         Concentration parameter for step direction distribution.
-    rng : numpy.random._generator.Generator, optional
+    rng : np.random.Generator, optional
     length : int, optional
         Path length in number of segments. This is the expected path length
         if uniform_len is set to False. The minimum length is 10 if uniform_len is False.
@@ -58,10 +79,12 @@ def get_path(start,
         If false, the path length will be a normally distributed random number
         with the expected value set by the "length" argument. Otherwise the
         path length will be equal to "length".
+    random_start : bool, optional
+        Whether to start the path with a random direction. Default is True.
     
     Returns
     -------
-    path : (N, 3) array
+    path : np.ndarray of shape (N,3)
 
     """
     if rng is None:
@@ -95,36 +118,41 @@ def get_path(start,
 
 
 def make_swc_list(size: Tuple[int,...],
-                    length: int,
-                    step_size: float = 1.0,
-                    kappa: float = 20.0,
-                    uniform_len: bool = False,
-                    random_start: bool = True,
-                    rng=None,
-                    num_branches: int=0) -> list:
-    """ Make simulated neuron tree in the format of an swc list. 
-
+                length: int,
+                step_size: float = 1.0,
+                kappa: float = 20.0,
+                uniform_len: bool = False,
+                random_start: bool = True,
+                rng=None,
+                num_branches: int=0) -> list:
+    """
+    Generate a list of SWC formatted data representing a path with optional branches.
+    
     Parameters
     ----------
-    size: tuple of int
-        Size of the image
-    length: int
-        Number of segments used to draw the neuron.
-    step_size: float, optional
-        Length of each path segment in pixels. Default is 2.0.
-    width: float, optional
-        Width of the neuron in pixels.
-    noise: float, optional
-        Standard deviation of Gaussian random noise relative to the maximum signal value. Default is 0.05.
-    uniform_len: bool, optional
-        Whether the neuron length is fixed or sampled from a distribution with mean equal to length.
-
+    size : Tuple[int, ...]
+        The dimensions of the 3D space.
+    length : int
+        The length of the path.
+    step_size : float, optional
+        The step size for each move in the path, by default 1.0.
+    kappa : float, optional
+        The concentration parameter for the von Mises-Fisher distribution, by default 20.0.
+    uniform_len : bool, optional
+        If True, the path length will be uniform, by default False.
+    random_start : bool, optional
+        If True, the path will start at a random position, by default True.
+    rng : numpy.random.Generator, optional
+        A random number generator instance, by default None.
+    num_branches : int, optional
+        The number of branches to generate, by default 0.
+        
     Returns
     -------
-    images: tuple of image.Image
-        The neuron image, a binary mask of the neuron, and a mask used to define out-of-bounds for tracking training.
-
+    list
+        A list of SWC formatted data representing the generated path and branches.
     """
+
     if rng is None:
         rng = np.random.default_rng()
 
@@ -155,6 +183,26 @@ def make_swc_list(size: Tuple[int,...],
 
 
 def save_images_from_swc(labels_dir, outdir, sync=True, random_contrast=False, rng=None):
+    """
+    Save images generated from SWC files to the specified output directory.
+    
+    Parameters
+    ----------
+    labels_dir : str
+        Directory containing the SWC files.
+    outdir : str
+        Directory where the output images will be saved.
+    sync : bool, optional
+        If True, only save images for SWC files that do not have corresponding output files in the output directory (default is True).
+    random_contrast : bool, optional
+        If True, apply random contrast to the neuron images (default is False).
+    rng : numpy.random.Generator, optional
+        Random number generator for reproducibility. If None, a new generator is created (default is None).
+        
+    Returns
+    -------
+    None
+    """
 
     if rng is None:
         rng = np.random.default_rng()

@@ -1,3 +1,7 @@
+"""
+Collect neuron image patches and branch labels.
+"""
+
 import argparse
 from datetime import datetime
 from glob import glob
@@ -11,6 +15,27 @@ from data_prep import load, collect
 DATE = datetime.now().strftime("%m-%d-%y")
 
 def main():
+    """
+    Collects neuron image patches and branch labels based on provided arguments.
+    Parses command line arguments for labels directory, images directory, output directory,
+    output filename base, adjustment flag, and number of samples to collect from each image file.
+    Loads SWC files from the labels directory, collects random sample points, and saves image patches centered at those points.
+    
+    Arguments
+    ---------
+    -l, --labels : str
+        Path to labels directory (contains swc files).
+    -i, --images : str
+        Path to images directory.
+    -o, --out : str
+        Path to output directory.
+    -n, --name : str
+        Output filename base.
+    -a, --adjust : bool
+        Set to true if neuron coordinates were rescaled to draw images.
+    --n_samples : int
+        Number of samples to collect from each image file.
+    """
     parser = argparse.ArgumentParser()
     parser.add_argument('-l', '--labels', type=str, help='Path to labels directory (contains swc files).')
     parser.add_argument('-i', '--images', type=str, help='Path to images directory.')

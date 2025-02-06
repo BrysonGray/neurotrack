@@ -2,7 +2,7 @@
 
 '''
 
-Functions for setting up neuron images and ground truth data in swc format for neurite tracking.
+Functions for setting up neuron images and ground truth data in swc format for neuron tracing.
 
 Author: Bryson Gray
 2024
@@ -12,7 +12,7 @@ import torch
 import numpy as np
 from skimage.draw import line_nd
 from skimage.filters import gaussian
-from skimage.morphology import dilation, cube
+from skimage.morphology import dilation, footprint_rectangle
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -57,7 +57,7 @@ def draw_line_segment(segment, width, binary=False, value=1.0):
     # if width is 0, don't blur
     if width > 0:
         if binary:
-            X = torch.tensor(dilation(X, cube(int(width))))
+            X = torch.tensor(dilation(X, footprint_rectangle((int(width),)*3)))
         else:
             sigma = width/2
             X = torch.tensor(gaussian(X, sigma=sigma))
@@ -67,23 +67,37 @@ def draw_line_segment(segment, width, binary=False, value=1.0):
 
 
 class Image:
-    """ image class for tracking environment image data
 
-    Parameters
-    ----------
-    data : ndarray
-        array with channels along the first axis (c x h x w x d)
-
+    """ 
+    Image class for tracking environment image data     
     """
     def __init__(self, data):
+        """
+        Initialize the Image object with data.
+        
+        Parameters
+        ----------
+        data : numpy.ndarray or torch.Tensor
+            The input data to be stored in the Image object. If the input data is 
+            not a torch.Tensor, it will be converted to one.
+            
+        Attributes
+        ----------
+        data : torch.Tensor
+            The data stored in the Image object as a torch.Tensor.
+        """
+    
         self.data = data
         if not isinstance(self.data, torch.Tensor):
             self.data = torch.from_numpy(self.data)
 
 
     def crop(self, center, radius, interp=False, padding_mode="zeros", pad=True, value=0.0):
+
+
         """ Crop an image around a center point (rounded to the nearest pixel center).
-            The cropped image will be smaller than the given radius if it overlaps with the image boundary.
+            The cropped image will be smaller than the given radius if it overlaps with the image boundary unless pad is set to True.
+            Interpolation is not currently implemented.
 
             Parameters
             ----------
@@ -91,6 +105,14 @@ class Image:
                 The center of the cropped image in slice-row-col coordinates. This will be rounded to the nearest pixel index.
             radius : int
                 The radius of the cropped image. The total width is 2*radius + 1  in each dimension assuming it doesn't intersect with a boundary.
+            interp : bool, optional
+                If True, interpolation will be applied (currently not implemented). Default is False.
+            padding_mode : str, optional
+                The mode to use for padding if `pad` is True. Default is "zeros". Not currently implemented.
+            pad : bool, optional
+                If True, the cropped image will be padded to the size specified by the radius. Default is True.
+            value : float, optional
+                The value to use for padding if `pad` is True. Default is 0.0.
             
             Returns
             -------
@@ -104,8 +126,6 @@ class Image:
 
         # get amount of padding for each face
         zpad_top = zpad_btm = ypad_front = ypad_back = xpad_left = xpad_right = 0
-
-        # radius = radius + 1 # leave one pixel to be cropped at the end to remove interpolation padding
 
         if (i + radius) > shape[0]-1:
             zpad_btm = i + radius - (shape[0]-1)
@@ -125,7 +145,8 @@ class Image:
         # patch is data cropped around center. Note: slicing img creates a view (not a copy of img)
         patch = self.data[:, i-remainder[0]:i+remainder[1]+1, j-remainder[2]:j+remainder[3]+1, k-remainder[4]:k+remainder[5]+1]
 
-        # if interp:
+        if interp:
+            raise NotImplementedError("Interpolation is not currently implemented.")
         #     center = center.numpy().astype(np.float32)
         #     remainder = remainder.reshape(3,2)
         #     x = [np.arange(x-r[0], x+r[1]+1).astype(np.float32) for x,r in zip(np.round(center), remainder)]
@@ -143,15 +164,28 @@ class Image:
     
 
     def draw_line_segment(self, segment, width, channel=3, value=1.0, binary=False):
-        """ Add an image patch with the new line segment to the existing bundle estimate.
+
+        """ Add an image patch with the new line segment to the existing image in the specified channel.
 
         Parameters
         ----------
         segment : array_like
             array with two three dimensional points (shape: 2x3)
-        
         width : scalar
             segment width
+        channel : int, optional
+            The channel in which to draw the line segment (default is 3).
+        value : float, optional
+            The value to assign to the line segment (default is 1.0).
+        binary : bool, optional
+            If True, the line segment will be added in a binary fashion (default is False).
+            
+        Returns
+        -------
+        old_patch : torch.Tensor
+            The original patch of the image before the line segment was added.
+        new_patch : torch.Tensor
+            The new patch of the image after the line segment was added.
         """
         
         # create the patch with the new line segment starting at its center.
@@ -177,6 +211,27 @@ class Image:
     
     
     def draw_point(self, point: torch.Tensor, radius: float = 3.0, channel: int = -1, binary: bool = False, value: int = 1):
+        """
+        Draw a point on the image data with a specified radius and value.
+        
+        Parameters
+        ----------
+        point : torch.Tensor
+            The coordinates of the point to be drawn.
+        radius : float, optional
+            The radius of the point to be drawn. Default is 3.0.
+        channel : int, optional
+            The channel on which to draw the point. Default is -1.
+        binary : bool, optional
+            If True, the point will be drawn as a binary value. Default is False.
+        value : int, optional
+            The value to assign to the point. Default is 1.
+            
+        Returns
+        -------
+        None
+        """
+        
         c = round(radius)
         patch_size = 2*c+1
         if binary:

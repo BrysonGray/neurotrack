@@ -1,7 +1,7 @@
 from IPython.display import display, clear_output
 import torch
 
-def show_state(env, returns, rewards, policy_loss, fig):
+def show_state(env, fig, returns=None, rewards=None, policy_loss=None):
     print(f"image: {env.img_files[env.img_idx].split('/')[-1]}")
     ax = fig.axes
     clear_output(wait=True)
@@ -19,15 +19,15 @@ def show_state(env, returns, rewards, policy_loss, fig):
     for j in range(3):
         toshow = torch.stack((true_density.amax(j), path.amax(j), mask.amax(j)), dim=-1)
         ax[j+3].imshow(toshow)
-
-    ax[6].plot(rewards)
-    ax[6].set_title("ep rewards")
-
-    ax[7].plot(returns)
-    ax[7].set_title("ep returns")
-    
-    ax[8].plot(policy_loss)
-    ax[8].set_title("policy loss")
+    if rewards is not None:
+        ax[6].plot(rewards)
+        ax[6].set_title("ep rewards")
+    if returns is not None:
+        ax[7].plot(returns)
+        ax[7].set_title("ep returns")
+    if policy_loss is not None:
+        ax[8].plot(policy_loss)
+        ax[8].set_title("policy loss")
 
     display(fig)
 

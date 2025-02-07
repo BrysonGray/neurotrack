@@ -1,4 +1,4 @@
-# Neuron Tracking
+# Neurotrack
 
 ## Features
 

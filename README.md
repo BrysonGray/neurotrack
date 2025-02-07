@@ -1,10 +1,10 @@
-# Neuron Tracking
+# Neurotrack
 
 ## Features
 
 - Load and simulate microscopy images from existing morphology saved in SWC file format.
 - Simulate neuron tree morphology de novo.
-- Perform neurite tracing to reconstruct neuron morphology.
+- Perform neuron tracking to reconstruct neuron morphology.
 
 ## Overview
 

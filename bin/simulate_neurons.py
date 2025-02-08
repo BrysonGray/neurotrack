@@ -87,8 +87,10 @@ def main():
             labels_dir: {labels_dir}")
         files = [f for x in os.walk(labels_dir) for f in glob(os.path.join(x[0], "*.swc"))]
         swc_lists = []
+        fnames = []
         for f in files:
             swc_lists.append(load.swc(f))
+            fnames.append(f.split('/')[-1].split('.swc')[0])
         print("done")
 
     else: # Generate simulated neuron trees
@@ -111,6 +113,7 @@ def main():
               f"    branches: {branches}")
 
         swc_lists = []
+        fnames = []
         for i in tqdm(range(count)):
             swc_list = generate.make_swc_list(size,
                                     length=length,
@@ -121,6 +124,7 @@ def main():
                                     rng=rng,
                                     num_branches=branches) # make simulated neuron paths.
             swc_lists.append(swc_list)
+            fnames.append(f"img_{i}")
         print("done\n")
 
     print(
@@ -145,14 +149,14 @@ def main():
         swc_data = draw.neuron_from_swc(swc_lists[i],
                                         width=width,
                                         noise=noise,
-                                        adjust=False,
+                                        adjust=True,
                                         neuron_color=color,
                                         background_color=background,
                                         random_brightness=random_brightness,
                                         dropout=dropout,
                                         binary=binary) # Use simulated paths to draw the image.
-
-        torch.save(swc_data, os.path.join(out, f"img_{i}.pt"))
+        
+        torch.save(swc_data, os.path.join(out, f"{fnames[i]}.pt"))
 
     print("done")
 

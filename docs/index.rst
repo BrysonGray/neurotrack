@@ -6,10 +6,6 @@
 Welcome to Neurotrack's documentation!
 ===========================================
 
-.. toctree::
-   :maxdepth: 2
-   :caption: Contents:
-
 Features
 --------
 
@@ -45,6 +41,12 @@ Demo
 ----
 
 Examples for usage are given in Jupyter notebooks in the notebooks folder of the github repository.
+
+.. toctree::
+   :maxdepth: 2
+   :caption: Contents:
+
+   installation
 
 
 

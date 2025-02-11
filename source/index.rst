@@ -43,11 +43,12 @@ Demo
 Examples for usage are given in Jupyter notebooks in the notebooks folder of the github repository.
 
 .. toctree::
-   :maxdepth: 2
+   :maxdepth: 1
    :caption: Contents:
 
    installation
    usage
+   examples
 
 
 Indices and tables

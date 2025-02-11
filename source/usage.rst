@@ -149,6 +149,7 @@ the SAC model using the specified parameters.
 To run SAC training run the following command from the neurotrack root directory:
 
 .. code-block:: bash
+
     python bin/sac_train --input <input_file>
 
 The `input` argument is a JSON file listing the following configuration parameters:

@@ -507,3 +507,6 @@ def inference(env, actor, outdir, n_trials=5, show=True):
         env.reset()
 
     return
+
+if __name__ == "__main__":
+    pass

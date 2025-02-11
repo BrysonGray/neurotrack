@@ -246,15 +246,17 @@ class PrioritizedReplayBuffer:
     def update_priorities(self, data_idxs, priorities):
         """
         Update the priorities of the given data indices.
+        
         Parameters
         ----------
         data_idxs : array-like
             Indices of the data whose priorities are to be updated.
         priorities : array-like or torch.Tensor
             New priorities for the data indices. If a torch.Tensor is provided, it will be converted to a numpy array.
+
         Notes
         -----
-        The priorities are updated using the formula p_i = (|δ_i| + eps) ** alpha, where eps is a small positive constant
+        The priorities are updated using the formula p_i = (|q_i| + eps) ** alpha, where eps is a small positive constant
         to prevent edge cases where priority is zero, and alpha is a scaling factor. The maximum priority is also updated accordingly.
         """
         
@@ -270,3 +272,6 @@ class PrioritizedReplayBuffer:
     
     def __len__(self):
         return self.capacity if self.full else self.idx
+    
+if __name__ == "__main__":
+    pass

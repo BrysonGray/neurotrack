@@ -106,3 +106,6 @@ def show_state(env, z=None, finished=False, path_id=0, t=-1):
 
     display.display(plt.gcf())
     plt.close()
+    
+if __name__ == "__main__":
+    pass

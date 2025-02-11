@@ -24,3 +24,6 @@ class ResidualBlock(nn.Module):
         out += residual
         out = self.relu(out)
         return out
+    
+if __name__ == "__main__":
+    pass

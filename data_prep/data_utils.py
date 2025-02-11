@@ -74,3 +74,6 @@ def interp(x, I, phii, interp2d=False, **kwargs):
     # post processing, get rid of batch dimension
     out = out[0]
     return out
+
+if __name__ == "__main__":
+    pass

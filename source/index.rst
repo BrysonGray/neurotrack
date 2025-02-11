@@ -47,7 +47,7 @@ Examples for usage are given in Jupyter notebooks in the notebooks folder of the
    :caption: Contents:
 
    installation
-
+   usage
 
 
 Indices and tables

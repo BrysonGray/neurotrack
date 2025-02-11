@@ -280,3 +280,6 @@ def neuron_from_swc(swc_list, width=3, noise=0.05, dropout=True, adjust=True, ba
                 "graph": graph}
 
     return swc_data
+
+if __name__ == "__main__":
+    pass

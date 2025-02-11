@@ -33,3 +33,6 @@ def show_state(env, fig, returns=None, rewards=None, policy_loss=None):
 
     
     return
+
+if __name__ == "__main__":
+    pass

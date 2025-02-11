@@ -157,3 +157,6 @@ def plot_returns(episode_returns, show_result=False):
         display.clear_output(wait=True)
     else:
         display.display(plt.figure(), display_id=2)
+        
+if __name__ == "__main__":
+    pass

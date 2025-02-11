@@ -215,3 +215,6 @@ def parse_swc_list(swc_list, adjust=True, transpose=True):
         terminals = (terminals - min) * scale + torch.tensor([10.0, 10.0, 10.0])
 
     return sections, section_graph, branches, terminals, scale
+
+if __name__ == "__main__":
+    pass

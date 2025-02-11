@@ -441,3 +441,6 @@ class Environment():
         self.img.draw_point(self.paths[self.head_id][-1], radius=(self.step_width-1)//2, channel=3, binary=False)
 
         return
+    
+if __name__ == "__main__":
+    pass

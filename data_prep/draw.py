@@ -256,8 +256,9 @@ def neuron_from_swc(swc_list, width=3, noise=0.05, dropout=True, adjust=True, ba
         size = int(dropout_density * len(neuron_coords))
         rand_ints = rng.integers(0, len(neuron_coords), size=(size,))
         dropout_points = neuron_coords[rand_ints]
+        dropout_points = dropout_points[:,1:].T
         dropout_img = torch.zeros_like(img.data)
-        dropout_img[:, *dropout_points[:,1:].T] = 1.0
+        dropout_img[:, dropout_points[0], dropout_points[1], dropout_points[2]] = 1.0
         dropout_img = gaussian(dropout_img, sigma=0.5*width)
         dropout_img /= dropout_img.max()
         img.data = img.data - dropout_img

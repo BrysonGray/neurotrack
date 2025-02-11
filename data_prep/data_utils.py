@@ -2,11 +2,8 @@
 
 """Utils.py : Helper functions."""
 
-import numpy as np
-import struct
 import torch
 from torch.nn.functional import grid_sample
-import xml.etree.ElementTree as ET
 
 def interp(x, I, phii, interp2d=False, **kwargs):
     '''

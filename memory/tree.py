@@ -103,3 +103,6 @@ class SumTree:
     
     def __repr__(self):
         return f"SumTree(nodes={self.nodes.__repr__()}, data={self.data.__repr__()})"
+    
+if __name__ == "__main__":
+    pass

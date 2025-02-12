@@ -37,3 +37,6 @@ class ConvNet(torch.nn.Module):
         
         x = self.l1(x)
         return x
+    
+if __name__ == "__main__":
+    pass

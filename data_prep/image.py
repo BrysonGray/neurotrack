@@ -246,3 +246,6 @@ class Image:
         patch[channel] = torch.maximum(new_patch.to(device=patch.device), patch[channel])
 
         return
+    
+if __name__ == "__main__":
+    pass

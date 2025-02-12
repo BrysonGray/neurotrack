@@ -1,19 +1,3 @@
-
-"""
-This module contains functions and classes for training and testing a binary classifier using PyTorch.
-Classes:
-    StateData: A custom Dataset class for loading image data and labels.
-Functions:
-    transform(image): Applies random permutations and flips to the input image tensor.
-    train_loop(dataloader, model, loss_fn, optimizer): Trains the model for one epoch using the provided dataloader.
-    test_loop(dataloader, model, loss_fn): Evaluates the model on the test dataset.
-    init_dataloader(state_data, batchsize=64): Initializes a DataLoader with a WeightedRandomSampler.
-    train(train_dataloader, test_dataloader, out_dir, lr, epochs, classifier, state_dict=None): Trains the classifier for a specified number of epochs and saves checkpoints.
-Constants:
-    DEVICE: The device to run the model on ("cuda" if available, otherwise "cpu").
-    date: The current date in "mm-dd-yy" format.
-"""
-
 from datetime import datetime
 import numpy as np
 import os
@@ -40,7 +24,7 @@ class StateData(Dataset):
             A function/transform to apply to the images.
         target_transform : callable, optional
             A function/transform to apply to the labels.
-        """
+    """
     
     def __init__(self, labels_file, img_dir, transform=None, target_transform=None):
         self.img_labels = pd.read_csv(labels_file)
@@ -263,3 +247,6 @@ def train(train_dataloader, test_dataloader, out_dir, lr, epochs, classifier, st
     print("Done!")
     
     return
+
+if __name__ == "__main__":
+    pass

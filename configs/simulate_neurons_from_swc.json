@@ -1,0 +1,11 @@
+{   
+    "labels_dir": "/home/brysongray/data/neuromorpho_sub1",
+    "out": "/home/brysongray/data/simulated_neurons/neuromorpho_sub1_with_artifacts",
+    "width": 3,
+    "noise": 0.05,
+    "binary": 0,
+    "random_contrast": 1,
+    "dropout": 1,
+    "random_brightness": 1,
+    "seed": 7
+}

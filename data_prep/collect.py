@@ -114,3 +114,6 @@ def collect_data(sample_points, image_dir, out_dir, name, date, rng=None):
     df.to_csv(os.path.join(out_dir, f"branch_classifier_{name}_{date}_test_labels.csv"))
 
     return
+
+if __name__ == "__main__":
+    pass

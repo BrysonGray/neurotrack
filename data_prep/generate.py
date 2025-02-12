@@ -238,3 +238,6 @@ def save_images_from_swc(labels_dir, outdir, sync=True, random_contrast=False, r
         torch.save(swc_data, os.path.join(outdir, f"{name}_scale_{scale}x.pt"))
         
     return
+
+if __name__ == "__main__":
+    pass

@@ -25,13 +25,13 @@ jobs:
         python -m pip install --upgrade pip
         pip install -r requirements.txt  # All dependencies are in requirements.txt
         pip install sphinx sphinx-rtd-theme  # Example additional Sphinx packages
+        pip install nbsphinx
 
     # Build the Sphinx documentation and save all the html files
     - name: Build Sphinx documentation
       run: |
         make -C docs clean
         make -C docs html
-        #sphinx-build -b html docs/ docs/_build/html
 
     # Deploy the newly generated html pages to the GitHub Pages associated with this repo
     - name: Deploy to GitHub Pages

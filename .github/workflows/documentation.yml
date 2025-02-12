@@ -1,0 +1,41 @@
+name: documentation
+
+# Define when this file will be run
+on: [push, pull_request, workflow_dispatch]
+
+# Define the job to build and deploy the Sphinx documentation
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    # List out all of the actions to be taken
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    # Set up Python in this environment
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.12'  # Specify your Python version
+
+    # Install all necessary dependencies listed in requirements.txt
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt  # All dependencies are in requirements.txt
+        pip install sphinx sphinx-rtd-theme  # Example additional Sphinx packages
+
+    # Build the Sphinx documentation and save all the html files
+    - name: Build Sphinx documentation
+      run: |
+        make -C docs clean
+        make -C docs html
+        #sphinx-build -b html docs/ docs/_build/html
+
+    # Deploy the newly generated html pages to the GitHub Pages associated with this repo
+    - name: Deploy to GitHub Pages
+      uses: peaceiris/actions-gh-pages@v4
+      with:
+        github_token: ${{ secrets.GITHUB_TOKEN }}
+        publish_dir: docs/build/html

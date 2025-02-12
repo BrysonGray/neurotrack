@@ -23,6 +23,7 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
+        sudo apt install pandoc
         pip install -r requirements.txt  # All dependencies are in requirements.txt
         pip install sphinx sphinx-rtd-theme  # Example additional Sphinx packages
         pip install nbsphinx

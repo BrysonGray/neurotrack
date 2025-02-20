@@ -8,6 +8,18 @@ import torch
 sys.path.append(str(Path(__file__).parent))
 from data_utils import interp
 
+
+# Rotation matrices
+def Rx(a):
+    return np.array([[1, 0, 0], [0, np.cos(a), -np.sin(a)], [0, np.sin(a), np.cos(a)]])
+
+def Ry(a):
+    return np.array([[np.cos(a), 0, np.sin(a)], [0, 1, 0], [-np.sin(a), 0, np.cos(a)]])
+
+def Rz(a):
+    return np.array([[np.cos(a), -np.sin(a), 0], [np.sin(a), np.cos(a), 0], [0, 0, 1]])
+
+
 def tiff(img_dir, pixelsize=[1.0,1.0,1.0], downsample_factor=1.0, inverse=False):
     """
     Load a stack of TIFF images from a directory, downsample them, and optionally invert the pixel values.
@@ -62,7 +74,8 @@ def tiff(img_dir, pixelsize=[1.0,1.0,1.0], downsample_factor=1.0, inverse=False)
     return stack
 
 
-def swc(labels_file):
+
+def swc(labels_file, rotate=False):
     """
     Load and parse an SWC file.
     
@@ -96,6 +109,16 @@ def swc(labels_file):
     lines = [line.split() for line in lines]
     swc_list = [list(map(int, line[:2])) + list(map(float, line[2:6])) + [int(line[6])] for line in lines]
 
+    if rotate:
+
+        choices = [0, 90, 180, 270]
+        angle = [np.random.choice(choices), np.random.choice(choices), np.random.choice(choices)]
+        rotation = np.eye(7)
+        rotation[2:5,2:5] = np.matmul(np.matmul(Rx(angle[0]), Ry(angle[1])), Rz(angle[2]))
+
+        swc_list = np.matmul(swc_list, rotation.T)
+        swc_list = swc_list.tolist()
+        
     return swc_list
 
 
@@ -130,9 +153,9 @@ def parse_swc_list(swc_list, adjust=True, transpose=True):
     for parent in swc_list:
         children = []
         for child in swc_list:
-            if child[6] == parent[0]:
-                children.append(child[0])
-        graph[parent[0]] = children
+            if int(child[6]) == int(parent[0]):
+                children.append(int(child[0]))
+        graph[int(parent[0])] = children
 
     sections = {1:[]}
     section_graph = {1:[]}

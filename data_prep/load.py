@@ -105,8 +105,7 @@ def swc(labels_file, rotate=False):
         with open(labels_file, 'r', encoding="latin1") as f:
             lines = f.readlines()
 
-    lines = [line for line in lines if not line.startswith('#') and line.strip()]
-    lines = [line.split() for line in lines]
+    lines = [line.split() for line in lines if not line.startswith('#') and line.strip()]
     swc_list = [list(map(int, line[:2])) + list(map(float, line[2:6])) + [int(line[6])] for line in lines]
 
     if rotate:
@@ -159,27 +158,42 @@ def parse_swc_list(swc_list, adjust=True, transpose=True):
 
     sections = {1:[]}
     section_graph = {1:[]}
-    i = 1
     section_id = 1
     for key, value in graph.items():
-        if len(value) == 0:
-            sections[i] = torch.tensor(sections[i]) # type: ignore #
+        if len(value) == 0: 
+            sections[section_id] = torch.tensor(sections[section_id]) # type: ignore #
             if transpose:
-                sections[i] = torch.stack((sections[i][...,2], sections[i][...,1], sections[i][...,0]), dim=2) #type: ignore #
-            i = key+1 # go to the section whose first segment corresponds to the next key
-            section_id = key+1
-            section_graph[section_id] = []
+                sections[section_id] = torch.stack((sections[section_id][...,2], sections[section_id][...,1], sections[section_id][...,0]), dim=2) #type: ignore #
+            section_id = key+1 # go to the section whose first segment corresponds to the next key
+            if not section_id in list(section_graph.keys()):
+                section_graph[section_id] = []
         elif len(value) == 1:
-            sections[i].append([swc_list[key-1][2:5], swc_list[value[0]-1][2:5]])
+            sections[section_id].append([swc_list[key-1][2:5], swc_list[value[0]-1][2:5]])
         else:
-            for child in value:
-                if child == key + 1:
-                    sections[i].append([swc_list[key-1][2:5], swc_list[child-1][2:5]])
-                else:
-                    sections[child] = []
-                    sections[child].append([swc_list[key-1][2:5], swc_list[child-1][2:5]])
+            # Edit 2/5/25: Every branch spawns new sections and terminates the parent section
+            if len(sections[section_id]) == 0: # The section is empty. This might happen if the root node is also a branch.
+                # In this case do not terminate the section
+                for child in value:
+                    if child == key + 1:
+                        # add segment to the same section
+                        sections[section_id].append([swc_list[key-1][2:5], swc_list[child-1][2:5]])
+                    else:
+                        # add segment to a new section
+                        sections[child] = [[swc_list[key-1][2:5], swc_list[child-1][2:5]]]
+                        section_graph[section_id].append(child)
+            else:  
+                for child in value:
+                    sections[child] = [[swc_list[key-1][2:5], swc_list[child-1][2:5]]]
                     section_graph[section_id].append(child)
-
+                # end the section and go to the next one
+                sections[section_id] = torch.tensor(sections[section_id]) # type: ignore #
+                if transpose:
+                    sections[section_id] = torch.stack((sections[section_id][...,2], sections[section_id][...,1], sections[section_id][...,0]), dim=2) #type: ignore #
+                section_id = key+1 # go to the section whose first segment corresponds to the next key
+                if not section_id in list(section_graph.keys()):
+                    section_graph[section_id] = []
+    
+    # filter branches
     # get average segment length
     lengths = []
     for section in sections.values():

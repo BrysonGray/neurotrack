@@ -165,8 +165,7 @@ def parse_swc_list(swc_list, adjust=True, transpose=True):
             if transpose:
                 sections[section_id] = torch.stack((sections[section_id][...,2], sections[section_id][...,1], sections[section_id][...,0]), dim=2) #type: ignore #
             section_id = key+1 # go to the section whose first segment corresponds to the next key
-            if not section_id in list(section_graph.keys()):
-                section_graph[section_id] = []
+            section_graph[section_id] = []
         elif len(value) == 1:
             sections[section_id].append([swc_list[key-1][2:5], swc_list[value[0]-1][2:5]])
         else:
@@ -190,8 +189,7 @@ def parse_swc_list(swc_list, adjust=True, transpose=True):
                 if transpose:
                     sections[section_id] = torch.stack((sections[section_id][...,2], sections[section_id][...,1], sections[section_id][...,0]), dim=2) #type: ignore #
                 section_id = key+1 # go to the section whose first segment corresponds to the next key
-                if not section_id in list(section_graph.keys()):
-                    section_graph[section_id] = []
+                section_graph[section_id] = []
     
     # filter branches
     # get average segment length

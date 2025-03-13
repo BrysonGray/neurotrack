@@ -72,6 +72,28 @@ def transform(image):
     return image
 
 
+def transform_spherical_patch(image):
+    """
+    Apply random transformations to the input image tensor.
+    The function randomly flips the image tensor along each of the last two dimensions.
+    
+    Parameters
+    ----------
+    image : torch.Tensor
+        The input image tensor to be transformed. It is expected to have at least 4 dimensions.
+        
+    Returns
+    -------
+    torch.Tensor
+        The transformed image tensor with the same shape as the input.
+    """
+    
+    if torch.rand(1)>0.5: image = image.flip(-1)
+    if torch.rand(1)>0.5: image = image.flip(-2)
+    
+    return image
+
+
 def train_loop(dataloader, model, loss_fn, optimizer):
     """
     Train the model for one epoch.
@@ -94,19 +116,20 @@ def train_loop(dataloader, model, loss_fn, optimizer):
     """
     
     size = len(dataloader.dataset)
-    positive_count = len(np.where(dataloader.dataset.img_labels.iloc[:,1] > 0.0)[0])
-    negative_count = size - positive_count
+    # positive_count = len(np.where(dataloader.dataset.img_labels.iloc[:,1] > 0.0)[0])
+    # negative_count = size - positive_count
     losses = []
     model.train()
     for batch, (X,y) in enumerate(dataloader):
-        out = model(X[:,:3].to(device=DEVICE))
+        # out = model(X[:,:3].to(device=DEVICE))
+        out = model(X.to(device=DEVICE,dtype=torch.float32))
         out = torch.nn.functional.sigmoid(out.squeeze())
         # out = torch.nn.functional.softmax(out, dim=1)
         # y = torch.nn.functional.one_hot(y, num_classes=3)
         y = y.to(dtype=torch.float, device=DEVICE)
-        weights = torch.where(y > 0.0, positive_count/size, negative_count/size)
+        # weights = torch.where(y > 0.0, positive_count/size, negative_count/size)
         loss = loss_fn(out,y)
-        loss = torch.mean(loss * weights)
+        # loss = torch.mean(loss * weights)
         loss.backward()
         optimizer.step()
         optimizer.zero_grad()
@@ -140,19 +163,20 @@ def test_loop(dataloader, model, loss_fn):
     """
 
     size = len(dataloader.dataset)
-    positive_count = len(np.where(dataloader.dataset.img_labels.iloc[:,1] > 0.0)[0])
-    negative_count = size - positive_count
+    # positive_count = len(np.where(dataloader.dataset.img_labels.iloc[:,1] > 0.0)[0])
+    # negative_count = size - positive_count
     model.eval()
     num_batches = len(dataloader)
     test_loss, TP, TN, FP, FN = 0,0,0,0,0
     with torch.no_grad():
         for X,y in dataloader:
-            out = model(X[:,:3].to(device=DEVICE))
+            # out = model(X[:,:3].to(device=DEVICE))
+            out = model(X.to(device=DEVICE,dtype=torch.float32))
             out = torch.nn.functional.sigmoid(out.squeeze())
             y = y.to(dtype=torch.float, device=DEVICE)
-            weights = torch.where(y > 0.0, positive_count/size, negative_count/size)
+            # weights = torch.where(y > 0.0, positive_count/size, negative_count/size)
             loss = loss_fn(out,y)
-            loss = torch.mean(loss * weights)
+            # loss = torch.mean(loss * weights)
             test_loss += loss.item()
             threshold = 0.5
             TP_ = ((out > threshold) & (y > 0.0)).type(torch.float).sum().item()
@@ -165,8 +189,8 @@ def test_loop(dataloader, model, loss_fn):
             FN += FN_
 
     test_loss /= num_batches
-    precision = TP / (TP + FP)
-    recall = TP / (TP + FN)
+    precision = TP / (TP + FP + 1e-8)
+    recall = TP / (TP + FN + 1e-8)
     correct = (TP + TN) / size
     print(f"Test Error: \n Accuracy: {(100*correct):>0.1f}%, Avg loss: {test_loss:>8f} \n\
            Precision: {precision:>0.3f}, Recall: {recall:>0.3f}")

@@ -33,9 +33,13 @@ def draw_neuron_density(segments, shape, width=3):
 
     if not isinstance(segments, torch.Tensor):
         segments = torch.tensor(segments)
-
-    for s in segments:
-        density.draw_line_segment(s[:,:3], width=width, channel=0)
+    if segments.shape[2] == 4: # segments include width in the last column
+        for s in segments:
+            width = ((s[0,3]+s[1,3])/2).item()
+            density.draw_line_segment(s[:,:3], width=width, channel=0)
+    else:
+        for s in segments:
+            density.draw_line_segment(s[:,:3], width=width, channel=0)
     
     return density
 
@@ -45,19 +49,24 @@ def draw_neuron_mask(density, threshold=1.0):
     
     Parameters
     ----------
-    density: torch.Tensor
+    density : torch.Tensor
         Neuron density image.
     
-    threshold: float
+    threshold : float
         Threshold value for classifying a voxel in the neuron density image as inside the neuron.
         The threshold value is relative to the width of the neuron. Specifically, the mask will label
         as neuron voxels within one standard deviation from the peak neuron value, where the neuron
         intensities are assumed to be normally distributed around the centerline.
+    
+    Returns
+    -------
+    mask : torch.Tensor
+        A binary mask of the neuron.
     """
 
     peak = density.data.amax()
-    mask = torch.zeros_like(density.data)
-    mask[density.data > peak * np.exp(-0.5 * threshold)] = 1.0
+    mask = torch.zeros_like(density.data, dtype=torch.bool)
+    mask[density.data > peak * np.exp(-0.5 * threshold)] = True
 
     return mask
 

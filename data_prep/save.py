@@ -50,8 +50,8 @@ def paths_to_swc(paths):
 def write_swc(swc_list, out):
     if os.path.exists(out):
         raise FileExistsError(f"The file {out} already exists.")
-    if not os.path.exists(os.path.splitext(out)[0]):
-        os.makedirs(os.path.splitext(out)[0], exist_ok=True)
+    if not os.path.exists(os.path.split(out)[0]):
+        os.makedirs(os.path.split(out)[0], exist_ok=True)
     with open(out, mode='x') as f:
         for line in swc_list:
             f.write(' '.join(map(str,line)) + '\n')

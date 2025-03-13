@@ -13,6 +13,7 @@ import numpy as np
 from skimage.draw import line_nd
 from skimage.filters import gaussian
 from skimage.morphology import dilation, footprint_rectangle
+from typing import Literal
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -210,7 +211,7 @@ class Image:
         return old_patch, new_patch
     
     
-    def draw_point(self, point: torch.Tensor, radius: float = 3.0, channel: int = -1, binary: bool = False, value: int = 1):
+    def draw_point(self, point: torch.Tensor, radius: float = 3.0, channel: int = -1, mode: Literal["mask", "gaussian"] = "mask", binary: bool = False, value: int = 1):
         """
         Draw a point on the image data with a specified radius and value.
         
@@ -222,25 +223,42 @@ class Image:
             The radius of the point to be drawn. Default is 3.0.
         channel : int, optional
             The channel on which to draw the point. Default is -1.
+        mode : str, optional
+            The mode to use for drawing the point. Default is
+            "mask". Options are "mask", which draws the point 
+            as a uniform cube with value determined by the
+            "value" argument, or "gaussian", which draws a
+            gaussian blurred point.
         binary : bool, optional
             If True, the point will be drawn as a binary value. Default is False.
         value : int, optional
             The value to assign to the point. Default is 1.
-            
+
         Returns
         -------
         None
+        
+        Raises
+        ------
+        TypeError
+            If binary is True and self.data.dtype is not a boolean type.
         """
         
+        if binary and self.data.dtype != torch.bool:
+            raise TypeError(f"Binary mode requires boolean image data, but got {self.data.dtype}")
+            
         c = round(radius)
         patch_size = 2*c+1
         if binary:
-            X = torch.ones((patch_size,patch_size,patch_size)) * value
-        else:
+            X = torch.ones((patch_size,patch_size,patch_size), dtype=torch.bool)
+        elif mode == "gaussian":
             X = torch.zeros((patch_size,patch_size,patch_size))
             X[c,c,c] = 1.0
             X = torch.tensor(gaussian(X, sigma=radius))
             X = (X / torch.amax(X)) * value
+        else: # mode == "mask"
+            X = torch.ones((patch_size,patch_size,patch_size))*value
+
         patch, padding = self.crop(point, radius=c, interp=False, pad=False)
         new_patch = X[padding[0]:X.shape[0]-padding[1], padding[2]:X.shape[1]-padding[3], padding[4]:X.shape[2]-padding[5]]
         patch[channel] = torch.maximum(new_patch.to(device=patch.device), patch[channel])

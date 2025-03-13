@@ -272,13 +272,14 @@ loading file: /home/brysongray/data/neuromorpho/quinlan/CNG version/KQa4-12-2015
 </pre></div></div>
 </div>
 <div class="nbinput docutils container">
-<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[14]:
+<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[36]:
 </pre></div>
 </div>
-<div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">labels_file</span> <span class="o">=</span> <span class="s2">&quot;/home/brysongray/Downloads/gold166/e_checked6_chick_uw/DONE_09-2902-04R-01C-60x_merge_c1/09-2902-04R-01C-60x_merge_c1.v3dpbd.swc&quot;</span>
+<div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">labels_file</span> <span class="o">=</span> <span class="s2">&quot;/home/brysongray/data/gold166/e_checked6_chick_uw/DONE_09-2902-04R-01C-60x_merge_c1/09-2902-04R-01C-60x_merge_c1.v3dpbd.swc&quot;</span>
 <span class="c1"># load and parse the SWC file data</span>
 <span class="n">swc_list</span> <span class="o">=</span> <span class="n">load</span><span class="o">.</span><span class="n">swc</span><span class="p">(</span><span class="n">labels_file</span><span class="p">)</span>
-<span class="n">sections</span><span class="p">,</span> <span class="n">section_graph</span><span class="p">,</span> <span class="n">branches</span><span class="p">,</span> <span class="n">terminals</span><span class="p">,</span> <span class="n">scale</span> <span class="o">=</span> <span class="n">load</span><span class="o">.</span><span class="n">parse_swc_list</span><span class="p">(</span><span class="n">swc_list</span><span class="p">,</span> <span class="n">adjust</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="n">sections</span><span class="p">,</span> <span class="n">sections_graph</span> <span class="o">=</span> <span class="n">load</span><span class="o">.</span><span class="n">parse_swc</span><span class="p">(</span><span class="n">swc_list</span><span class="p">)</span>
+<span class="n">branches</span><span class="p">,</span> <span class="n">terminals</span> <span class="o">=</span> <span class="n">load</span><span class="o">.</span><span class="n">get_critical_points</span><span class="p">(</span><span class="n">swc_list</span><span class="p">,</span> <span class="n">sections</span><span class="p">)</span>
 </pre></div>
 </div>
 </div>
@@ -287,12 +288,44 @@ loading file: /home/brysongray/data/neuromorpho/quinlan/CNG version/KQa4-12-2015
 </div>
 <div class="output_area docutils container">
 <div class="highlight"><pre>
-loading file: /home/brysongray/Downloads/gold166/e_checked6_chick_uw/DONE_09-2902-04R-01C-60x_merge_c1/09-2902-04R-01C-60x_merge_c1.v3dpbd.swc
+loading file: /home/brysongray/data/gold166/e_checked6_chick_uw/DONE_09-2902-04R-01C-60x_merge_c1/09-2902-04R-01C-60x_merge_c1.v3dpbd.swc
 </pre></div></div>
 </div>
 </section>
 <section id="Plot-SWC-raw-data">
 <h3>Plot SWC raw data<a class="headerlink" href="#Plot-SWC-raw-data" title="Link to this heading"></a></h3>
+<div class="nbinput docutils container">
+<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[33]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="c1"># Create a DataFrame for plotting</span>
+<span class="n">data</span> <span class="o">=</span> <span class="p">[]</span>
+<span class="c1"># Iterate through the sections dictionary</span>
+<span class="k">for</span> <span class="n">section_id</span><span class="p">,</span> <span class="n">section_data</span> <span class="ow">in</span> <span class="n">sections</span><span class="o">.</span><span class="n">items</span><span class="p">():</span>
+    <span class="c1"># flatten the section into one list of consecutive points instead of segments (point pairs)</span>
+    <span class="k">for</span> <span class="n">i</span><span class="p">,</span><span class="n">segment</span> <span class="ow">in</span> <span class="nb">enumerate</span><span class="p">(</span><span class="n">section_data</span><span class="p">):</span>
+        <span class="n">point</span> <span class="o">=</span> <span class="n">segment</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+        <span class="n">data</span><span class="o">.</span><span class="n">append</span><span class="p">([</span><span class="n">section_id</span><span class="p">,</span> <span class="n">point</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">item</span><span class="p">(),</span> <span class="n">point</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">item</span><span class="p">(),</span> <span class="n">point</span><span class="p">[</span><span class="mi">2</span><span class="p">]</span><span class="o">.</span><span class="n">item</span><span class="p">()])</span>
+        <span class="k">if</span> <span class="n">i</span> <span class="o">==</span> <span class="nb">len</span><span class="p">(</span><span class="n">section_data</span><span class="p">)</span><span class="o">-</span><span class="mi">1</span><span class="p">:</span>
+            <span class="n">point</span> <span class="o">=</span> <span class="n">segment</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
+            <span class="n">data</span><span class="o">.</span><span class="n">append</span><span class="p">([</span><span class="n">section_id</span><span class="p">,</span> <span class="n">point</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">item</span><span class="p">(),</span> <span class="n">point</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">item</span><span class="p">(),</span> <span class="n">point</span><span class="p">[</span><span class="mi">2</span><span class="p">]</span><span class="o">.</span><span class="n">item</span><span class="p">()])</span>
+<span class="n">df_sections</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">(</span><span class="n">data</span><span class="p">,</span> <span class="n">columns</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;section&quot;</span><span class="p">,</span> <span class="s2">&quot;x&quot;</span><span class="p">,</span> <span class="s2">&quot;y&quot;</span><span class="p">,</span> <span class="s2">&quot;z&quot;</span><span class="p">])</span>
+
+<span class="n">fig</span> <span class="o">=</span> <span class="n">px</span><span class="o">.</span><span class="n">line_3d</span><span class="p">(</span><span class="n">df_sections</span><span class="p">,</span> <span class="n">x</span><span class="o">=</span><span class="s2">&quot;x&quot;</span><span class="p">,</span> <span class="n">y</span><span class="o">=</span><span class="s2">&quot;y&quot;</span><span class="p">,</span> <span class="n">z</span><span class="o">=</span><span class="s2">&quot;z&quot;</span><span class="p">,</span> <span class="n">color</span><span class="o">=</span><span class="s1">&#39;section&#39;</span><span class="p">,</span> <span class="p">)</span>
+<span class="n">fig</span><span class="o">.</span><span class="n">update_layout</span><span class="p">(</span><span class="n">scene_aspectmode</span><span class="o">=</span><span class="s1">&#39;data&#39;</span><span class="p">)</span>
+<span class="n">fig</span><span class="o">.</span><span class="n">show</span><span class="p">()</span>
+</pre></div>
+</div>
+</div>
+<div class="nboutput nblast docutils container">
+<div class="prompt empty docutils container">
+</div>
+<div class="output_area docutils container">
+<div class="admonition warning">
+<p>Data type cannot be displayed: application/vnd.plotly.v1+json</p>
+</div>
+</div>
+</div>
 <div class="nbinput docutils container">
 <div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[23]:
 </pre></div>
@@ -388,7 +421,7 @@ loading file: /home/brysongray/Downloads/gold166/e_checked6_chick_uw/DONE_09-290
 <div class="prompt empty docutils container">
 </div>
 <div class="output_area docutils container">
-<img alt="_images/make_simulated_neurons_25_0.png" src="_images/make_simulated_neurons_25_0.png" />
+<img alt="_images/make_simulated_neurons_26_0.png" src="_images/make_simulated_neurons_26_0.png" />
 </div>
 </div>
 </section>

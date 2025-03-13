@@ -105,6 +105,8 @@
   <td style="width: 33%; vertical-align: top;"><ul>
       <li><a href="memory.html#memory.tree.SumTree.add">add() (memory.tree.SumTree method)</a>
 </li>
+      <li><a href="data_prep.html#data_prep.load.adjust_neuron_coords">adjust_neuron_coords() (in module data_prep.load)</a>
+</li>
       <li><a href="memory.html#memory.buffer.PrioritizedReplayBuffer.alpha">alpha (memory.buffer.PrioritizedReplayBuffer attribute)</a>
 </li>
   </ul></td>
@@ -268,9 +270,13 @@
       <li><a href="models.html#models.cnn.ConvNet.forward">forward() (models.cnn.ConvNet method)</a>
 
       <ul>
-        <li><a href="models.html#models.resblock.ResidualBlock.forward">(models.resblock.ResidualBlock method)</a>
+        <li><a href="models.html#models.resblock.ResidualBlock2D.forward">(models.resblock.ResidualBlock2D method)</a>
 </li>
-        <li><a href="models.html#models.resnet.ResNet.forward">(models.resnet.ResNet method)</a>
+        <li><a href="models.html#models.resblock.ResidualBlock3D.forward">(models.resblock.ResidualBlock3D method)</a>
+</li>
+        <li><a href="models.html#models.resnet.ResNet2D.forward">(models.resnet.ResNet2D method)</a>
+</li>
+        <li><a href="models.html#models.resnet.ResNet3D.forward">(models.resnet.ResNet3D method)</a>
 </li>
       </ul></li>
   </ul></td>
@@ -288,6 +294,8 @@
 <table style="width: 100%" class="indextable genindextable"><tr>
   <td style="width: 33%; vertical-align: top;"><ul>
       <li><a href="memory.html#memory.tree.SumTree.get">get() (memory.tree.SumTree method)</a>
+</li>
+      <li><a href="data_prep.html#data_prep.load.get_critical_points">get_critical_points() (in module data_prep.load)</a>
 </li>
       <li><a href="data_prep.html#data_prep.generate.get_next_point">get_next_point() (in module data_prep.generate)</a>
 </li>
@@ -473,7 +481,9 @@
 <h2 id="P">P</h2>
 <table style="width: 100%" class="indextable genindextable"><tr>
   <td style="width: 33%; vertical-align: top;"><ul>
-      <li><a href="data_prep.html#data_prep.load.parse_swc_list">parse_swc_list() (in module data_prep.load)</a>
+      <li><a href="data_prep.html#data_prep.load.parse_swc">parse_swc() (in module data_prep.load)</a>
+</li>
+      <li><a href="data_prep.html#data_prep.load.parse_swc_list_original">parse_swc_list_original() (in module data_prep.load)</a>
 </li>
       <li>
     plot
@@ -489,6 +499,8 @@
         <li><a href="plot.html#module-plot.show_state">module</a>
 </li>
       </ul></li>
+  </ul></td>
+  <td style="width: 33%; vertical-align: top;"><ul>
       <li>
     plot.tracking_interface
 
@@ -496,8 +508,6 @@
         <li><a href="plot.html#module-plot.tracking_interface">module</a>
 </li>
       </ul></li>
-  </ul></td>
-  <td style="width: 33%; vertical-align: top;"><ul>
       <li><a href="environments.html#environments.env_utils.plot_durations">plot_durations() (in module environments.env_utils)</a>
 </li>
       <li><a href="environments.html#environments.env_utils.plot_returns">plot_returns() (in module environments.env_utils)</a>
@@ -522,12 +532,16 @@
 </li>
       <li><a href="environments.html#environments.sac_tracking_env.Environment.reset">reset() (environments.sac_tracking_env.Environment method)</a>
 </li>
-      <li><a href="models.html#models.resblock.ResidualBlock">ResidualBlock (class in models.resblock)</a>
+      <li><a href="models.html#models.resblock.ResidualBlock2D">ResidualBlock2D (class in models.resblock)</a>
 </li>
-      <li><a href="models.html#models.resnet.ResNet">ResNet (class in models.resnet)</a>
+      <li><a href="models.html#models.resblock.ResidualBlock3D">ResidualBlock3D (class in models.resblock)</a>
+</li>
+      <li><a href="models.html#models.resnet.ResNet2D">ResNet2D (class in models.resnet)</a>
 </li>
   </ul></td>
   <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="models.html#models.resnet.ResNet3D">ResNet3D (class in models.resnet)</a>
+</li>
       <li><a href="memory.html#memory.buffer.PrioritizedReplayBuffer.rewards">rewards (memory.buffer.PrioritizedReplayBuffer attribute)</a>
 
       <ul>
@@ -613,19 +627,21 @@
 </li>
       <li><a href="memory.html#memory.tree.SumTree.total">total (memory.tree.SumTree property)</a>
 </li>
-  </ul></td>
-  <td style="width: 33%; vertical-align: top;"><ul>
       <li><a href="solvers.html#solvers.branch_classifier.train">train() (in module solvers.branch_classifier)</a>
 
       <ul>
         <li><a href="solvers.html#solvers.sac.train">(in module solvers.sac)</a>
 </li>
       </ul></li>
+  </ul></td>
+  <td style="width: 33%; vertical-align: top;"><ul>
       <li><a href="solvers.html#solvers.branch_classifier.train_loop">train_loop() (in module solvers.branch_classifier)</a>
 </li>
       <li><a href="solvers.html#solvers.branch_classifier.StateData.transform">transform (solvers.branch_classifier.StateData attribute)</a>
 </li>
       <li><a href="solvers.html#solvers.branch_classifier.transform">transform() (in module solvers.branch_classifier)</a>
+</li>
+      <li><a href="solvers.html#solvers.branch_classifier.transform_spherical_patch">transform_spherical_patch() (in module solvers.branch_classifier)</a>
 </li>
       <li><a href="memory.html#memory.buffer.PrioritizedReplayBuffer.tree">tree (memory.buffer.PrioritizedReplayBuffer attribute)</a>
 </li>
@@ -635,12 +651,14 @@
 <h2 id="U">U</h2>
 <table style="width: 100%" class="indextable genindextable"><tr>
   <td style="width: 33%; vertical-align: top;"><ul>
-      <li><a href="memory.html#memory.tree.SumTree.update">update() (memory.tree.SumTree method)</a>
+      <li><a href="data_prep.html#data_prep.load.undirected_edge_list">undirected_edge_list() (in module data_prep.load)</a>
 </li>
-      <li><a href="solvers.html#solvers.sac.update_actor">update_actor() (in module solvers.sac)</a>
+      <li><a href="memory.html#memory.tree.SumTree.update">update() (memory.tree.SumTree method)</a>
 </li>
   </ul></td>
   <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="solvers.html#solvers.sac.update_actor">update_actor() (in module solvers.sac)</a>
+</li>
       <li><a href="memory.html#memory.buffer.PrioritizedReplayBuffer.update_priorities">update_priorities() (memory.buffer.PrioritizedReplayBuffer method)</a>
 </li>
       <li><a href="solvers.html#solvers.sac.update_Q">update_Q() (in module solvers.sac)</a>

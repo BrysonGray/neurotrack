@@ -54,13 +54,18 @@
 <li class="toctree-l2"><a class="reference internal" href="make_simulated_neurons.html">Make Simulated Neurons</a></li>
 <li class="toctree-l2 current"><a class="current reference internal" href="#">Branch Classifier</a><ul>
 <li class="toctree-l3"><a class="reference internal" href="#Collect-branch-classifier-training-data">Collect branch classifier training data</a><ul>
-<li class="toctree-l4"><a class="reference internal" href="#Get-sample-points-from-swc-files">Get sample points from swc files</a></li>
-<li class="toctree-l4"><a class="reference internal" href="#Save-sample-patches-and-labels-from-image-files">Save sample patches and labels from image files</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#Get-sample-points-from-swc-files-then-save-sample-spherical-patches">Get sample points from swc files then save sample spherical patches</a></li>
 <li class="toctree-l4"><a class="reference internal" href="#View-some-example-input-images">View some example input images</a></li>
 </ul>
 </li>
 <li class="toctree-l3"><a class="reference internal" href="#Train-branch-classifier">Train branch classifier</a><ul>
 <li class="toctree-l4"><a class="reference internal" href="#Instantiate-dataloader-for-training-and-test-datasets">Instantiate dataloader for training and test datasets</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#Save-sample-patches-and-labels-from-image-files">Save sample patches and labels from image files</a></li>
+<li class="toctree-l4"><a class="reference internal" href="#id1">View some example input images</a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="#id2">Train branch classifier</a><ul>
+<li class="toctree-l4"><a class="reference internal" href="#id3">Instantiate dataloader for training and test datasets</a></li>
 </ul>
 </li>
 <li class="toctree-l3"><a class="reference internal" href="#View-balanced-data">View balanced data</a></li>
@@ -99,7 +104,7 @@
   <section id="Branch-Classifier">
 <h1>Branch Classifier<a class="headerlink" href="#Branch-Classifier" title="Link to this heading"></a></h1>
 <div class="nbinput nblast docutils container">
-<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[1]:
+<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[2]:
 </pre></div>
 </div>
 <div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="o">%</span><span class="k">load_ext</span> autoreload
@@ -109,7 +114,7 @@
 </div>
 </div>
 <div class="nbinput nblast docutils container">
-<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[2]:
+<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[3]:
 </pre></div>
 </div>
 <div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">datetime</span><span class="w"> </span><span class="kn">import</span> <span class="n">datetime</span>
@@ -118,18 +123,179 @@
 <span class="kn">import</span><span class="w"> </span><span class="nn">numpy</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">np</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">os</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">pandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">pd</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">scipy.ndimage</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">scipy.ndimage</span><span class="w"> </span><span class="kn">import</span> <span class="n">gaussian_filter</span><span class="p">,</span> <span class="n">median_filter</span><span class="p">,</span> <span class="n">binary_opening</span><span class="p">,</span> <span class="n">binary_closing</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">scipy.ndimage</span><span class="w"> </span><span class="kn">import</span> <span class="n">binary_dilation</span><span class="p">,</span> <span class="n">generate_binary_structure</span><span class="p">,</span> <span class="n">map_coordinates</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">sys</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">tifffile</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">tf</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">torch</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">torch.utils.data</span><span class="w"> </span><span class="kn">import</span> <span class="n">DataLoader</span>
 
 <span class="n">sys</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s2">&quot;../&quot;</span><span class="p">)</span>
-<span class="kn">from</span><span class="w"> </span><span class="nn">data_prep</span><span class="w"> </span><span class="kn">import</span> <span class="n">collect</span><span class="p">,</span> <span class="n">load</span><span class="p">,</span> <span class="n">draw</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">data_prep</span><span class="w"> </span><span class="kn">import</span> <span class="n">collect</span><span class="p">,</span> <span class="n">load</span><span class="p">,</span> <span class="n">draw</span><span class="p">,</span> <span class="n">save</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">data_prep.image</span><span class="w"> </span><span class="kn">import</span> <span class="n">Image</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">solvers</span><span class="w"> </span><span class="kn">import</span> <span class="n">branch_classifier</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">models</span>
 <span class="n">date</span> <span class="o">=</span> <span class="n">datetime</span><span class="o">.</span><span class="n">now</span><span class="p">()</span><span class="o">.</span><span class="n">strftime</span><span class="p">(</span><span class="s2">&quot;%m-</span><span class="si">%d</span><span class="s2">-%y&quot;</span><span class="p">)</span>
 <span class="n">dtype</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">float32</span>
 <span class="n">DEVICE</span> <span class="o">=</span> <span class="s2">&quot;cuda&quot;</span> <span class="k">if</span> <span class="n">torch</span><span class="o">.</span><span class="n">cuda</span><span class="o">.</span><span class="n">is_available</span><span class="p">()</span> <span class="k">else</span> <span class="s2">&quot;cpu&quot;</span>
 </pre></div>
+</div>
+</div>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[6]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="k">def</span><span class="w"> </span><span class="nf">extract_spherical_patch</span><span class="p">(</span><span class="n">volume</span><span class="p">,</span> <span class="n">center</span><span class="p">,</span> <span class="n">radius</span><span class="p">,</span> <span class="n">resolution</span><span class="o">=</span><span class="p">(</span><span class="mi">180</span><span class="p">,</span> <span class="mi">360</span><span class="p">),</span> <span class="n">order</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">normalize</span><span class="o">=</span><span class="kc">False</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Extract a spherical patch from a 3D image volume and project it onto a 2D surface.</span>
+
+<span class="sd">    Parameters:</span>
+<span class="sd">    -----------</span>
+<span class="sd">    volume : 3D numpy array</span>
+<span class="sd">        The 3D image volume</span>
+<span class="sd">    center : tuple of 3 ints</span>
+<span class="sd">        The (z, y, x) coordinates of the center of the sphere</span>
+<span class="sd">    radius : float</span>
+<span class="sd">        The radius of the sphere</span>
+<span class="sd">    resolution : tuple of 2 ints</span>
+<span class="sd">        The resolution of the resulting 2D projection (theta_res, phi_res)</span>
+<span class="sd">    order : int, optional</span>
+<span class="sd">        The order of the spline interpolation (0=nearest, 1=linear, etc.)</span>
+<span class="sd">    normalize : bool, optional</span>
+<span class="sd">        Whether to normalize the output to [0, 1]</span>
+
+<span class="sd">    Returns:</span>
+<span class="sd">    --------</span>
+<span class="sd">    2D numpy array</span>
+<span class="sd">        The 2D projection of the spherical surface (equirectangular projection)</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="c1"># Create meshgrid for spherical coordinates</span>
+    <span class="n">theta_res</span><span class="p">,</span> <span class="n">phi_res</span> <span class="o">=</span> <span class="n">resolution</span>
+    <span class="n">theta</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">linspace</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">np</span><span class="o">.</span><span class="n">pi</span><span class="p">,</span> <span class="n">theta_res</span><span class="p">)</span>
+    <span class="n">phi</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">linspace</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">2</span><span class="o">*</span><span class="n">np</span><span class="o">.</span><span class="n">pi</span><span class="p">,</span> <span class="n">phi_res</span><span class="p">)</span>
+    <span class="n">theta_grid</span><span class="p">,</span> <span class="n">phi_grid</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">meshgrid</span><span class="p">(</span><span class="n">theta</span><span class="p">,</span> <span class="n">phi</span><span class="p">,</span> <span class="n">indexing</span><span class="o">=</span><span class="s1">&#39;ij&#39;</span><span class="p">)</span>
+
+    <span class="c1"># Convert to cartesian coordinates (points on a unit sphere)</span>
+    <span class="n">x</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">sin</span><span class="p">(</span><span class="n">theta_grid</span><span class="p">)</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">cos</span><span class="p">(</span><span class="n">phi_grid</span><span class="p">)</span>
+    <span class="n">y</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">sin</span><span class="p">(</span><span class="n">theta_grid</span><span class="p">)</span> <span class="o">*</span> <span class="n">np</span><span class="o">.</span><span class="n">sin</span><span class="p">(</span><span class="n">phi_grid</span><span class="p">)</span>
+    <span class="n">z</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">cos</span><span class="p">(</span><span class="n">theta_grid</span><span class="p">)</span>
+
+    <span class="c1"># Scale by radius and translate to center</span>
+    <span class="n">coords</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">([</span>
+        <span class="n">center</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">item</span><span class="p">()</span> <span class="o">+</span> <span class="n">radius</span> <span class="o">*</span> <span class="n">z</span><span class="p">,</span>
+        <span class="n">center</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">item</span><span class="p">()</span> <span class="o">+</span> <span class="n">radius</span> <span class="o">*</span> <span class="n">y</span><span class="p">,</span>
+        <span class="n">center</span><span class="p">[</span><span class="mi">2</span><span class="p">]</span><span class="o">.</span><span class="n">item</span><span class="p">()</span> <span class="o">+</span> <span class="n">radius</span> <span class="o">*</span> <span class="n">x</span>
+    <span class="p">])</span>
+
+    <span class="c1"># Sample the volume using interpolation</span>
+    <span class="n">values</span> <span class="o">=</span> <span class="n">map_coordinates</span><span class="p">(</span><span class="n">volume</span><span class="p">,</span> <span class="n">coords</span><span class="p">,</span> <span class="n">order</span><span class="o">=</span><span class="n">order</span><span class="p">,</span> <span class="n">mode</span><span class="o">=</span><span class="s1">&#39;constant&#39;</span><span class="p">,</span> <span class="n">cval</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+
+    <span class="c1"># Reshape to 2D projection</span>
+    <span class="n">projection</span> <span class="o">=</span> <span class="n">values</span><span class="o">.</span><span class="n">reshape</span><span class="p">(</span><span class="n">theta_res</span><span class="p">,</span> <span class="n">phi_res</span><span class="p">)</span>
+
+    <span class="c1"># Normalize if requested</span>
+    <span class="k">if</span> <span class="n">normalize</span> <span class="ow">and</span> <span class="n">projection</span><span class="o">.</span><span class="n">max</span><span class="p">()</span> <span class="o">!=</span> <span class="n">projection</span><span class="o">.</span><span class="n">min</span><span class="p">():</span>
+        <span class="n">projection</span> <span class="o">=</span> <span class="p">(</span><span class="n">projection</span> <span class="o">-</span> <span class="n">projection</span><span class="o">.</span><span class="n">min</span><span class="p">())</span> <span class="o">/</span> <span class="p">(</span><span class="n">projection</span><span class="o">.</span><span class="n">max</span><span class="p">()</span> <span class="o">-</span> <span class="n">projection</span><span class="o">.</span><span class="n">min</span><span class="p">())</span>
+
+    <span class="k">return</span> <span class="n">projection</span>
+</pre></div>
+</div>
+</div>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[ ]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="k">def</span><span class="w"> </span><span class="nf">undirected_edge_list</span><span class="p">(</span><span class="n">swc_list</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Parse a list of SWC lines into an undirected edge list.</span>
+
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="n">edge_list</span> <span class="o">=</span> <span class="p">{}</span>
+    <span class="n">graph</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="c1"># swc_list -&gt; (id, type, x,y,z, radius, parent)</span>
+    <span class="k">for</span> <span class="n">line</span> <span class="ow">in</span> <span class="n">swc_list</span><span class="p">:</span>
+        <span class="k">if</span> <span class="n">line</span><span class="p">[</span><span class="mi">6</span><span class="p">]</span> <span class="o">==</span> <span class="o">-</span><span class="mi">1</span><span class="p">:</span>
+            <span class="k">continue</span>
+        <span class="n">graph</span><span class="o">.</span><span class="n">append</span><span class="p">([</span><span class="nb">int</span><span class="p">(</span><span class="n">line</span><span class="p">[</span><span class="mi">0</span><span class="p">]),</span> <span class="nb">int</span><span class="p">(</span><span class="n">line</span><span class="p">[</span><span class="mi">6</span><span class="p">])])</span>
+    <span class="n">graph</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="n">graph</span><span class="p">)</span>
+    <span class="c1"># Make graph undirected</span>
+    <span class="n">graph</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">vstack</span><span class="p">([</span><span class="n">graph</span><span class="p">,</span> <span class="n">graph</span><span class="p">[:,</span> <span class="p">::</span><span class="o">-</span><span class="mi">1</span><span class="p">]])</span>
+    <span class="c1"># for node id in the first column, find all connected nodes in the second column</span>
+    <span class="n">ids</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">unique</span><span class="p">(</span><span class="n">graph</span><span class="p">[:,</span> <span class="mi">0</span><span class="p">])</span>
+    <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="n">ids</span><span class="p">:</span>
+        <span class="n">adjacents</span> <span class="o">=</span> <span class="n">graph</span><span class="p">[</span><span class="n">graph</span><span class="p">[:,</span> <span class="mi">0</span><span class="p">]</span> <span class="o">==</span> <span class="n">i</span><span class="p">,</span> <span class="mi">1</span><span class="p">]</span>
+        <span class="n">edge_list</span><span class="p">[</span><span class="n">i</span><span class="o">.</span><span class="n">item</span><span class="p">()]</span> <span class="o">=</span> <span class="n">adjacents</span><span class="o">.</span><span class="n">tolist</span><span class="p">()</span>
+
+    <span class="k">return</span> <span class="n">edge_list</span>
+
+
+<span class="k">def</span><span class="w"> </span><span class="nf">parse_swc</span><span class="p">(</span><span class="n">swc_list</span><span class="p">,</span> <span class="n">transpose</span><span class="o">=</span><span class="kc">True</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;</span>
+<span class="sd">    Parse a list of SWC lines and return an directed adjacency list of neuron sections,</span>
+<span class="sd">    and a dictionary of sections with their corresponding coordinates. Sections are defined</span>
+<span class="sd">    as the nodes between and including branching points or terminal points.</span>
+
+<span class="sd">    Parameters</span>
+<span class="sd">    ----------</span>
+<span class="sd">    swc_list : list of lists</span>
+<span class="sd">        The list of SWC lines</span>
+<span class="sd">    transpose : bool, optional</span>
+<span class="sd">        Whether to transpose coordinates (i.e. (x,y,z)-&gt;(z,y,x)). (default is True)</span>
+
+<span class="sd">    Returns</span>
+<span class="sd">    -------</span>
+<span class="sd">    sections : dict</span>
+<span class="sd">        The dictionary of sections with their corresponding coordinates.</span>
+<span class="sd">    sections_graph : dict</span>
+<span class="sd">        The directed adjacency list of neuron sections.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+
+    <span class="c1"># Compute undirected edge list</span>
+    <span class="n">edge_list</span> <span class="o">=</span> <span class="n">undirected_edge_list</span><span class="p">(</span><span class="n">swc_list</span><span class="p">)</span>
+    <span class="c1"># Make list of branching nodes</span>
+    <span class="n">branchings</span> <span class="o">=</span> <span class="p">[</span><span class="n">i</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="n">edge_list</span><span class="o">.</span><span class="n">keys</span><span class="p">()</span> <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">edge_list</span><span class="p">[</span><span class="n">i</span><span class="p">])</span> <span class="o">&gt;</span> <span class="mi">2</span><span class="p">]</span>
+
+    <span class="k">while</span> <span class="nb">len</span><span class="p">(</span><span class="n">edge_list</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">1</span><span class="p">:</span>
+        <span class="c1"># Make list of terminal nodes</span>
+        <span class="n">terminals</span> <span class="o">=</span> <span class="p">[</span><span class="n">i</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="n">edge_list</span><span class="o">.</span><span class="n">keys</span><span class="p">()</span> <span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">edge_list</span><span class="p">[</span><span class="n">i</span><span class="p">])</span> <span class="o">==</span> <span class="mi">1</span><span class="p">]</span>
+        <span class="c1"># from each terminal node walk along the tree until you reach a branching node</span>
+        <span class="c1"># or another terminal node</span>
+        <span class="n">sections</span> <span class="o">=</span> <span class="p">{}</span>
+        <span class="n">section_ends</span> <span class="o">=</span> <span class="p">{}</span>
+        <span class="k">for</span> <span class="n">terminal</span> <span class="ow">in</span> <span class="n">terminals</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">edge_list</span><span class="p">[</span><span class="n">terminal</span><span class="p">]</span> <span class="o">==</span> <span class="p">[]:</span> <span class="c1"># if terminal node is the only node left</span>
+                <span class="k">break</span>
+            <span class="n">section</span> <span class="o">=</span> <span class="p">[]</span>
+            <span class="n">node</span> <span class="o">=</span> <span class="n">terminal</span>
+            <span class="k">while</span> <span class="kc">True</span><span class="p">:</span>
+                <span class="n">next_node</span> <span class="o">=</span> <span class="n">edge_list</span><span class="p">[</span><span class="n">node</span><span class="p">][</span><span class="mi">0</span><span class="p">]</span>
+                <span class="n">section</span><span class="o">.</span><span class="n">append</span><span class="p">([</span><span class="n">swc_list</span><span class="p">[</span><span class="n">node</span><span class="o">-</span><span class="mi">1</span><span class="p">][</span><span class="mi">2</span><span class="p">:</span><span class="mi">6</span><span class="p">],</span> <span class="n">swc_list</span><span class="p">[</span><span class="n">next_node</span><span class="o">-</span><span class="mi">1</span><span class="p">][</span><span class="mi">2</span><span class="p">:</span><span class="mi">6</span><span class="p">]])</span>
+                <span class="n">edge_list</span><span class="o">.</span><span class="n">pop</span><span class="p">(</span><span class="n">node</span><span class="p">)</span>
+                <span class="n">edge_list</span><span class="p">[</span><span class="n">next_node</span><span class="p">]</span><span class="o">.</span><span class="n">remove</span><span class="p">(</span><span class="n">node</span><span class="p">)</span>
+                <span class="n">node</span> <span class="o">=</span> <span class="n">next_node</span>
+
+                <span class="k">if</span> <span class="n">node</span> <span class="ow">in</span> <span class="n">branchings</span> <span class="ow">or</span> <span class="n">node</span> <span class="ow">in</span> <span class="n">terminals</span><span class="p">:</span>
+                    <span class="c1"># complete the section</span>
+                    <span class="n">section</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">array</span><span class="p">(</span><span class="n">section</span><span class="p">)</span>
+                    <span class="k">if</span> <span class="n">transpose</span><span class="p">:</span>
+                        <span class="n">section</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">concatenate</span><span class="p">((</span><span class="n">section</span><span class="p">[:,:,:</span><span class="mi">3</span><span class="p">][:,:,::</span><span class="o">-</span><span class="mi">1</span><span class="p">],</span> <span class="n">section</span><span class="p">[:,:,</span><span class="mi">3</span><span class="p">,</span><span class="kc">None</span><span class="p">]),</span> <span class="n">axis</span><span class="o">=-</span><span class="mi">1</span><span class="p">)</span>
+                    <span class="n">sections</span><span class="p">[</span><span class="n">terminal</span><span class="p">]</span> <span class="o">=</span> <span class="n">section</span>
+                    <span class="n">section_ends</span><span class="p">[</span><span class="n">terminal</span><span class="p">]</span> <span class="o">=</span> <span class="n">node</span>
+
+                    <span class="k">break</span>
+
+    <span class="k">for</span> <span class="n">section</span> <span class="ow">in</span> <span class="n">section_ends</span><span class="p">:</span>
+        <span class="n">sections_graph</span> <span class="o">=</span> <span class="p">{</span><span class="n">section</span><span class="p">:</span> <span class="p">[]}</span>
+        <span class="c1"># find all sections that have the same end node</span>
+        <span class="k">for</span> <span class="n">other_section</span> <span class="ow">in</span> <span class="n">section_ends</span><span class="p">:</span>
+            <span class="k">if</span> <span class="n">other_section</span> <span class="o">==</span> <span class="n">section</span><span class="p">:</span>
+                <span class="k">continue</span>
+            <span class="k">if</span> <span class="n">section_ends</span><span class="p">[</span><span class="n">section</span><span class="p">]</span> <span class="o">==</span> <span class="n">section_ends</span><span class="p">[</span><span class="n">other_section</span><span class="p">]:</span>
+                <span class="n">sections_graph</span><span class="p">[</span><span class="n">section</span><span class="p">]</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">other_section</span><span class="p">)</span>
+
+    <span class="k">return</span> <span class="n">sections</span><span class="p">,</span> <span class="n">sections_graph</span>
+<br/></pre></div>
 </div>
 </div>
 <section id="Collect-branch-classifier-training-data">
@@ -139,258 +305,86 @@
 <div class="line">in the SWC file with an added small random translation. Image patches are labeled 1 if they are centered on</div>
 <div class="line">a branch point and 0 otherwise.</div>
 </div>
-<div class="nbinput docutils container">
-<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[44]:
+<section id="Get-sample-points-from-swc-files-then-save-sample-spherical-patches">
+<h3>Get sample points from swc files then save sample spherical patches<a class="headerlink" href="#Get-sample-points-from-swc-files-then-save-sample-spherical-patches" title="Link to this heading"></a></h3>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[35]:
 </pre></div>
 </div>
-<div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">img_file</span> <span class="o">=</span> <span class="s2">&quot;/home/brysongray/bmap/gold166_tifs/09-2902-04R-01C-60x_merge_c1.tif&quot;</span>
+<div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="c1"># Load SWC file data into python lists</span>
+<span class="n">swc_dir</span> <span class="o">=</span> <span class="s2">&quot;/home/brysongray/data/gold166_swc_scaled&quot;</span>
+<span class="n">swc_files</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">listdir</span><span class="p">(</span><span class="n">swc_dir</span><span class="p">)</span>
 
-<span class="n">img</span> <span class="o">=</span> <span class="n">tf</span><span class="o">.</span><span class="n">imread</span><span class="p">(</span><span class="n">img_file</span><span class="p">)</span>
+<span class="n">image_dir</span> <span class="o">=</span> <span class="s2">&quot;/home/brysongray/data/gold166_tifs_scaled/&quot;</span>
+<span class="n">image_files</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">listdir</span><span class="p">(</span><span class="n">image_dir</span><span class="p">)</span>
 
-<span class="n">fig</span><span class="p">,</span> <span class="n">ax</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">subplots</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span><span class="mi">3</span><span class="p">,</span> <span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">12</span><span class="p">,</span><span class="mi">4</span><span class="p">))</span>
-<span class="n">ax</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">imshow</span><span class="p">(</span><span class="n">img</span><span class="o">.</span><span class="n">max</span><span class="p">(</span><span class="mi">0</span><span class="p">))</span>
-<span class="n">ax</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">imshow</span><span class="p">(</span><span class="n">img</span><span class="o">.</span><span class="n">max</span><span class="p">(</span><span class="mi">1</span><span class="p">))</span>
-<span class="n">ax</span><span class="p">[</span><span class="mi">2</span><span class="p">]</span><span class="o">.</span><span class="n">imshow</span><span class="p">(</span><span class="n">img</span><span class="o">.</span><span class="n">max</span><span class="p">(</span><span class="mi">2</span><span class="p">))</span>
-<br/></pre></div>
-</div>
-</div>
-<div class="nboutput docutils container">
-<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[44]:
+<span class="n">out_dir</span> <span class="o">=</span> <span class="s2">&quot;/home/brysongray/data/gold166_classifier_data/&quot;</span>
+<span class="k">if</span> <span class="ow">not</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">exists</span><span class="p">(</span><span class="n">out_dir</span><span class="p">):</span>
+    <span class="n">os</span><span class="o">.</span><span class="n">makedirs</span><span class="p">(</span><span class="n">out_dir</span><span class="p">,</span> <span class="n">exist_ok</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+<span class="k">if</span> <span class="ow">not</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">exists</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">out_dir</span><span class="p">,</span> <span class="s2">&quot;observations&quot;</span><span class="p">)):</span>
+    <span class="n">os</span><span class="o">.</span><span class="n">makedirs</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">out_dir</span><span class="p">,</span> <span class="s2">&quot;observations&quot;</span><span class="p">))</span>
 </pre></div>
 </div>
-<div class="output_area docutils container">
-<div class="highlight"><pre>
-&lt;matplotlib.image.AxesImage at 0x70573a979c40&gt;
-</pre></div></div>
-</div>
-<div class="nboutput nblast docutils container">
-<div class="prompt empty docutils container">
-</div>
-<div class="output_area docutils container">
-<img alt="_images/branch_classifier_4_1.png" src="_images/branch_classifier_4_1.png" />
-</div>
-</div>
-<div class="nbinput docutils container">
-<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[45]:
-</pre></div>
-</div>
-<div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="c1"># file = &quot;/Users/brysongray/Downloads/gold166/p_checked6_fruitfly_larvae_gmu/done_1_CL-I_X_OREGON_R_ddaD_membrane-GFP/1_CL-I_X_OREGON_R_ddaD_membrane-GFP.tif.v3dpbd.ano_stamp_2015_06_16_12_16.swc&quot;</span>
-<span class="n">file</span> <span class="o">=</span> <span class="s2">&quot;/home/brysongray/Downloads/gold166/e_checked6_chick_uw/DONE_09-2902-04R-01C-60x_merge_c1/09-2902-04R-01C-60x_merge_c1.v3dpbd.swc&quot;</span>
-
-<span class="c1"># load and parse the SWC file data</span>
-<span class="n">swc_list</span> <span class="o">=</span> <span class="n">load</span><span class="o">.</span><span class="n">swc</span><span class="p">(</span><span class="n">file</span><span class="p">)</span>
-<span class="n">sections</span><span class="p">,</span> <span class="n">section_graph</span><span class="p">,</span> <span class="n">branches</span><span class="p">,</span> <span class="n">terminals</span><span class="p">,</span> <span class="n">scale</span> <span class="o">=</span> <span class="n">load</span><span class="o">.</span><span class="n">parse_swc_list</span><span class="p">(</span><span class="n">swc_list</span><span class="p">,</span> <span class="n">adjust</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
-</pre></div>
-</div>
-</div>
-<div class="nboutput nblast docutils container">
-<div class="prompt empty docutils container">
-</div>
-<div class="output_area docutils container">
-<div class="highlight"><pre>
-loading file: /home/brysongray/Downloads/gold166/e_checked6_chick_uw/DONE_09-2902-04R-01C-60x_merge_c1/09-2902-04R-01C-60x_merge_c1.v3dpbd.swc
-</pre></div></div>
 </div>
 <div class="nbinput nblast docutils container">
-<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[46]:
+<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[40]:
 </pre></div>
 </div>
-<div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">segments</span> <span class="o">=</span> <span class="p">[]</span>
+<div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="c1"># swc_file = swc_files[1]</span>
+<span class="c1"># swc_list = load.swc(os.path.join(swc_dir, swc_file), verbose=False)</span>
+<span class="n">swc_list</span> <span class="o">=</span> <span class="n">load</span><span class="o">.</span><span class="n">swc</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">swc_dir</span><span class="p">,</span> <span class="s1">&#39;GMR_57C10_AD_01-Two_recombinase_flipouts_A-f-A-20111108_4_E3-left_optic_lobe.v3draw.extract_1.v3dpbd.swc&#39;</span><span class="p">),</span> <span class="n">verbose</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+
+<span class="n">sections</span><span class="p">,</span> <span class="n">section_graph</span> <span class="o">=</span> <span class="n">parse_swc</span><span class="p">(</span><span class="n">swc_list</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+<div class="nbinput docutils container">
+<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[19]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">swc_file</span> <span class="o">=</span> <span class="n">swc_files</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span>
+<span class="n">swc_list</span> <span class="o">=</span> <span class="n">load</span><span class="o">.</span><span class="n">swc</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">swc_dir</span><span class="p">,</span> <span class="n">swc_file</span><span class="p">),</span> <span class="n">verbose</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+<span class="n">img_name</span> <span class="o">=</span> <span class="p">[</span><span class="n">img_file</span> <span class="k">for</span> <span class="n">img_file</span> <span class="ow">in</span> <span class="n">image_files</span> <span class="k">if</span> <span class="n">img_file</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s1">&#39;.tif&#39;</span><span class="p">)[</span><span class="mi">0</span><span class="p">]</span> <span class="ow">in</span> <span class="n">swc_file</span><span class="p">]</span>
+<span class="n">img_name</span> <span class="o">=</span> <span class="n">img_name</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+<span class="n">img</span> <span class="o">=</span> <span class="n">tf</span><span class="o">.</span><span class="n">imread</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">image_dir</span><span class="p">,</span> <span class="n">img_name</span><span class="p">))</span>
+<span class="n">sections</span><span class="p">,</span> <span class="n">graph</span> <span class="o">=</span> <span class="n">load</span><span class="o">.</span><span class="n">parse_swc_list_original</span><span class="p">(</span><span class="n">swc_list</span><span class="p">)</span>
+<span class="n">branches</span><span class="p">,</span> <span class="n">terminals</span> <span class="o">=</span> <span class="n">load</span><span class="o">.</span><span class="n">get_critical_points</span><span class="p">(</span><span class="n">swc_list</span><span class="p">,</span> <span class="n">graph</span><span class="p">,</span> <span class="n">sections</span><span class="p">)</span>
+
+<span class="n">segments</span> <span class="o">=</span> <span class="p">[]</span>
 <span class="k">for</span> <span class="n">section</span> <span class="ow">in</span> <span class="n">sections</span><span class="o">.</span><span class="n">values</span><span class="p">():</span>
     <span class="n">segments</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">section</span><span class="p">)</span>
 <span class="n">segments</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">concatenate</span><span class="p">(</span><span class="n">segments</span><span class="p">)</span>
-
-<span class="c1"># shape = torch.ceil(torch.amax(segments, dim=(0,1)))</span>
-<span class="c1"># shape = shape.to(torch.int)</span>
-<span class="c1"># shape = shape + torch.tensor([10, 10, 10])  # type: ignore</span>
-<span class="c1"># shape = tuple(shape.tolist())</span>
-
-<span class="n">density</span> <span class="o">=</span> <span class="n">draw</span><span class="o">.</span><span class="n">draw_neuron_density</span><span class="p">(</span><span class="n">segments</span><span class="p">,</span> <span class="n">img</span><span class="o">.</span><span class="n">shape</span><span class="p">,</span> <span class="n">width</span><span class="o">=</span><span class="mi">3</span><span class="p">)</span>
-<span class="n">mask</span> <span class="o">=</span> <span class="n">draw</span><span class="o">.</span><span class="n">draw_neuron_mask</span><span class="p">(</span><span class="n">density</span><span class="p">,</span> <span class="n">threshold</span><span class="o">=</span><span class="mf">5.0</span><span class="p">)</span>
 </pre></div>
 </div>
-</div>
-<div class="nbinput docutils container">
-<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[47]:
-</pre></div>
-</div>
-<div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="c1"># img_ = img / 255.0</span>
-<span class="c1"># # comp = np.stack((np.zeros(img.shape), np.array(mask[0]), img_), axis=-1)</span>
-<span class="c1"># comp = np.stack((np.zeros(img.shape), np.array(mask[0]), img_), axis=-1)</span>
-
-<span class="n">fig</span><span class="p">,</span> <span class="n">ax</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">subplots</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span><span class="mi">3</span><span class="p">,</span> <span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">12</span><span class="p">,</span><span class="mi">4</span><span class="p">))</span>
-<span class="n">ax</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">imshow</span><span class="p">(</span><span class="n">img</span><span class="o">.</span><span class="n">max</span><span class="p">(</span><span class="mi">0</span><span class="p">))</span>
-<span class="n">ax</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">imshow</span><span class="p">(</span><span class="n">mask</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">amax</span><span class="p">(</span><span class="mi">0</span><span class="p">))</span>
-<span class="n">ax</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">scatter</span><span class="p">(</span><span class="n">y</span><span class="o">=</span><span class="n">sections</span><span class="p">[</span><span class="mi">1</span><span class="p">][</span><span class="mi">0</span><span class="p">,</span><span class="mi">0</span><span class="p">,</span><span class="mi">1</span><span class="p">],</span><span class="n">x</span><span class="o">=</span><span class="n">sections</span><span class="p">[</span><span class="mi">1</span><span class="p">][</span><span class="mi">0</span><span class="p">,</span><span class="mi">0</span><span class="p">,</span><span class="mi">2</span><span class="p">],</span> <span class="n">c</span><span class="o">=</span><span class="s1">&#39;r&#39;</span><span class="p">)</span>
-<span class="n">ax</span><span class="p">[</span><span class="mi">2</span><span class="p">]</span><span class="o">.</span><span class="n">imshow</span><span class="p">(</span><span class="n">img</span><span class="o">.</span><span class="n">max</span><span class="p">(</span><span class="mi">0</span><span class="p">))</span>
-<span class="n">ax</span><span class="p">[</span><span class="mi">2</span><span class="p">]</span><span class="o">.</span><span class="n">imshow</span><span class="p">(</span><span class="n">mask</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">amax</span><span class="p">(</span><span class="mi">0</span><span class="p">),</span> <span class="n">alpha</span><span class="o">=</span><span class="mf">0.3</span><span class="p">)</span>
-<br/></pre></div>
-</div>
-</div>
-<div class="nboutput docutils container">
-<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[47]:
-</pre></div>
-</div>
-<div class="output_area docutils container">
-<div class="highlight"><pre>
-&lt;matplotlib.image.AxesImage at 0x70573a9664b0&gt;
-</pre></div></div>
 </div>
 <div class="nboutput nblast docutils container">
 <div class="prompt empty docutils container">
 </div>
 <div class="output_area docutils container">
-<img alt="_images/branch_classifier_7_1.png" src="_images/branch_classifier_7_1.png" />
-</div>
-</div>
-<div class="nbinput nblast docutils container">
-<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[57]:
-</pre></div>
-</div>
-<div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">nibabel</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">nib</span>
-
-<span class="c1"># save the mask as a NIfTI file</span>
-<span class="n">nifti_img</span> <span class="o">=</span> <span class="n">nib</span><span class="o">.</span><span class="n">Nifti1Image</span><span class="p">(</span><span class="n">mask</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">numpy</span><span class="p">(),</span> <span class="n">affine</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">eye</span><span class="p">(</span><span class="mi">4</span><span class="p">))</span>
-<span class="n">nib</span><span class="o">.</span><span class="n">save</span><span class="p">(</span><span class="n">nifti_img</span><span class="p">,</span> <span class="s1">&#39;mask.nii&#39;</span><span class="p">)</span>
-
-<span class="c1"># save the img as a NIfTI file</span>
-<span class="n">nifti_img</span> <span class="o">=</span> <span class="n">nib</span><span class="o">.</span><span class="n">Nifti1Image</span><span class="p">(</span><span class="n">img</span><span class="p">,</span> <span class="n">affine</span><span class="o">=</span><span class="n">np</span><span class="o">.</span><span class="n">eye</span><span class="p">(</span><span class="mi">4</span><span class="p">))</span>
-<span class="n">nib</span><span class="o">.</span><span class="n">save</span><span class="p">(</span><span class="n">nifti_img</span><span class="p">,</span> <span class="s1">&#39;img.nii&#39;</span><span class="p">)</span>
-</pre></div>
-</div>
-</div>
-<p>Floodfill from seed point</p>
-<div class="nbinput nblast docutils container">
-<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[57]:
-</pre></div>
-</div>
-<div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="c1"># flood fill algorithm for 3d volume</span>
-<span class="k">def</span><span class="w"> </span><span class="nf">flood_fill</span><span class="p">(</span><span class="n">volume</span><span class="p">,</span> <span class="n">seed_point</span><span class="p">,</span> <span class="n">new_value</span><span class="p">,</span> <span class="n">tolerance</span><span class="o">=</span><span class="mi">0</span><span class="p">):</span>
-    <span class="c1"># Get the dimensions of the volume</span>
-    <span class="n">z_dim</span><span class="p">,</span> <span class="n">y_dim</span><span class="p">,</span> <span class="n">x_dim</span> <span class="o">=</span> <span class="n">volume</span><span class="o">.</span><span class="n">shape</span>
-
-    <span class="c1"># Create a copy of the volume to avoid modifying the original</span>
-    <span class="n">filled_volume</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">copy</span><span class="p">(</span><span class="n">volume</span><span class="p">)</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
-
-    <span class="c1"># Get the value at the seed point</span>
-    <span class="n">seed_value</span> <span class="o">=</span> <span class="n">filled_volume</span><span class="p">[</span><span class="o">*</span><span class="n">seed_point</span><span class="p">]</span>
-
-    <span class="c1"># Create a stack for the flood fill algorithm</span>
-    <span class="n">stack</span> <span class="o">=</span> <span class="p">[</span><span class="n">seed_point</span><span class="p">]</span>
-
-    <span class="k">while</span> <span class="n">stack</span><span class="p">:</span>
-        <span class="n">z</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">x</span> <span class="o">=</span> <span class="n">stack</span><span class="o">.</span><span class="n">pop</span><span class="p">()</span>
-
-        <span class="k">if</span> <span class="p">(</span><span class="mi">0</span> <span class="o">&lt;=</span> <span class="n">z</span> <span class="o">&lt;</span> <span class="n">z_dim</span> <span class="ow">and</span> <span class="mi">0</span> <span class="o">&lt;=</span> <span class="n">y</span> <span class="o">&lt;</span> <span class="n">y_dim</span> <span class="ow">and</span> <span class="mi">0</span> <span class="o">&lt;=</span> <span class="n">x</span> <span class="o">&lt;</span> <span class="n">x_dim</span> <span class="ow">and</span>
-                <span class="nb">abs</span><span class="p">(</span><span class="n">filled_volume</span><span class="p">[</span><span class="n">z</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">x</span><span class="p">]</span> <span class="o">-</span> <span class="n">seed_value</span><span class="p">)</span> <span class="o">&lt;=</span> <span class="n">tolerance</span><span class="p">):</span>
-            <span class="c1"># Set the new value</span>
-            <span class="n">filled_volume</span><span class="p">[</span><span class="n">z</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">x</span><span class="p">]</span> <span class="o">=</span> <span class="n">new_value</span>
-
-            <span class="c1"># Add neighboring points to the stack</span>
-            <span class="n">stack</span><span class="o">.</span><span class="n">append</span><span class="p">((</span><span class="n">z</span> <span class="o">+</span> <span class="mi">1</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">x</span><span class="p">))</span>
-            <span class="n">stack</span><span class="o">.</span><span class="n">append</span><span class="p">((</span><span class="n">z</span> <span class="o">-</span> <span class="mi">1</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">x</span><span class="p">))</span>
-            <span class="n">stack</span><span class="o">.</span><span class="n">append</span><span class="p">((</span><span class="n">z</span><span class="p">,</span> <span class="n">y</span> <span class="o">+</span> <span class="mi">1</span><span class="p">,</span> <span class="n">x</span><span class="p">))</span>
-            <span class="n">stack</span><span class="o">.</span><span class="n">append</span><span class="p">((</span><span class="n">z</span><span class="p">,</span> <span class="n">y</span> <span class="o">-</span> <span class="mi">1</span><span class="p">,</span> <span class="n">x</span><span class="p">))</span>
-            <span class="n">stack</span><span class="o">.</span><span class="n">append</span><span class="p">((</span><span class="n">z</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">x</span> <span class="o">+</span> <span class="mi">1</span><span class="p">))</span>
-            <span class="n">stack</span><span class="o">.</span><span class="n">append</span><span class="p">((</span><span class="n">z</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">x</span> <span class="o">-</span> <span class="mi">1</span><span class="p">))</span>
-
-    <span class="k">return</span> <span class="n">filled_volume</span>
-<br/></pre></div>
-</div>
-</div>
-<div class="nbinput nblast docutils container">
-<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[61]:
-</pre></div>
-</div>
-<div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="c1"># moravec detector</span>
-<span class="k">def</span><span class="w"> </span><span class="nf">moravec_detector</span><span class="p">(</span><span class="n">volume</span><span class="p">,</span> <span class="n">window_size</span><span class="o">=</span><span class="mi">3</span><span class="p">):</span>
-    <span class="c1"># Get the dimensions of the volume</span>
-    <span class="n">z_dim</span><span class="p">,</span> <span class="n">y_dim</span><span class="p">,</span> <span class="n">x_dim</span> <span class="o">=</span> <span class="n">volume</span><span class="o">.</span><span class="n">shape</span>
-
-    <span class="c1"># Create a copy of the volume to avoid modifying the original</span>
-    <span class="n">moravec_volume</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros_like</span><span class="p">(</span><span class="n">volume</span><span class="p">)</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
-
-    <span class="c1"># Define the half window size</span>
-    <span class="n">half_window</span> <span class="o">=</span> <span class="n">window_size</span> <span class="o">//</span> <span class="mi">2</span>
-
-    <span class="c1"># Iterate over each voxel in the volume</span>
-    <span class="k">for</span> <span class="n">z</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">half_window</span><span class="p">,</span> <span class="n">z_dim</span> <span class="o">-</span> <span class="n">half_window</span><span class="p">):</span>
-        <span class="k">for</span> <span class="n">y</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">half_window</span><span class="p">,</span> <span class="n">y_dim</span> <span class="o">-</span> <span class="n">half_window</span><span class="p">):</span>
-            <span class="k">for</span> <span class="n">x</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="n">half_window</span><span class="p">,</span> <span class="n">x_dim</span> <span class="o">-</span> <span class="n">half_window</span><span class="p">):</span>
-                <span class="c1"># Extract the window</span>
-                <span class="n">window</span> <span class="o">=</span> <span class="n">volume</span><span class="p">[</span><span class="n">z</span> <span class="o">-</span> <span class="n">half_window</span><span class="p">:</span><span class="n">z</span> <span class="o">+</span> <span class="n">half_window</span> <span class="o">+</span> <span class="mi">1</span><span class="p">,</span>
-                                <span class="n">y</span> <span class="o">-</span> <span class="n">half_window</span><span class="p">:</span><span class="n">y</span> <span class="o">+</span> <span class="n">half_window</span> <span class="o">+</span> <span class="mi">1</span><span class="p">,</span>
-                                <span class="n">x</span> <span class="o">-</span> <span class="n">half_window</span><span class="p">:</span><span class="n">x</span> <span class="o">+</span> <span class="n">half_window</span> <span class="o">+</span> <span class="mi">1</span><span class="p">]</span>
-
-                <span class="c1"># Compute the sum of squared differences</span>
-                <span class="n">ssd</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">sum</span><span class="p">((</span><span class="n">window</span> <span class="o">-</span> <span class="n">window</span><span class="o">.</span><span class="n">mean</span><span class="p">())</span> <span class="o">**</span> <span class="mi">2</span><span class="p">)</span>
-
-                <span class="c1"># Store the result in the moravec volume</span>
-                <span class="n">moravec_volume</span><span class="p">[</span><span class="n">z</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">x</span><span class="p">]</span> <span class="o">=</span> <span class="n">ssd</span>
-
-    <span class="k">return</span> <span class="n">moravec_volume</span>
-<br/></pre></div>
-</div>
-</div>
-<div class="nbinput nblast docutils container">
-<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[81]:
-</pre></div>
-</div>
-<div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">scipy.ndimage</span><span class="w"> </span><span class="kn">import</span> <span class="n">gaussian_filter</span>
-
-<span class="c1"># harris detector</span>
-<span class="k">def</span><span class="w"> </span><span class="nf">harris_detector</span><span class="p">(</span><span class="n">volume</span><span class="p">,</span> <span class="n">sigma</span><span class="o">=</span><span class="mf">3.0</span><span class="p">,</span> <span class="n">k</span><span class="o">=</span><span class="mf">0.04</span><span class="p">):</span>
-    <span class="c1"># Get the dimensions of the volume</span>
-    <span class="n">z_dim</span><span class="p">,</span> <span class="n">y_dim</span><span class="p">,</span> <span class="n">x_dim</span> <span class="o">=</span> <span class="n">volume</span><span class="o">.</span><span class="n">shape</span>
-
-    <span class="c1"># Create a copy of the volume to avoid modifying the original</span>
-    <span class="n">harris_volume</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros_like</span><span class="p">(</span><span class="n">volume</span><span class="p">)</span><span class="o">.</span><span class="n">astype</span><span class="p">(</span><span class="n">np</span><span class="o">.</span><span class="n">float32</span><span class="p">)</span>
-
-    <span class="c1"># Compute gradients in each direction</span>
-    <span class="n">Ix</span> <span class="o">=</span>  <span class="n">gaussian_filter</span><span class="p">(</span><span class="n">volume</span><span class="p">,</span> <span class="n">sigma</span><span class="o">=</span><span class="p">[</span><span class="n">sigma</span><span class="p">]</span><span class="o">*</span><span class="mi">3</span><span class="p">,</span> <span class="n">order</span><span class="o">=</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="mi">0</span><span class="p">,</span><span class="mi">1</span><span class="p">))</span>
-    <span class="n">Iy</span> <span class="o">=</span>  <span class="n">gaussian_filter</span><span class="p">(</span><span class="n">volume</span><span class="p">,</span> <span class="n">sigma</span><span class="o">=</span><span class="p">[</span><span class="n">sigma</span><span class="p">]</span><span class="o">*</span><span class="mi">3</span><span class="p">,</span> <span class="n">order</span><span class="o">=</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span><span class="mi">1</span><span class="p">,</span><span class="mi">0</span><span class="p">))</span>
-    <span class="n">Iz</span> <span class="o">=</span>  <span class="n">gaussian_filter</span><span class="p">(</span><span class="n">volume</span><span class="p">,</span> <span class="n">sigma</span><span class="o">=</span><span class="p">[</span><span class="n">sigma</span><span class="p">]</span><span class="o">*</span><span class="mi">3</span><span class="p">,</span> <span class="n">order</span><span class="o">=</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span><span class="mi">0</span><span class="p">,</span><span class="mi">0</span><span class="p">))</span>
-
-    <span class="c1"># Compute products of gradients</span>
-    <span class="n">Ixx</span> <span class="o">=</span> <span class="n">Ix</span> <span class="o">*</span> <span class="n">Ix</span>
-    <span class="n">Iyy</span> <span class="o">=</span> <span class="n">Iy</span> <span class="o">*</span> <span class="n">Iy</span>
-    <span class="n">Izz</span> <span class="o">=</span> <span class="n">Iz</span> <span class="o">*</span> <span class="n">Iz</span>
-    <span class="n">Ixy</span> <span class="o">=</span> <span class="n">Ix</span> <span class="o">*</span> <span class="n">Iy</span>
-    <span class="n">Ixz</span> <span class="o">=</span> <span class="n">Ix</span> <span class="o">*</span> <span class="n">Iz</span>
-    <span class="n">Iyz</span> <span class="o">=</span> <span class="n">Iy</span> <span class="o">*</span> <span class="n">Iz</span>
-
-    <span class="c1"># Compute the Harris response for each voxel</span>
-    <span class="n">S</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">stack</span><span class="p">((</span><span class="n">Ixx</span><span class="p">,</span> <span class="n">Ixy</span><span class="p">,</span> <span class="n">Ixz</span><span class="p">,</span> <span class="n">Ixy</span><span class="p">,</span> <span class="n">Iyy</span><span class="p">,</span> <span class="n">Iyz</span><span class="p">,</span> <span class="n">Ixz</span><span class="p">,</span> <span class="n">Iyz</span><span class="p">,</span> <span class="n">Izz</span><span class="p">),</span> <span class="n">axis</span><span class="o">=-</span><span class="mi">1</span><span class="p">)</span>
-    <span class="n">S</span> <span class="o">=</span> <span class="n">S</span><span class="o">.</span><span class="n">reshape</span><span class="p">((</span><span class="n">S</span><span class="o">.</span><span class="n">shape</span><span class="p">[:</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span><span class="o">+</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span><span class="mi">3</span><span class="p">)))</span>
-
-    <span class="c1"># Compute the Harris response</span>
-    <span class="n">det_S</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">linalg</span><span class="o">.</span><span class="n">det</span><span class="p">(</span><span class="n">S</span><span class="p">)</span>
-    <span class="n">trace_S</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">trace</span><span class="p">(</span><span class="n">S</span><span class="p">,</span> <span class="n">axis1</span><span class="o">=-</span><span class="mi">2</span><span class="p">,</span> <span class="n">axis2</span><span class="o">=-</span><span class="mi">1</span><span class="p">)</span>
-    <span class="n">harris_volume</span> <span class="o">=</span> <span class="n">det_S</span> <span class="o">-</span> <span class="n">k</span> <span class="o">*</span> <span class="p">(</span><span class="n">trace_S</span> <span class="o">**</span> <span class="mi">2</span><span class="p">)</span>
-
-    <span class="k">return</span> <span class="n">harris_volume</span> <span class="o">/</span> <span class="n">harris_volume</span><span class="o">.</span><span class="n">min</span><span class="p">()</span>
-</pre></div>
-</div>
-</div>
-<div class="nbinput docutils container">
-<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[13]:
-</pre></div>
-</div>
-<div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">seed_point</span>
-</pre></div>
-</div>
-</div>
-<div class="nboutput nblast docutils container">
-<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[13]:
-</pre></div>
-</div>
-<div class="output_area docutils container">
 <div class="highlight"><pre>
-[29, 443, 526]
+<span class="ansi-red-fg">---------------------------------------------------------------------------</span>
+<span class="ansi-red-fg">KeyError</span>                                  Traceback (most recent call last)
+Cell <span class="ansi-green-fg">In[19], line 7</span>
+<span class="ansi-green-intense-fg ansi-bold">      5</span> img <span style="color: rgb(98,98,98)">=</span> tf<span style="color: rgb(98,98,98)">.</span>imread(os<span style="color: rgb(98,98,98)">.</span>path<span style="color: rgb(98,98,98)">.</span>join(image_dir, img_name))
+<span class="ansi-green-intense-fg ansi-bold">      6</span> sections, graph <span style="color: rgb(98,98,98)">=</span> load<span style="color: rgb(98,98,98)">.</span>parse_swc_list_original(swc_list)
+<span class="ansi-green-fg">----&gt; 7</span> branches, terminals <span style="color: rgb(98,98,98)">=</span> <span class="ansi-yellow-bg">load</span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">.</span><span class="ansi-yellow-bg">get_critical_points</span><span class="ansi-yellow-bg">(</span><span class="ansi-yellow-bg">swc_list</span><span class="ansi-yellow-bg">,</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg">graph</span><span class="ansi-yellow-bg">,</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg">sections</span><span class="ansi-yellow-bg">)</span>
+<span class="ansi-green-intense-fg ansi-bold">      9</span> segments <span style="color: rgb(98,98,98)">=</span> []
+<span class="ansi-green-intense-fg ansi-bold">     10</span> <span class="ansi-bold" style="color: rgb(0,135,0)">for</span> section <span class="ansi-bold" style="color: rgb(175,0,255)">in</span> sections<span style="color: rgb(98,98,98)">.</span>values():
+
+File <span class="ansi-green-fg">~/neurotrack/notebooks/../data_prep/load.py:295</span>, in <span class="ansi-cyan-fg">get_critical_points</span><span class="ansi-blue-fg">(swc_list, graph, sections, transpose)</span>
+<span class="ansi-green-intense-fg ansi-bold">    291</span> <span class="ansi-bold" style="color: rgb(0,135,0)">for</span> child <span class="ansi-bold" style="color: rgb(175,0,255)">in</span> value:
+<span class="ansi-green-intense-fg ansi-bold">    292</span>     <span style="color: rgb(95,135,135)"># get the last position of each section starting from the current key</span>
+<span class="ansi-green-intense-fg ansi-bold">    293</span>     <span style="color: rgb(95,135,135)"># length = 0</span>
+<span class="ansi-green-intense-fg ansi-bold">    294</span>     i <span style="color: rgb(98,98,98)">=</span> child
+<span class="ansi-green-fg">--&gt; 295</span>     <span class="ansi-bold" style="color: rgb(0,135,0)">while</span> <span style="color: rgb(0,135,0)">len</span>(<span class="ansi-yellow-bg">graph</span><span class="ansi-yellow-bg">[</span><span class="ansi-yellow-bg">i</span><span class="ansi-yellow-bg">]</span>) <span style="color: rgb(98,98,98)">&gt;</span> <span style="color: rgb(98,98,98)">0</span>:
+<span class="ansi-green-intense-fg ansi-bold">    296</span>         i <span style="color: rgb(98,98,98)">+</span><span style="color: rgb(98,98,98)">=</span> <span style="color: rgb(98,98,98)">1</span>
+<span class="ansi-green-intense-fg ansi-bold">    297</span>         <span style="color: rgb(95,135,135)"># length += 1</span>
+
+<span class="ansi-red-fg">KeyError</span>: 3653
 </pre></div></div>
 </div>
 <div class="nbinput docutils container">
-<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[14]:
+<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[11]:
 </pre></div>
 </div>
 <div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">img</span><span class="o">.</span><span class="n">shape</span>
@@ -398,122 +392,831 @@ loading file: /home/brysongray/Downloads/gold166/e_checked6_chick_uw/DONE_09-290
 </div>
 </div>
 <div class="nboutput nblast docutils container">
-<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[14]:
+<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[11]:
 </pre></div>
 </div>
 <div class="output_area docutils container">
 <div class="highlight"><pre>
-(62, 1024, 1024)
+(112, 1600, 1600)
 </pre></div></div>
 </div>
 <div class="nbinput docutils container">
-<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[63]:
+<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[18]:
 </pre></div>
 </div>
-<div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="c1"># flood fill img starting at seed point</span>
-<span class="c1"># from skimage.segmentation import flood_fill</span>
+<div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="c1"># display the image with a branch point</span>
+<span class="n">plt</span><span class="o">.</span><span class="n">imshow</span><span class="p">(</span><span class="n">img</span><span class="p">[</span><span class="mi">56</span><span class="p">])</span>
 
-<span class="c1"># seed_point = (int(sections[1][0,0,1]), int(sections[1][0,0,2]))</span>
-<span class="n">seed_point</span> <span class="o">=</span> <span class="n">sections</span><span class="p">[</span><span class="mi">1</span><span class="p">][</span><span class="mi">0</span><span class="p">,</span><span class="mi">0</span><span class="p">,:</span><span class="mi">3</span><span class="p">]</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">int</span><span class="p">)</span><span class="o">.</span><span class="n">tolist</span><span class="p">()</span>
-<span class="n">filled_img</span> <span class="o">=</span> <span class="n">flood_fill</span><span class="p">(</span><span class="n">img</span><span class="p">,</span> <span class="n">seed_point</span><span class="p">,</span> <span class="mi">255</span><span class="p">,</span> <span class="n">tolerance</span><span class="o">=</span><span class="mi">80</span><span class="p">)</span>
-<span class="n">filled_img</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">where</span><span class="p">(</span><span class="n">filled_img</span> <span class="o">==</span> <span class="mi">255</span><span class="p">,</span> <span class="n">filled_img</span><span class="p">,</span> <span class="mi">0</span><span class="p">)</span>
-<span class="n">fig</span><span class="p">,</span> <span class="n">ax</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">subplots</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span><span class="mi">3</span><span class="p">,</span> <span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">12</span><span class="p">,</span><span class="mi">4</span><span class="p">))</span>
-<span class="n">ax</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">imshow</span><span class="p">(</span><span class="n">img</span><span class="o">.</span><span class="n">max</span><span class="p">(</span><span class="mi">0</span><span class="p">))</span>
-<span class="n">ax</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">imshow</span><span class="p">(</span><span class="n">mask</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">amax</span><span class="p">(</span><span class="mi">0</span><span class="p">))</span>
-<span class="n">ax</span><span class="p">[</span><span class="mi">2</span><span class="p">]</span><span class="o">.</span><span class="n">imshow</span><span class="p">(</span><span class="n">filled_img</span><span class="o">.</span><span class="n">max</span><span class="p">(</span><span class="mi">0</span><span class="p">))</span>
+<span class="n">plt</span><span class="o">.</span><span class="n">show</span><span class="p">()</span>
 </pre></div>
 </div>
-</div>
-<div class="nboutput docutils container">
-<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[63]:
-</pre></div>
-</div>
-<div class="output_area docutils container">
-<div class="highlight"><pre>
-&lt;matplotlib.image.AxesImage at 0x704443e53830&gt;
-</pre></div></div>
 </div>
 <div class="nboutput nblast docutils container">
 <div class="prompt empty docutils container">
 </div>
 <div class="output_area docutils container">
-<img alt="_images/branch_classifier_15_1.png" src="_images/branch_classifier_15_1.png" />
+<img alt="_images/branch_classifier_11_0.png" src="_images/branch_classifier_11_0.png" />
+</div>
+</div>
+<div class="nbinput docutils container">
+<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[5]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">swc_list</span> <span class="o">=</span> <span class="n">load</span><span class="o">.</span><span class="n">swc</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">swc_dir</span><span class="p">,</span> <span class="s1">&#39;GMR_57C10_AD_01-Two_recombinase_flipouts_A-f-A-20111108_4_E3-left_optic_lobe.v3draw.extract_1.v3dpbd.swc&#39;</span><span class="p">),</span> <span class="n">verbose</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+<span class="n">sections</span><span class="p">,</span> <span class="n">graph</span> <span class="o">=</span> <span class="n">load</span><span class="o">.</span><span class="n">parse_swc_list</span><span class="p">(</span><span class="n">swc_list</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+<div class="nboutput nblast docutils container">
+<div class="prompt empty docutils container">
+</div>
+<div class="output_area docutils container">
+<div class="highlight"><pre>
+<span class="ansi-red-fg">---------------------------------------------------------------------------</span>
+<span class="ansi-red-fg">AttributeError</span>                            Traceback (most recent call last)
+Cell <span class="ansi-green-fg">In[5], line 2</span>
+<span class="ansi-green-intense-fg ansi-bold">      1</span> swc_list <span style="color: rgb(98,98,98)">=</span> load<span style="color: rgb(98,98,98)">.</span>swc(os<span style="color: rgb(98,98,98)">.</span>path<span style="color: rgb(98,98,98)">.</span>join(swc_dir, <span style="color: rgb(175,0,0)">&#39;</span><span style="color: rgb(175,0,0)">GMR_57C10_AD_01-Two_recombinase_flipouts_A-f-A-20111108_4_E3-left_optic_lobe.v3draw.extract_1.v3dpbd.swc</span><span style="color: rgb(175,0,0)">&#39;</span>), verbose<span style="color: rgb(98,98,98)">=</span><span class="ansi-bold" style="color: rgb(0,135,0)">False</span>)
+<span class="ansi-green-fg">----&gt; 2</span> sections, graph <span style="color: rgb(98,98,98)">=</span> <span class="ansi-yellow-bg">load</span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">.</span><span class="ansi-yellow-bg">parse_swc_list</span><span class="ansi-yellow-bg">(</span><span class="ansi-yellow-bg">swc_list</span><span class="ansi-yellow-bg">)</span>
+
+File <span class="ansi-green-fg">~/neurotrack/notebooks/../data_prep/load.py:235</span>, in <span class="ansi-cyan-fg">parse_swc_list</span><span class="ansi-blue-fg">(swc_list, transpose)</span>
+<span class="ansi-green-intense-fg ansi-bold">    233</span>             <span class="ansi-bold" style="color: rgb(0,135,0)">break</span>
+<span class="ansi-green-intense-fg ansi-bold">    234</span> <span class="ansi-bold" style="color: rgb(0,135,0)">elif</span> <span style="color: rgb(0,135,0)">len</span>(value) <span style="color: rgb(98,98,98)">==</span> <span style="color: rgb(98,98,98)">1</span>:
+<span class="ansi-green-fg">--&gt; 235</span>     <span class="ansi-yellow-bg">sections</span><span class="ansi-yellow-bg">[</span><span class="ansi-yellow-bg">section_id</span><span class="ansi-yellow-bg">]</span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">.</span><span class="ansi-yellow-bg">append</span>([swc_list[key<span style="color: rgb(98,98,98)">-</span><span style="color: rgb(98,98,98)">1</span>][<span style="color: rgb(98,98,98)">2</span>:<span style="color: rgb(98,98,98)">6</span>], swc_list[value[<span style="color: rgb(98,98,98)">0</span>]<span style="color: rgb(98,98,98)">-</span><span style="color: rgb(98,98,98)">1</span>][<span style="color: rgb(98,98,98)">2</span>:<span style="color: rgb(98,98,98)">6</span>]])
+<span class="ansi-green-intense-fg ansi-bold">    236</span> <span class="ansi-bold" style="color: rgb(0,135,0)">else</span>:
+<span class="ansi-green-intense-fg ansi-bold">    237</span>     <span style="color: rgb(95,135,135)"># Edit 2/5/25: Every branch spawns new sections and terminates the parent section</span>
+<span class="ansi-green-intense-fg ansi-bold">    238</span>     <span class="ansi-bold" style="color: rgb(0,135,0)">if</span> <span style="color: rgb(0,135,0)">len</span>(sections[section_id]) <span style="color: rgb(98,98,98)">==</span> <span style="color: rgb(98,98,98)">0</span>: <span style="color: rgb(95,135,135)"># The section is empty. This might happen if the root node is also a branch.</span>
+<span class="ansi-green-intense-fg ansi-bold">    239</span>         <span style="color: rgb(95,135,135)"># In this case do not terminate the section</span>
+
+<span class="ansi-red-fg">AttributeError</span>: &#39;Tensor&#39; object has no attribute &#39;append&#39;
+</pre></div></div>
+</div>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[ ]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">swc_list</span> <span class="o">=</span> <span class="n">load</span><span class="o">.</span><span class="n">swc</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">swc_dir</span><span class="p">,</span> <span class="n">swc_files</span><span class="p">[</span><span class="mi">0</span><span class="p">]),</span> <span class="n">verbose</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+<span class="n">sections</span><span class="p">,</span> <span class="n">graph</span> <span class="o">=</span> <span class="n">load</span><span class="o">.</span><span class="n">parse_swc_list</span><span class="p">(</span><span class="n">swc_list</span><span class="p">)</span>
+</pre></div>
 </div>
 </div>
 <div class="nbinput nblast docutils container">
-<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[93]:
+<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[ ]:
 </pre></div>
 </div>
-<div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">test_img</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">zeros</span><span class="p">((</span><span class="mi">35</span><span class="p">,</span><span class="mi">35</span><span class="p">,</span><span class="mi">35</span><span class="p">))</span>
-<span class="n">test_img</span><span class="p">[</span><span class="mi">7</span><span class="p">:</span><span class="mi">21</span><span class="p">,</span><span class="mi">7</span><span class="p">:</span><span class="mi">21</span><span class="p">,</span><span class="mi">7</span><span class="p">:</span><span class="mi">21</span><span class="p">]</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">ones</span><span class="p">((</span><span class="mi">14</span><span class="p">,</span><span class="mi">14</span><span class="p">,</span><span class="mi">14</span><span class="p">))</span>
+<div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="s1">&#39;GMR_57C10_AD_01-Two_recombinase_flipouts_A-f-A-20111108_4_E3-left_optic_lobe.v3draw.extract_1.v3dpbd.swc&#39;</span>
 </pre></div>
 </div>
 </div>
 <div class="nbinput docutils container">
-<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[97]:
+<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[13]:
 </pre></div>
 </div>
-<div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">harris_img</span> <span class="o">=</span> <span class="n">harris_detector</span><span class="p">(</span><span class="n">test_img</span><span class="p">,</span> <span class="n">sigma</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span> <span class="n">k</span><span class="o">=</span><span class="mf">0.04</span><span class="p">)</span>
+<div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">samples_per_neuron</span> <span class="o">=</span> <span class="mi">1000</span>
+<span class="n">rng</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">default_rng</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
 
-<span class="n">plt</span><span class="o">.</span><span class="n">imshow</span><span class="p">(</span><span class="n">harris_img</span><span class="o">.</span><span class="n">max</span><span class="p">(</span><span class="mi">0</span><span class="p">))</span>
+<span class="n">annotations</span> <span class="o">=</span> <span class="p">{}</span>
+<span class="n">obs_id</span> <span class="o">=</span> <span class="mi">6000</span>
+<span class="k">for</span> <span class="n">swc_file</span> <span class="ow">in</span> <span class="n">swc_files</span><span class="p">[</span><span class="mi">6</span><span class="p">:]:</span>
+    <span class="n">swc_list</span> <span class="o">=</span> <span class="n">load</span><span class="o">.</span><span class="n">swc</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">swc_dir</span><span class="p">,</span> <span class="n">swc_file</span><span class="p">),</span> <span class="n">verbose</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+    <span class="n">img_name</span> <span class="o">=</span> <span class="p">[</span><span class="n">img_file</span> <span class="k">for</span> <span class="n">img_file</span> <span class="ow">in</span> <span class="n">image_files</span> <span class="k">if</span> <span class="n">img_file</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s1">&#39;.tif&#39;</span><span class="p">)[</span><span class="mi">0</span><span class="p">]</span> <span class="ow">in</span> <span class="n">swc_file</span><span class="p">]</span>
+    <span class="k">try</span><span class="p">:</span>
+        <span class="n">img_name</span> <span class="o">=</span> <span class="n">img_name</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+    <span class="k">except</span> <span class="ne">IndexError</span><span class="p">:</span>
+        <span class="k">continue</span>
+    <span class="n">img</span> <span class="o">=</span> <span class="n">tf</span><span class="o">.</span><span class="n">imread</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">image_dir</span><span class="p">,</span> <span class="n">img_name</span><span class="p">))</span>
+    <span class="n">shape</span> <span class="o">=</span> <span class="n">img</span><span class="o">.</span><span class="n">shape</span>
+
+    <span class="k">del</span> <span class="n">img</span>
+
+    <span class="n">sections</span><span class="p">,</span> <span class="n">graph</span><span class="p">,</span> <span class="n">branches</span><span class="p">,</span> <span class="n">terminals</span><span class="p">,</span> <span class="n">scale</span> <span class="o">=</span> <span class="n">load</span><span class="o">.</span><span class="n">parse_swc_list</span><span class="p">(</span><span class="n">swc_list</span><span class="p">,</span> <span class="n">adjust</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+
+    <span class="n">segments</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="k">for</span> <span class="n">section</span> <span class="ow">in</span> <span class="n">sections</span><span class="o">.</span><span class="n">values</span><span class="p">():</span>
+        <span class="n">segments</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">section</span><span class="p">)</span>
+    <span class="n">segments</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">concatenate</span><span class="p">(</span><span class="n">segments</span><span class="p">)</span>
+
+
+    <span class="n">density</span> <span class="o">=</span> <span class="n">draw</span><span class="o">.</span><span class="n">draw_neuron_density</span><span class="p">(</span><span class="n">segments</span><span class="p">,</span> <span class="n">shape</span><span class="p">)</span>
+    <span class="n">mask</span> <span class="o">=</span> <span class="n">draw</span><span class="o">.</span><span class="n">draw_neuron_mask</span><span class="p">(</span><span class="n">density</span><span class="p">,</span> <span class="n">threshold</span><span class="o">=</span><span class="mf">5.0</span><span class="p">)</span>
+    <span class="k">del</span> <span class="n">density</span>
+
+    <span class="n">branch_mask</span> <span class="o">=</span> <span class="n">Image</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">zeros_like</span><span class="p">(</span><span class="n">mask</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">bool</span><span class="p">))</span>
+    <span class="k">for</span> <span class="n">point</span> <span class="ow">in</span> <span class="n">branches</span><span class="p">:</span>
+        <span class="n">branch_mask</span><span class="o">.</span><span class="n">draw_point</span><span class="p">(</span><span class="n">point</span><span class="p">[:</span><span class="mi">3</span><span class="p">],</span> <span class="n">radius</span><span class="o">=</span><span class="n">point</span><span class="p">[</span><span class="mi">3</span><span class="p">]</span><span class="o">.</span><span class="n">item</span><span class="p">(),</span> <span class="n">binary</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">value</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">channel</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+    <span class="c1"># branch_coords = []</span>
+    <span class="c1"># # get sample_per_neuron/2 branch samples</span>
+    <span class="c1"># i = 0</span>
+    <span class="c1"># while i &lt; int(samples_per_neuron/2):</span>
+    <span class="c1">#     # randomly sample a point in the image</span>
+    <span class="c1">#     z = rng.integers(0, shape[0])</span>
+    <span class="c1">#     y = rng.integers(0, shape[1])</span>
+    <span class="c1">#     x = rng.integers(0, shape[2])</span>
+    <span class="c1">#     # if the point is in background, add it to the list</span>
+    <span class="c1">#     if branch_mask.data[0,z, y, x]:</span>
+    <span class="c1">#         branch_coords.append([z, y, x])</span>
+    <span class="c1">#         i += 1</span>
+    <span class="n">branch_coords</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">argwhere</span><span class="p">(</span><span class="n">branch_mask</span><span class="o">.</span><span class="n">data</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>
+    <span class="n">branch_coords</span> <span class="o">=</span> <span class="n">rng</span><span class="o">.</span><span class="n">choice</span><span class="p">(</span><span class="n">branch_coords</span><span class="p">,</span> <span class="nb">int</span><span class="p">(</span><span class="n">samples_per_neuron</span><span class="o">/</span><span class="mi">2</span><span class="p">),</span> <span class="n">replace</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">axis</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+
+    <span class="n">neuron_nonbranch</span> <span class="o">=</span> <span class="n">mask</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">&amp;</span> <span class="o">~</span><span class="n">branch_mask</span><span class="o">.</span><span class="n">data</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+    <span class="c1"># neuron_nonbranch_coords = []</span>
+    <span class="c1"># # get sample_per_neuron/4 neuron nonbranch samples</span>
+    <span class="c1"># i = 0</span>
+    <span class="c1"># while i &lt; int(samples_per_neuron/4):</span>
+    <span class="c1">#     # randomly sample a point in the image</span>
+    <span class="c1">#     z = rng.integers(0, shape[0])</span>
+    <span class="c1">#     y = rng.integers(0, shape[1])</span>
+    <span class="c1">#     x = rng.integers(0, shape[2])</span>
+    <span class="c1">#     # if the point is in background, add it to the list</span>
+    <span class="c1">#     if neuron_nonbranch[z, y, x]:</span>
+    <span class="c1">#         neuron_nonbranch_coords.append([z, y, x])</span>
+    <span class="c1">#         i += 1</span>
+    <span class="c1"># del neuron_nonbranch</span>
+    <span class="n">neuron_nonbranch_coords</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">argwhere</span><span class="p">(</span><span class="n">neuron_nonbranch</span><span class="p">)</span>
+    <span class="n">neuron_nonbranch_coords</span> <span class="o">=</span> <span class="n">rng</span><span class="o">.</span><span class="n">choice</span><span class="p">(</span><span class="n">neuron_nonbranch_coords</span><span class="p">,</span> <span class="nb">int</span><span class="p">(</span><span class="n">samples_per_neuron</span><span class="o">/</span><span class="mi">4</span><span class="p">),</span> <span class="n">replace</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">axis</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+
+    <span class="n">background</span> <span class="o">=</span> <span class="o">~</span><span class="p">(</span><span class="n">mask</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span> <span class="o">&amp;</span> <span class="n">branch_mask</span><span class="o">.</span><span class="n">data</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>
+    <span class="k">del</span> <span class="n">mask</span>
+    <span class="n">background_coords</span> <span class="o">=</span> <span class="p">[]</span>
+    <span class="c1"># get sample_per_neuron/4 background samples</span>
+    <span class="n">i</span> <span class="o">=</span> <span class="mi">0</span>
+    <span class="k">while</span> <span class="n">i</span> <span class="o">&lt;</span> <span class="nb">int</span><span class="p">(</span><span class="n">samples_per_neuron</span><span class="o">/</span><span class="mi">4</span><span class="p">):</span>
+        <span class="c1"># randomly sample a point in the image</span>
+        <span class="n">z</span> <span class="o">=</span> <span class="n">rng</span><span class="o">.</span><span class="n">integers</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">shape</span><span class="p">[</span><span class="mi">0</span><span class="p">])</span>
+        <span class="n">y</span> <span class="o">=</span> <span class="n">rng</span><span class="o">.</span><span class="n">integers</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">shape</span><span class="p">[</span><span class="mi">1</span><span class="p">])</span>
+        <span class="n">x</span> <span class="o">=</span> <span class="n">rng</span><span class="o">.</span><span class="n">integers</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="n">shape</span><span class="p">[</span><span class="mi">2</span><span class="p">])</span>
+        <span class="c1"># if the point is in background, add it to the list</span>
+        <span class="k">if</span> <span class="n">background</span><span class="p">[</span><span class="n">z</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">x</span><span class="p">]:</span>
+            <span class="n">background_coords</span><span class="o">.</span><span class="n">append</span><span class="p">([</span><span class="n">z</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">x</span><span class="p">])</span>
+            <span class="n">i</span> <span class="o">+=</span> <span class="mi">1</span>
+    <span class="c1"># background_coords = np.argwhere(background)</span>
+    <span class="c1"># background_coords = rng.choice(background_coords, int(samples_per_neuron/4), replace=False, axis=1)</span>
+    <span class="k">del</span> <span class="n">background</span>
+
+    <span class="n">non_branch_coords</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">concatenate</span><span class="p">((</span><span class="n">background_coords</span><span class="p">,</span> <span class="n">neuron_nonbranch_coords</span><span class="o">.</span><span class="n">T</span><span class="p">),</span> <span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+
+    <span class="n">img</span> <span class="o">=</span> <span class="n">tf</span><span class="o">.</span><span class="n">imread</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">image_dir</span><span class="p">,</span> <span class="n">img_name</span><span class="p">))</span>
+    <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">branch_coords</span><span class="p">)):</span>
+        <span class="n">spherical_patches</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="k">for</span> <span class="n">r</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span><span class="mi">55</span><span class="p">,</span><span class="mi">3</span><span class="p">):</span>
+            <span class="n">patch</span> <span class="o">=</span> <span class="n">extract_spherical_patch</span><span class="p">(</span><span class="n">img</span><span class="p">,</span> <span class="n">branch_coords</span><span class="p">[</span><span class="n">i</span><span class="p">],</span> <span class="n">radius</span><span class="o">=</span><span class="n">r</span><span class="p">)</span>
+            <span class="n">spherical_patches</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">patch</span><span class="p">)</span>
+        <span class="n">patch</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">stack</span><span class="p">(</span><span class="n">spherical_patches</span><span class="p">,</span> <span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+        <span class="c1"># patch = np.stack([extract_spherical_patch(img, branch_coords[i], radius=r) for r in range(3,55,3)], axis=0)</span>
+        <span class="n">fname</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;obs_</span><span class="si">{</span><span class="n">obs_id</span><span class="si">}</span><span class="s2">.pt&quot;</span>
+        <span class="n">torch</span><span class="o">.</span><span class="n">save</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">from_numpy</span><span class="p">(</span><span class="n">patch</span><span class="p">),</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">out_dir</span><span class="p">,</span> <span class="s2">&quot;observations&quot;</span><span class="p">),</span> <span class="n">fname</span><span class="p">))</span>
+        <span class="n">annotations</span><span class="p">[</span><span class="n">fname</span><span class="p">]</span> <span class="o">=</span> <span class="mi">1</span>
+        <span class="n">obs_id</span> <span class="o">+=</span> <span class="mi">1</span>
+    <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">non_branch_coords</span><span class="p">)):</span>
+        <span class="n">spherical_patches</span> <span class="o">=</span> <span class="p">[]</span>
+        <span class="k">for</span> <span class="n">r</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span><span class="mi">55</span><span class="p">,</span><span class="mi">3</span><span class="p">):</span>
+            <span class="n">patch</span> <span class="o">=</span> <span class="n">extract_spherical_patch</span><span class="p">(</span><span class="n">img</span><span class="p">,</span> <span class="n">non_branch_coords</span><span class="p">[</span><span class="n">i</span><span class="p">],</span> <span class="n">radius</span><span class="o">=</span><span class="n">r</span><span class="p">)</span>
+            <span class="n">spherical_patches</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">patch</span><span class="p">)</span>
+        <span class="n">patch</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">stack</span><span class="p">(</span><span class="n">spherical_patches</span><span class="p">,</span> <span class="n">axis</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+        <span class="c1"># patch = np.stack([extract_spherical_patch(img, non_branch_coords[i], radius=r) for r in range(3,55,3)], axis=0)</span>
+        <span class="n">fname</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;obs_</span><span class="si">{</span><span class="n">obs_id</span><span class="si">}</span><span class="s2">.pt&quot;</span>
+        <span class="n">torch</span><span class="o">.</span><span class="n">save</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">from_numpy</span><span class="p">(</span><span class="n">patch</span><span class="p">),</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">out_dir</span><span class="p">,</span> <span class="s2">&quot;observations&quot;</span><span class="p">),</span> <span class="n">fname</span><span class="p">))</span>
+        <span class="n">annotations</span><span class="p">[</span><span class="n">fname</span><span class="p">]</span> <span class="o">=</span> <span class="mi">0</span>
+        <span class="n">obs_id</span> <span class="o">+=</span> <span class="mi">1</span>
+
+<span class="c1"># save annotations</span>
+<span class="c1"># split into test and training data</span>
+<span class="n">name</span> <span class="o">=</span> <span class="s2">&quot;gold166&quot;</span>
+<span class="n">data_permutation</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">randperm</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">annotations</span><span class="p">))</span>
+<span class="n">test_idxs</span> <span class="o">=</span> <span class="n">data_permutation</span><span class="p">[:</span><span class="nb">len</span><span class="p">(</span><span class="n">data_permutation</span><span class="p">)</span><span class="o">//</span><span class="mi">5</span><span class="p">]</span><span class="o">.</span><span class="n">tolist</span><span class="p">()</span>
+<span class="n">training_idxs</span> <span class="o">=</span> <span class="n">data_permutation</span><span class="p">[</span><span class="nb">len</span><span class="p">(</span><span class="n">data_permutation</span><span class="p">)</span><span class="o">//</span><span class="mi">5</span><span class="p">:]</span><span class="o">.</span><span class="n">tolist</span><span class="p">()</span>
+<span class="n">training_annotations</span> <span class="o">=</span> <span class="p">{</span><span class="nb">list</span><span class="p">(</span><span class="n">annotations</span><span class="p">)[</span><span class="n">i</span><span class="p">]:</span> <span class="nb">list</span><span class="p">(</span><span class="n">annotations</span><span class="o">.</span><span class="n">values</span><span class="p">())[</span><span class="n">i</span><span class="p">]</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="n">training_idxs</span><span class="p">}</span>
+<span class="n">test_annotations</span> <span class="o">=</span> <span class="p">{</span><span class="nb">list</span><span class="p">(</span><span class="n">annotations</span><span class="p">)[</span><span class="n">i</span><span class="p">]:</span> <span class="nb">list</span><span class="p">(</span><span class="n">annotations</span><span class="o">.</span><span class="n">values</span><span class="p">())[</span><span class="n">i</span><span class="p">]</span> <span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="n">test_idxs</span><span class="p">}</span>
+<span class="c1"># save</span>
+<span class="n">df</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="o">.</span><span class="n">from_dict</span><span class="p">(</span><span class="n">training_annotations</span><span class="p">,</span> <span class="n">orient</span><span class="o">=</span><span class="s2">&quot;index&quot;</span><span class="p">)</span>
+<span class="n">df</span><span class="o">.</span><span class="n">to_csv</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">out_dir</span><span class="p">,</span> <span class="sa">f</span><span class="s2">&quot;branch_classifier_</span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2">_</span><span class="si">{</span><span class="n">date</span><span class="si">}</span><span class="s2">_training_labels.csv&quot;</span><span class="p">))</span>
+<span class="n">df</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="o">.</span><span class="n">from_dict</span><span class="p">(</span><span class="n">test_annotations</span><span class="p">,</span> <span class="n">orient</span><span class="o">=</span><span class="s2">&quot;index&quot;</span><span class="p">)</span>
+<span class="n">df</span><span class="o">.</span><span class="n">to_csv</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">out_dir</span><span class="p">,</span> <span class="sa">f</span><span class="s2">&quot;branch_classifier_</span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2">_</span><span class="si">{</span><span class="n">date</span><span class="si">}</span><span class="s2">_test_labels.csv&quot;</span><span class="p">))</span>
+</pre></div>
+</div>
+</div>
+<div class="nboutput nblast docutils container">
+<div class="prompt empty docutils container">
+</div>
+<div class="output_area docutils container">
+<div class="highlight"><pre>
+<span class="ansi-red-fg">---------------------------------------------------------------------------</span>
+<span class="ansi-red-fg">KeyError</span>                                  Traceback (most recent call last)
+Cell <span class="ansi-green-fg">In[13], line 18</span>
+<span class="ansi-green-intense-fg ansi-bold">     14</span> shape <span style="color: rgb(98,98,98)">=</span> img<span style="color: rgb(98,98,98)">.</span>shape
+<span class="ansi-green-intense-fg ansi-bold">     16</span> <span class="ansi-bold" style="color: rgb(0,135,0)">del</span> img
+<span class="ansi-green-fg">---&gt; 18</span> sections, graph, branches, terminals, scale <span style="color: rgb(98,98,98)">=</span> <span class="ansi-yellow-bg">load</span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">.</span><span class="ansi-yellow-bg">parse_swc_list</span><span class="ansi-yellow-bg">(</span><span class="ansi-yellow-bg">swc_list</span><span class="ansi-yellow-bg">,</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg">adjust</span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">=</span><span class="ansi-yellow-bg ansi-bold" style="color: rgb(0,135,0)">False</span><span class="ansi-yellow-bg">)</span>
+<span class="ansi-green-intense-fg ansi-bold">     20</span> segments <span style="color: rgb(98,98,98)">=</span> []
+<span class="ansi-green-intense-fg ansi-bold">     21</span> <span class="ansi-bold" style="color: rgb(0,135,0)">for</span> section <span class="ansi-bold" style="color: rgb(175,0,255)">in</span> sections<span style="color: rgb(98,98,98)">.</span>values():
+
+File <span class="ansi-green-fg">~/neurotrack/notebooks/../data_prep/load.py:170</span>, in <span class="ansi-cyan-fg">parse_swc_list</span><span class="ansi-blue-fg">(swc_list, adjust, transpose)</span>
+<span class="ansi-green-intense-fg ansi-bold">    168</span>     section_graph[section_id] <span style="color: rgb(98,98,98)">=</span> []
+<span class="ansi-green-intense-fg ansi-bold">    169</span> <span class="ansi-bold" style="color: rgb(0,135,0)">elif</span> <span style="color: rgb(0,135,0)">len</span>(value) <span style="color: rgb(98,98,98)">==</span> <span style="color: rgb(98,98,98)">1</span>:
+<span class="ansi-green-fg">--&gt; 170</span>     <span class="ansi-yellow-bg">sections</span><span class="ansi-yellow-bg">[</span><span class="ansi-yellow-bg">section_id</span><span class="ansi-yellow-bg">]</span><span style="color: rgb(98,98,98)">.</span>append([swc_list[key<span style="color: rgb(98,98,98)">-</span><span style="color: rgb(98,98,98)">1</span>][<span style="color: rgb(98,98,98)">2</span>:<span style="color: rgb(98,98,98)">6</span>], swc_list[value[<span style="color: rgb(98,98,98)">0</span>]<span style="color: rgb(98,98,98)">-</span><span style="color: rgb(98,98,98)">1</span>][<span style="color: rgb(98,98,98)">2</span>:<span style="color: rgb(98,98,98)">6</span>]])
+<span class="ansi-green-intense-fg ansi-bold">    171</span> <span class="ansi-bold" style="color: rgb(0,135,0)">else</span>:
+<span class="ansi-green-intense-fg ansi-bold">    172</span>     <span style="color: rgb(95,135,135)"># Edit 2/5/25: Every branch spawns new sections and terminates the parent section</span>
+<span class="ansi-green-intense-fg ansi-bold">    173</span>     <span class="ansi-bold" style="color: rgb(0,135,0)">if</span> <span style="color: rgb(0,135,0)">len</span>(sections[section_id]) <span style="color: rgb(98,98,98)">==</span> <span style="color: rgb(98,98,98)">0</span>: <span style="color: rgb(95,135,135)"># The section is empty. This might happen if the root node is also a branch.</span>
+<span class="ansi-green-intense-fg ansi-bold">    174</span>         <span style="color: rgb(95,135,135)"># In this case do not terminate the section</span>
+
+<span class="ansi-red-fg">KeyError</span>: 44
+</pre></div></div>
+</div>
+</section>
+<section id="View-some-example-input-images">
+<h3>View some example input images<a class="headerlink" href="#View-some-example-input-images" title="Link to this heading"></a></h3>
+<div class="nbinput docutils container">
+<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[29]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="c1"># observations = os.listdir(os.path.join(out_dir, &quot;observations&quot;))</span>
+<span class="c1"># training_annotations = pd.read_csv(glob(os.path.join(out_dir, &quot;*_labels.csv&quot;))[0])</span>
+<span class="c1"># ids = np.random.choice(len(training_annotations), size=9)</span>
+<span class="c1"># sample = training_annotations.iloc[ids]</span>
+
+<span class="n">fig</span><span class="p">,</span> <span class="n">ax</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">subplots</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span><span class="mi">3</span><span class="p">)</span>
+<span class="n">ax</span> <span class="o">=</span> <span class="n">ax</span><span class="o">.</span><span class="n">flatten</span><span class="p">()</span>
+<span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">ax</span><span class="p">)):</span>
+    <span class="n">img</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">out_dir</span><span class="p">,</span><span class="s2">&quot;observations&quot;</span><span class="p">,</span> <span class="n">sample</span><span class="o">.</span><span class="n">iloc</span><span class="p">[</span><span class="n">i</span><span class="p">,</span><span class="mi">0</span><span class="p">]),</span> <span class="n">weights_only</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+    <span class="n">shell</span> <span class="o">=</span> <span class="mi">5</span> <span class="c1"># type: ignore</span>
+    <span class="n">ax</span><span class="p">[</span><span class="n">i</span><span class="p">]</span><span class="o">.</span><span class="n">imshow</span><span class="p">(</span><span class="n">img</span><span class="p">[</span><span class="n">shell</span><span class="p">])</span><span class="c1">#, vmin=0, vmax=.0)</span>
+    <span class="n">ax</span><span class="p">[</span><span class="n">i</span><span class="p">]</span><span class="o">.</span><span class="n">set_title</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;label: </span><span class="si">{</span><span class="n">sample</span><span class="o">.</span><span class="n">iloc</span><span class="p">[</span><span class="n">i</span><span class="p">,</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">item</span><span class="p">()</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+    <span class="n">ax</span><span class="p">[</span><span class="n">i</span><span class="p">]</span><span class="o">.</span><span class="n">set_axis_off</span><span class="p">()</span>
+</pre></div>
+</div>
+</div>
+<div class="nboutput nblast docutils container">
+<div class="prompt empty docutils container">
+</div>
+<div class="output_area docutils container">
+<img alt="_images/branch_classifier_17_0.png" src="_images/branch_classifier_17_0.png" />
+</div>
+</div>
+<div class="nbinput docutils container">
+<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[6]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">observations</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">listdir</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">out_dir</span><span class="p">,</span> <span class="s2">&quot;observations&quot;</span><span class="p">))</span>
+<span class="n">training_annotations</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">read_csv</span><span class="p">(</span><span class="n">glob</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">out_dir</span><span class="p">,</span> <span class="s2">&quot;*_labels.csv&quot;</span><span class="p">))[</span><span class="mi">0</span><span class="p">])</span>
+<span class="n">ids</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">choice</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">training_annotations</span><span class="p">),</span> <span class="n">size</span><span class="o">=</span><span class="mi">9</span><span class="p">)</span>
+<span class="n">sample</span> <span class="o">=</span> <span class="n">training_annotations</span><span class="o">.</span><span class="n">iloc</span><span class="p">[</span><span class="n">ids</span><span class="p">]</span>
+
+<span class="n">fig</span><span class="p">,</span> <span class="n">ax</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">subplots</span><span class="p">(</span><span class="mi">3</span><span class="p">,</span><span class="mi">3</span><span class="p">)</span>
+<span class="n">ax</span> <span class="o">=</span> <span class="n">ax</span><span class="o">.</span><span class="n">flatten</span><span class="p">()</span>
+<span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">ax</span><span class="p">)):</span>
+    <span class="n">img</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">out_dir</span><span class="p">,</span><span class="s2">&quot;observations&quot;</span><span class="p">,</span> <span class="n">sample</span><span class="o">.</span><span class="n">iloc</span><span class="p">[</span><span class="n">i</span><span class="p">,</span><span class="mi">0</span><span class="p">]),</span> <span class="n">weights_only</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+    <span class="n">shell</span> <span class="o">=</span> <span class="mi">5</span> <span class="c1"># type: ignore</span>
+    <span class="n">ax</span><span class="p">[</span><span class="n">i</span><span class="p">]</span><span class="o">.</span><span class="n">imshow</span><span class="p">(</span><span class="n">img</span><span class="p">[</span><span class="n">shell</span><span class="p">])</span>
+    <span class="n">ax</span><span class="p">[</span><span class="n">i</span><span class="p">]</span><span class="o">.</span><span class="n">set_title</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;label: </span><span class="si">{</span><span class="n">sample</span><span class="o">.</span><span class="n">iloc</span><span class="p">[</span><span class="n">i</span><span class="p">,</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">item</span><span class="p">()</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
+    <span class="n">ax</span><span class="p">[</span><span class="n">i</span><span class="p">]</span><span class="o">.</span><span class="n">set_axis_off</span><span class="p">()</span>
+</pre></div>
+</div>
+</div>
+<div class="nboutput nblast docutils container">
+<div class="prompt empty docutils container">
+</div>
+<div class="output_area docutils container">
+<img alt="_images/branch_classifier_18_0.png" src="_images/branch_classifier_18_0.png" />
+</div>
+</div>
+</section>
+</section>
+<section id="Train-branch-classifier">
+<h2>Train branch classifier<a class="headerlink" href="#Train-branch-classifier" title="Link to this heading"></a></h2>
+<section id="Instantiate-dataloader-for-training-and-test-datasets">
+<h3>Instantiate dataloader for training and test datasets<a class="headerlink" href="#Instantiate-dataloader-for-training-and-test-datasets" title="Link to this heading"></a></h3>
+<div class="line-block">
+<div class="line">Dataloaders use a weighted random sampler to balance classes. Additionally, the training dataset</div>
+<div class="line">adds a random permutation and flip to the image patch at retrieval.</div>
+</div>
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[4]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="c1"># set source data files paths</span>
+<span class="n">name</span> <span class="o">=</span> <span class="s2">&quot;gold166&quot;</span>
+<span class="n">date</span> <span class="o">=</span> <span class="s2">&quot;03-07-25&quot;</span>
+
+<span class="n">training_labels_file</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">out_dir</span><span class="p">,</span> <span class="sa">f</span><span class="s2">&quot;branch_classifier_</span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2">_</span><span class="si">{</span><span class="n">date</span><span class="si">}</span><span class="s2">_training_labels.csv&quot;</span><span class="p">)</span>
+<span class="n">test_labels_file</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">out_dir</span><span class="p">,</span> <span class="sa">f</span><span class="s2">&quot;branch_classifier_</span><span class="si">{</span><span class="n">name</span><span class="si">}</span><span class="s2">_</span><span class="si">{</span><span class="n">date</span><span class="si">}</span><span class="s2">_test_labels.csv&quot;</span><span class="p">)</span>
+<span class="n">img_dir</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">out_dir</span><span class="p">,</span> <span class="s2">&quot;observations&quot;</span><span class="p">)</span>
+
+<span class="c1"># instantiate training and test datasets</span>
+<span class="n">transform</span> <span class="o">=</span> <span class="n">branch_classifier</span><span class="o">.</span><span class="n">transform_spherical_patch</span> <span class="c1"># random permutation and flip</span>
+<span class="n">training_data</span> <span class="o">=</span> <span class="n">branch_classifier</span><span class="o">.</span><span class="n">StateData</span><span class="p">(</span><span class="n">labels_file</span><span class="o">=</span><span class="n">training_labels_file</span><span class="p">,</span>
+                          <span class="n">img_dir</span><span class="o">=</span><span class="n">img_dir</span><span class="p">,</span>
+                          <span class="n">transform</span><span class="o">=</span><span class="n">transform</span><span class="p">)</span>
+<span class="n">test_data</span> <span class="o">=</span> <span class="n">branch_classifier</span><span class="o">.</span><span class="n">StateData</span><span class="p">(</span><span class="n">labels_file</span><span class="o">=</span><span class="n">test_labels_file</span><span class="p">,</span>
+                          <span class="n">img_dir</span><span class="o">=</span><span class="n">img_dir</span><span class="p">)</span>
+
+<span class="c1"># instantiate dataloaders</span>
+<span class="n">batchsize</span><span class="o">=</span><span class="mi">64</span>
+<span class="n">training_dataloader</span> <span class="o">=</span> <span class="n">DataLoader</span><span class="p">(</span><span class="n">training_data</span><span class="p">,</span> <span class="n">batch_size</span><span class="o">=</span><span class="n">batchsize</span><span class="p">)</span>
+<span class="n">test_dataloader</span> <span class="o">=</span> <span class="n">DataLoader</span><span class="p">(</span><span class="n">test_data</span><span class="p">,</span> <span class="n">batch_size</span><span class="o">=</span><span class="n">batchsize</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+<div class="nbinput docutils container">
+<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[6]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">out_dir</span> <span class="o">=</span> <span class="s2">&quot;classifier_weights/&quot;</span>
+<span class="k">if</span> <span class="ow">not</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">exists</span><span class="p">(</span><span class="n">out_dir</span><span class="p">):</span>
+    <span class="n">os</span><span class="o">.</span><span class="n">makedirs</span><span class="p">(</span><span class="n">out_dir</span><span class="p">,</span> <span class="n">exist_ok</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
+
+<span class="n">lr</span> <span class="o">=</span> <span class="mf">1e-3</span>
+<span class="n">epochs</span> <span class="o">=</span> <span class="mi">100</span>
+<span class="n">classifier</span> <span class="o">=</span> <span class="n">models</span><span class="o">.</span><span class="n">ResNet2D</span><span class="p">(</span><span class="n">models</span><span class="o">.</span><span class="n">ResidualBlock2D</span><span class="p">,</span> <span class="p">[</span><span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">6</span><span class="p">,</span> <span class="mi">3</span><span class="p">],</span> <span class="n">in_channels</span><span class="o">=</span><span class="mi">18</span><span class="p">,</span> <span class="n">num_classes</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+<span class="n">classifier</span> <span class="o">=</span> <span class="n">classifier</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">device</span><span class="o">=</span><span class="n">DEVICE</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">dtype</span><span class="p">)</span>
+
+<span class="n">branch_classifier</span><span class="o">.</span><span class="n">train</span><span class="p">(</span><span class="n">training_dataloader</span><span class="p">,</span> <span class="n">test_dataloader</span><span class="p">,</span> <span class="n">out_dir</span><span class="p">,</span> <span class="n">lr</span><span class="p">,</span> <span class="n">epochs</span><span class="p">,</span> <span class="n">classifier</span><span class="p">,</span> <span class="n">state_dict</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span>
 </pre></div>
 </div>
 </div>
 <div class="nboutput docutils container">
-<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[97]:
-</pre></div>
+<div class="prompt empty docutils container">
 </div>
 <div class="output_area docutils container">
 <div class="highlight"><pre>
-&lt;matplotlib.image.AxesImage at 0x704955d52240&gt;
+Epoch 1
+-------------------------------
+Accuracy: 39.0625, Loss: 0.703391  [   64/  800]
+Accuracy: 62.5, Loss: 0.669111  [  704/  800]
+Test Error:
+ Accuracy: 56.0%, Avg loss: 4.881491
+           Precision: 0.494, Recall: 0.437
+Epoch 2
+-------------------------------
+Accuracy: 53.125, Loss: 0.704802  [   64/  800]
+Accuracy: 70.3125, Loss: 0.652787  [  704/  800]
+Test Error:
+ Accuracy: 61.5%, Avg loss: 0.599980
+           Precision: 0.534, Recall: 0.897
+Epoch 3
+-------------------------------
+Accuracy: 68.75, Loss: 0.640434  [   64/  800]
+Accuracy: 71.875, Loss: 0.638740  [  704/  800]
+Test Error:
+ Accuracy: 56.0%, Avg loss: 0.652177
+           Precision: 0.497, Recall: 0.966
+Epoch 4
+-------------------------------
+Accuracy: 56.25, Loss: 0.658557  [   64/  800]
+Accuracy: 71.875, Loss: 0.626720  [  704/  800]
+Test Error:
+ Accuracy: 61.0%, Avg loss: 0.633813
+           Precision: 0.529, Recall: 0.943
+Epoch 5
+-------------------------------
+Accuracy: 60.9375, Loss: 0.640943  [   64/  800]
+Accuracy: 67.1875, Loss: 0.637693  [  704/  800]
+Test Error:
+ Accuracy: 57.5%, Avg loss: 0.658243
+           Precision: 0.509, Recall: 0.655
+Epoch 6
+-------------------------------
+Accuracy: 62.5, Loss: 0.606103  [   64/  800]
+Accuracy: 65.625, Loss: 0.606612  [  704/  800]
+Test Error:
+ Accuracy: 55.5%, Avg loss: 0.657900
+           Precision: 0.494, Recall: 0.989
+Epoch 7
+-------------------------------
+Accuracy: 70.3125, Loss: 0.595890  [   64/  800]
+Accuracy: 68.75, Loss: 0.576913  [  704/  800]
+Test Error:
+ Accuracy: 57.0%, Avg loss: 0.701318
+           Precision: 0.526, Recall: 0.115
+Epoch 8
+-------------------------------
+Accuracy: 81.25, Loss: 0.452802  [   64/  800]
+Accuracy: 71.875, Loss: 0.559934  [  704/  800]
+Test Error:
+ Accuracy: 68.0%, Avg loss: 0.557682
+           Precision: 0.619, Recall: 0.690
+Epoch 9
+-------------------------------
+Accuracy: 75.0, Loss: 0.478215  [   64/  800]
+Accuracy: 71.875, Loss: 0.531449  [  704/  800]
+Test Error:
+ Accuracy: 61.5%, Avg loss: 0.684491
+           Precision: 0.778, Recall: 0.161
+Epoch 10
+-------------------------------
+Accuracy: 89.0625, Loss: 0.450271  [   64/  800]
+Accuracy: 75.0, Loss: 0.540185  [  704/  800]
+Test Error:
+ Accuracy: 55.5%, Avg loss: 1.540290
+           Precision: 0.000, Recall: 0.000
+Epoch 11
+-------------------------------
+Accuracy: 85.9375, Loss: 0.370702  [   64/  800]
+Accuracy: 84.375, Loss: 0.453712  [  704/  800]
+Test Error:
+ Accuracy: 58.0%, Avg loss: 1.221362
+           Precision: 0.588, Recall: 0.115
+Epoch 12
+-------------------------------
+Accuracy: 90.625, Loss: 0.251119  [   64/  800]
+Accuracy: 84.375, Loss: 0.373820  [  704/  800]
+Test Error:
+ Accuracy: 70.0%, Avg loss: 0.583933
+           Precision: 0.593, Recall: 0.989
+Epoch 13
+-------------------------------
+Accuracy: 92.1875, Loss: 0.224241  [   64/  800]
+Accuracy: 82.8125, Loss: 0.438444  [  704/  800]
+Test Error:
+ Accuracy: 54.5%, Avg loss: 1.281696
+           Precision: 0.489, Recall: 1.000
+Epoch 14
+-------------------------------
+Accuracy: 85.9375, Loss: 0.310433  [   64/  800]
+Accuracy: 92.1875, Loss: 0.315762  [  704/  800]
+Test Error:
+ Accuracy: 55.0%, Avg loss: 2.095819
+           Precision: 0.200, Recall: 0.011
+Epoch 15
+-------------------------------
+Accuracy: 90.625, Loss: 0.227195  [   64/  800]
+Accuracy: 90.625, Loss: 0.353017  [  704/  800]
+Test Error:
+ Accuracy: 83.5%, Avg loss: 0.386423
+           Precision: 0.821, Recall: 0.793
+Epoch 16
+-------------------------------
+Accuracy: 93.75, Loss: 0.203782  [   64/  800]
+Accuracy: 81.25, Loss: 0.408644  [  704/  800]
+Test Error:
+ Accuracy: 56.0%, Avg loss: 2.505667
+           Precision: 0.000, Recall: 0.000
+Epoch 17
+-------------------------------
+Accuracy: 90.625, Loss: 0.295150  [   64/  800]
+Accuracy: 84.375, Loss: 0.369796  [  704/  800]
+Test Error:
+ Accuracy: 56.0%, Avg loss: 1.306220
+           Precision: 0.400, Recall: 0.023
+Epoch 18
+-------------------------------
+Accuracy: 93.75, Loss: 0.246435  [   64/  800]
+Accuracy: 78.125, Loss: 0.444177  [  704/  800]
+Test Error:
+ Accuracy: 60.5%, Avg loss: 1.432457
+           Precision: 0.524, Recall: 1.000
+Epoch 19
+-------------------------------
+Accuracy: 100.0, Loss: 0.106110  [   64/  800]
+Accuracy: 90.625, Loss: 0.301327  [  704/  800]
+Test Error:
+ Accuracy: 87.0%, Avg loss: 0.301011
+           Precision: 0.821, Recall: 0.897
+Epoch 20
+-------------------------------
+Accuracy: 90.625, Loss: 0.261011  [   64/  800]
+Accuracy: 90.625, Loss: 0.298108  [  704/  800]
+Test Error:
+ Accuracy: 68.5%, Avg loss: 0.765352
+           Precision: 0.875, Recall: 0.322
+Epoch 21
+-------------------------------
+Accuracy: 90.625, Loss: 0.230322  [   64/  800]
+Accuracy: 92.1875, Loss: 0.244352  [  704/  800]
+Test Error:
+ Accuracy: 80.5%, Avg loss: 0.440970
+           Precision: 0.800, Recall: 0.736
+Epoch 22
+-------------------------------
+Accuracy: 93.75, Loss: 0.172819  [   64/  800]
+Accuracy: 85.9375, Loss: 0.368360  [  704/  800]
+Test Error:
+ Accuracy: 69.0%, Avg loss: 0.772308
+           Precision: 0.712, Recall: 0.483
+Epoch 23
+-------------------------------
+Accuracy: 89.0625, Loss: 0.245157  [   64/  800]
+Accuracy: 95.3125, Loss: 0.210674  [  704/  800]
+Test Error:
+ Accuracy: 51.5%, Avg loss: 1.845257
+           Precision: 0.461, Recall: 0.678
+Epoch 24
+-------------------------------
+Accuracy: 93.75, Loss: 0.161775  [   64/  800]
+Accuracy: 81.25, Loss: 0.352529  [  704/  800]
+Test Error:
+ Accuracy: 79.0%, Avg loss: 0.538154
+           Precision: 0.674, Recall: 1.000
+Epoch 25
+-------------------------------
+Accuracy: 90.625, Loss: 0.214108  [   64/  800]
+Accuracy: 98.4375, Loss: 0.191276  [  704/  800]
+Test Error:
+ Accuracy: 85.5%, Avg loss: 0.408336
+           Precision: 0.750, Recall: 1.000
+Epoch 26
+-------------------------------
+Accuracy: 95.3125, Loss: 0.154381  [   64/  800]
+Accuracy: 85.9375, Loss: 0.389887  [  704/  800]
+Test Error:
+ Accuracy: 77.0%, Avg loss: 0.784732
+           Precision: 0.654, Recall: 1.000
+Epoch 27
+-------------------------------
+Accuracy: 92.1875, Loss: 0.191939  [   64/  800]
+Accuracy: 92.1875, Loss: 0.207606  [  704/  800]
+Test Error:
+ Accuracy: 63.0%, Avg loss: 1.089600
+           Precision: 0.540, Recall: 1.000
+Epoch 28
+-------------------------------
+Accuracy: 95.3125, Loss: 0.137425  [   64/  800]
+Accuracy: 82.8125, Loss: 0.324818  [  704/  800]
+Test Error:
+ Accuracy: 58.5%, Avg loss: 1.174410
+           Precision: 0.667, Recall: 0.092
+Epoch 29
+-------------------------------
+Accuracy: 90.625, Loss: 0.166352  [   64/  800]
+Accuracy: 93.75, Loss: 0.184801  [  704/  800]
+Test Error:
+ Accuracy: 88.5%, Avg loss: 0.261637
+           Precision: 0.791, Recall: 1.000
+Epoch 30
+-------------------------------
+Accuracy: 93.75, Loss: 0.135094  [   64/  800]
+Accuracy: 95.3125, Loss: 0.149030  [  704/  800]
+Test Error:
+ Accuracy: 56.0%, Avg loss: 1.844880
+           Precision: 0.429, Recall: 0.034
+Epoch 31
+-------------------------------
+Accuracy: 95.3125, Loss: 0.117862  [   64/  800]
+Accuracy: 89.0625, Loss: 0.230197  [  704/  800]
+Test Error:
+ Accuracy: 84.0%, Avg loss: 0.570127
+           Precision: 0.731, Recall: 1.000
+Epoch 32
+-------------------------------
+Accuracy: 93.75, Loss: 0.099660  [   64/  800]
+Accuracy: 95.3125, Loss: 0.195337  [  704/  800]
+Test Error:
+ Accuracy: 61.5%, Avg loss: 1.389315
+           Precision: 0.708, Recall: 0.195
+Epoch 33
+-------------------------------
+Accuracy: 96.875, Loss: 0.082520  [   64/  800]
+Accuracy: 95.3125, Loss: 0.135303  [  704/  800]
+Test Error:
+ Accuracy: 90.0%, Avg loss: 0.308871
+           Precision: 0.813, Recall: 1.000
+Epoch 34
+-------------------------------
+Accuracy: 95.3125, Loss: 0.076202  [   64/  800]
+Accuracy: 89.0625, Loss: 0.254178  [  704/  800]
+Test Error:
+ Accuracy: 80.5%, Avg loss: 0.539204
+           Precision: 0.864, Recall: 0.655
+Epoch 35
+-------------------------------
+Accuracy: 98.4375, Loss: 0.072962  [   64/  800]
+Accuracy: 89.0625, Loss: 0.223270  [  704/  800]
+Test Error:
+ Accuracy: 86.0%, Avg loss: 0.304325
+           Precision: 0.883, Recall: 0.782
+Epoch 36
+-------------------------------
+Accuracy: 93.75, Loss: 0.105731  [   64/  800]
+Accuracy: 92.1875, Loss: 0.170179  [  704/  800]
+Test Error:
+ Accuracy: 57.0%, Avg loss: 1.569291
+           Precision: 1.000, Recall: 0.011
+Epoch 37
+-------------------------------
+Accuracy: 96.875, Loss: 0.180506  [   64/  800]
+Accuracy: 89.0625, Loss: 0.319853  [  704/  800]
+Test Error:
+ Accuracy: 80.0%, Avg loss: 0.468348
+           Precision: 0.841, Recall: 0.667
+Epoch 38
+-------------------------------
+Accuracy: 90.625, Loss: 0.176669  [   64/  800]
+Accuracy: 95.3125, Loss: 0.214727  [  704/  800]
+Test Error:
+ Accuracy: 81.5%, Avg loss: 0.584653
+           Precision: 0.708, Recall: 0.977
+Epoch 39
+-------------------------------
+Accuracy: 90.625, Loss: 0.133789  [   64/  800]
+Accuracy: 92.1875, Loss: 0.154165  [  704/  800]
+Test Error:
+ Accuracy: 88.0%, Avg loss: 0.481254
+           Precision: 0.789, Recall: 0.989
+Epoch 40
+-------------------------------
+Accuracy: 98.4375, Loss: 0.057581  [   64/  800]
+Accuracy: 95.3125, Loss: 0.137169  [  704/  800]
+Test Error:
+ Accuracy: 59.0%, Avg loss: 1.550178
+           Precision: 0.778, Recall: 0.080
+Epoch 41
+-------------------------------
+Accuracy: 92.1875, Loss: 0.149610  [   64/  800]
+Accuracy: 93.75, Loss: 0.099091  [  704/  800]
+Test Error:
+ Accuracy: 89.5%, Avg loss: 0.587661
+           Precision: 0.806, Recall: 1.000
+Epoch 42
+-------------------------------
+Accuracy: 98.4375, Loss: 0.055386  [   64/  800]
+Accuracy: 95.3125, Loss: 0.106788  [  704/  800]
+Test Error:
+ Accuracy: 77.0%, Avg loss: 0.551968
+           Precision: 0.918, Recall: 0.517
+Epoch 43
+-------------------------------
+Accuracy: 95.3125, Loss: 0.089324  [   64/  800]
+Accuracy: 98.4375, Loss: 0.060097  [  704/  800]
+Test Error:
+ Accuracy: 88.5%, Avg loss: 0.226695
+           Precision: 0.833, Recall: 0.920
+Epoch 44
+-------------------------------
+Accuracy: 98.4375, Loss: 0.098446  [   64/  800]
+Accuracy: 93.75, Loss: 0.106019  [  704/  800]
+Test Error:
+ Accuracy: 85.0%, Avg loss: 0.675663
+           Precision: 0.744, Recall: 1.000
+Epoch 45
+-------------------------------
+Accuracy: 100.0, Loss: 0.047596  [   64/  800]
+Accuracy: 92.1875, Loss: 0.230815  [  704/  800]
+Test Error:
+ Accuracy: 88.5%, Avg loss: 0.450181
+           Precision: 0.791, Recall: 1.000
+Epoch 46
+-------------------------------
+Accuracy: 100.0, Loss: 0.049200  [   64/  800]
+Accuracy: 98.4375, Loss: 0.086568  [  704/  800]
+Test Error:
+ Accuracy: 85.5%, Avg loss: 0.347627
+           Precision: 0.854, Recall: 0.805
+Epoch 47
+-------------------------------
+Accuracy: 96.875, Loss: 0.089471  [   64/  800]
+Accuracy: 93.75, Loss: 0.163588  [  704/  800]
+Test Error:
+ Accuracy: 90.5%, Avg loss: 0.286796
+           Precision: 0.833, Recall: 0.977
+Epoch 48
+-------------------------------
+Accuracy: 95.3125, Loss: 0.079789  [   64/  800]
+Accuracy: 96.875, Loss: 0.111913  [  704/  800]
+Test Error:
+ Accuracy: 57.0%, Avg loss: 2.013019
+           Precision: 0.556, Recall: 0.057
+Epoch 49
+-------------------------------
+Accuracy: 96.875, Loss: 0.067191  [   64/  800]
+Accuracy: 95.3125, Loss: 0.089574  [  704/  800]
+Test Error:
+ Accuracy: 67.5%, Avg loss: 1.131164
+           Precision: 0.844, Recall: 0.310
+Epoch 50
+-------------------------------
+Accuracy: 96.875, Loss: 0.056421  [   64/  800]
+Accuracy: 95.3125, Loss: 0.118796  [  704/  800]
+Test Error:
+ Accuracy: 90.5%, Avg loss: 0.567866
+           Precision: 0.827, Recall: 0.989
+Epoch 51
+-------------------------------
+Accuracy: 98.4375, Loss: 0.038246  [   64/  800]
+Accuracy: 92.1875, Loss: 0.171553  [  704/  800]
+Test Error:
+ Accuracy: 88.0%, Avg loss: 0.458670
+           Precision: 0.784, Recall: 1.000
+Epoch 52
+-------------------------------
+Accuracy: 98.4375, Loss: 0.052928  [   64/  800]
+Accuracy: 95.3125, Loss: 0.113807  [  704/  800]
+Test Error:
+ Accuracy: 82.5%, Avg loss: 0.391092
+           Precision: 0.882, Recall: 0.690
+Epoch 53
+-------------------------------
+Accuracy: 95.3125, Loss: 0.125121  [   64/  800]
+Accuracy: 98.4375, Loss: 0.058235  [  704/  800]
+Test Error:
+ Accuracy: 89.0%, Avg loss: 0.558874
+           Precision: 0.798, Recall: 1.000
+Epoch 54
+-------------------------------
+Accuracy: 100.0, Loss: 0.023715  [   64/  800]
+Accuracy: 98.4375, Loss: 0.073507  [  704/  800]
+Test Error:
+ Accuracy: 86.0%, Avg loss: 0.419189
+           Precision: 0.847, Recall: 0.828
+Epoch 55
+-------------------------------
+Accuracy: 100.0, Loss: 0.027488  [   64/  800]
+Accuracy: 100.0, Loss: 0.026861  [  704/  800]
+Test Error:
+ Accuracy: 84.5%, Avg loss: 0.471234
+           Precision: 0.868, Recall: 0.759
+Epoch 56
+-------------------------------
+Accuracy: 100.0, Loss: 0.012006  [   64/  800]
+Accuracy: 100.0, Loss: 0.008822  [  704/  800]
+Test Error:
+ Accuracy: 83.0%, Avg loss: 0.507827
+           Precision: 0.863, Recall: 0.724
+Epoch 57
+-------------------------------
+Accuracy: 100.0, Loss: 0.014471  [   64/  800]
+Accuracy: 100.0, Loss: 0.007385  [  704/  800]
+Test Error:
+ Accuracy: 57.0%, Avg loss: 2.872814
+           Precision: 0.600, Recall: 0.034
+Epoch 58
+-------------------------------
+Accuracy: 98.4375, Loss: 0.018979  [   64/  800]
+Accuracy: 100.0, Loss: 0.013426  [  704/  800]
+Test Error:
+ Accuracy: 74.5%, Avg loss: 1.154716
+           Precision: 0.929, Recall: 0.448
+Epoch 59
+-------------------------------
+Accuracy: 100.0, Loss: 0.002183  [   64/  800]
+Accuracy: 98.4375, Loss: 0.027109  [  704/  800]
+Test Error:
+ Accuracy: 67.5%, Avg loss: 1.809722
+           Precision: 0.923, Recall: 0.276
+Epoch 60
+-------------------------------
+Accuracy: 100.0, Loss: 0.009196  [   64/  800]
+Accuracy: 100.0, Loss: 0.022003  [  704/  800]
+Test Error:
+ Accuracy: 66.5%, Avg loss: 2.165362
+           Precision: 0.917, Recall: 0.253
+Epoch 61
+-------------------------------
+Accuracy: 100.0, Loss: 0.006062  [   64/  800]
+Accuracy: 100.0, Loss: 0.003515  [  704/  800]
+Test Error:
+ Accuracy: 86.5%, Avg loss: 0.650821
+           Precision: 0.841, Recall: 0.851
+Epoch 62
+-------------------------------
+Accuracy: 98.4375, Loss: 0.029996  [   64/  800]
+Accuracy: 98.4375, Loss: 0.018563  [  704/  800]
+Test Error:
+ Accuracy: 79.0%, Avg loss: 0.890160
+           Precision: 0.959, Recall: 0.540
+Epoch 63
+-------------------------------
+Accuracy: 98.4375, Loss: 0.023546  [   64/  800]
 </pre></div></div>
 </div>
 <div class="nboutput nblast docutils container">
 <div class="prompt empty docutils container">
 </div>
 <div class="output_area docutils container">
-<img alt="_images/branch_classifier_17_1.png" src="_images/branch_classifier_17_1.png" />
-</div>
-</div>
-<section id="Get-sample-points-from-swc-files">
-<h3>Get sample points from swc files<a class="headerlink" href="#Get-sample-points-from-swc-files" title="Link to this heading"></a></h3>
-<div class="nbinput docutils container">
-<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[7]:
-</pre></div>
-</div>
-<div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="c1"># Load SWC file data into python lists</span>
-<span class="n">labels_dir</span> <span class="o">=</span> <span class="s2">&quot;/home/brysongray/data/neuromorpho_sub1&quot;</span>
-<span class="n">files</span> <span class="o">=</span> <span class="p">[</span><span class="n">f</span> <span class="k">for</span> <span class="n">x</span> <span class="ow">in</span> <span class="n">os</span><span class="o">.</span><span class="n">walk</span><span class="p">(</span><span class="n">labels_dir</span><span class="p">)</span> <span class="k">for</span> <span class="n">f</span> <span class="ow">in</span> <span class="n">glob</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">x</span><span class="p">[</span><span class="mi">0</span><span class="p">],</span> <span class="s1">&#39;*.swc&#39;</span><span class="p">))]</span>
-<span class="n">swc_lists</span> <span class="o">=</span> <span class="p">[]</span>
-<span class="k">for</span> <span class="n">f</span> <span class="ow">in</span> <span class="n">files</span><span class="p">:</span>
-    <span class="n">swc_lists</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">load</span><span class="o">.</span><span class="n">swc</span><span class="p">(</span><span class="n">f</span><span class="p">))</span>
-
-<span class="c1"># Collect random sample points from SWC data</span>
-<span class="n">samples_per_file</span> <span class="o">=</span> <span class="mi">50</span>
-<span class="n">fnames</span> <span class="o">=</span> <span class="p">[</span><span class="n">f</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s1">&#39;/&#39;</span><span class="p">)[</span><span class="o">-</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s1">&#39;.&#39;</span><span class="p">)[</span><span class="mi">0</span><span class="p">]</span> <span class="k">for</span> <span class="n">f</span> <span class="ow">in</span> <span class="n">files</span><span class="p">]</span>
-<span class="n">sample_points</span> <span class="o">=</span> <span class="n">collect</span><span class="o">.</span><span class="n">swc_random_points</span><span class="p">(</span><span class="n">samples_per_file</span><span class="p">,</span> <span class="n">swc_lists</span><span class="p">,</span> <span class="n">fnames</span><span class="p">,</span> <span class="n">adjust</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
-</pre></div>
-</div>
-</div>
-<div class="nboutput nblast docutils container">
-<div class="prompt empty docutils container">
-</div>
-<div class="output_area docutils container">
 <div class="highlight"><pre>
-loading file: /home/brysongray/data/neuromorpho_sub1/beining/CNG version/35dpi_ipsi_infra_06.CNG.swc
-loading file: /home/brysongray/data/neuromorpho_sub1/campos/CNG version/Astro-1.CNG.swc
-loading file: /home/brysongray/data/neuromorpho_sub1/allen cell types/CNG version/646805498_transformed.CNG.swc
+<span class="ansi-red-fg">---------------------------------------------------------------------------</span>
+<span class="ansi-red-fg">KeyboardInterrupt</span>                         Traceback (most recent call last)
+Cell <span class="ansi-green-fg">In[6], line 10</span>
+<span class="ansi-green-intense-fg ansi-bold">      7</span> classifier <span style="color: rgb(98,98,98)">=</span> models<span style="color: rgb(98,98,98)">.</span>ResNet2D(models<span style="color: rgb(98,98,98)">.</span>ResidualBlock2D, [<span style="color: rgb(98,98,98)">3</span>, <span style="color: rgb(98,98,98)">4</span>, <span style="color: rgb(98,98,98)">6</span>, <span style="color: rgb(98,98,98)">3</span>], in_channels<span style="color: rgb(98,98,98)">=</span><span style="color: rgb(98,98,98)">18</span>, num_classes<span style="color: rgb(98,98,98)">=</span><span style="color: rgb(98,98,98)">1</span>)
+<span class="ansi-green-intense-fg ansi-bold">      8</span> classifier <span style="color: rgb(98,98,98)">=</span> classifier<span style="color: rgb(98,98,98)">.</span>to(device<span style="color: rgb(98,98,98)">=</span>DEVICE, dtype<span style="color: rgb(98,98,98)">=</span>dtype)
+<span class="ansi-green-fg">---&gt; 10</span> <span class="ansi-yellow-bg">branch_classifier</span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">.</span><span class="ansi-yellow-bg">train</span><span class="ansi-yellow-bg">(</span><span class="ansi-yellow-bg">training_dataloader</span><span class="ansi-yellow-bg">,</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg">test_dataloader</span><span class="ansi-yellow-bg">,</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg">out_dir</span><span class="ansi-yellow-bg">,</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg">lr</span><span class="ansi-yellow-bg">,</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg">epochs</span><span class="ansi-yellow-bg">,</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg">classifier</span><span class="ansi-yellow-bg">,</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg">state_dict</span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">=</span><span class="ansi-yellow-bg ansi-bold" style="color: rgb(0,135,0)">None</span><span class="ansi-yellow-bg">)</span>
+
+File <span class="ansi-green-fg">~/neurotrack/notebooks/../solvers/branch_classifier.py:268</span>, in <span class="ansi-cyan-fg">train</span><span class="ansi-blue-fg">(train_dataloader, test_dataloader, out_dir, lr, epochs, classifier, state_dict)</span>
+<span class="ansi-green-intense-fg ansi-bold">    266</span> <span class="ansi-bold" style="color: rgb(0,135,0)">for</span> i,t <span class="ansi-bold" style="color: rgb(175,0,255)">in</span> <span style="color: rgb(0,135,0)">enumerate</span>(<span style="color: rgb(0,135,0)">range</span>(epochs)):
+<span class="ansi-green-intense-fg ansi-bold">    267</span>     <span style="color: rgb(0,135,0)">print</span>(<span style="color: rgb(175,0,0)">f</span><span style="color: rgb(175,0,0)">&#34;</span><span style="color: rgb(175,0,0)">Epoch </span><span class="ansi-bold" style="color: rgb(175,95,135)">{</span>t<span style="color: rgb(98,98,98)">+</span><span style="color: rgb(98,98,98)">1</span><span class="ansi-bold" style="color: rgb(175,95,135)">}</span><span class="ansi-bold" style="color: rgb(175,95,0)">\n</span><span style="color: rgb(175,0,0)">-------------------------------</span><span style="color: rgb(175,0,0)">&#34;</span>)
+<span class="ansi-green-fg">--&gt; 268</span>     <span class="ansi-yellow-bg">train_loop</span><span class="ansi-yellow-bg">(</span><span class="ansi-yellow-bg">train_dataloader</span><span class="ansi-yellow-bg">,</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg">classifier</span><span class="ansi-yellow-bg">,</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg">binary_loss</span><span class="ansi-yellow-bg">,</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg">classifier_optimizer</span><span class="ansi-yellow-bg">)</span>
+<span class="ansi-green-intense-fg ansi-bold">    269</span>     test_loop(test_dataloader, classifier, binary_loss)
+<span class="ansi-green-intense-fg ansi-bold">    270</span>     torch<span style="color: rgb(98,98,98)">.</span>save(classifier<span style="color: rgb(98,98,98)">.</span>state_dict(), os<span style="color: rgb(98,98,98)">.</span>path<span style="color: rgb(98,98,98)">.</span>join(out_dir, <span style="color: rgb(175,0,0)">f</span><span style="color: rgb(175,0,0)">&#34;</span><span style="color: rgb(175,0,0)">resnet_classifier_</span><span class="ansi-bold" style="color: rgb(175,95,135)">{</span>date<span class="ansi-bold" style="color: rgb(175,95,135)">}</span><span style="color: rgb(175,0,0)">_checkpoint-</span><span class="ansi-bold" style="color: rgb(175,95,135)">{</span>i<span class="ansi-bold" style="color: rgb(175,95,135)">}</span><span style="color: rgb(175,0,0)">.pt</span><span style="color: rgb(175,0,0)">&#34;</span>))
+
+File <span class="ansi-green-fg">~/neurotrack/notebooks/../solvers/branch_classifier.py:125</span>, in <span class="ansi-cyan-fg">train_loop</span><span class="ansi-blue-fg">(dataloader, model, loss_fn, optimizer)</span>
+<span class="ansi-green-intense-fg ansi-bold">    122</span> model<span style="color: rgb(98,98,98)">.</span>train()
+<span class="ansi-green-intense-fg ansi-bold">    123</span> <span class="ansi-bold" style="color: rgb(0,135,0)">for</span> batch, (X,y) <span class="ansi-bold" style="color: rgb(175,0,255)">in</span> <span style="color: rgb(0,135,0)">enumerate</span>(dataloader):
+<span class="ansi-green-intense-fg ansi-bold">    124</span>     <span style="color: rgb(95,135,135)"># out = model(X[:,:3].to(device=DEVICE))</span>
+<span class="ansi-green-fg">--&gt; 125</span>     out <span style="color: rgb(98,98,98)">=</span> model(<span class="ansi-yellow-bg">X</span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">.</span><span class="ansi-yellow-bg">to</span><span class="ansi-yellow-bg">(</span><span class="ansi-yellow-bg">device</span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">=</span><span class="ansi-yellow-bg">DEVICE</span><span class="ansi-yellow-bg">,</span><span class="ansi-yellow-bg">dtype</span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">=</span><span class="ansi-yellow-bg">torch</span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">.</span><span class="ansi-yellow-bg">float32</span><span class="ansi-yellow-bg">)</span>)
+<span class="ansi-green-intense-fg ansi-bold">    126</span>     out <span style="color: rgb(98,98,98)">=</span> torch<span style="color: rgb(98,98,98)">.</span>nn<span style="color: rgb(98,98,98)">.</span>functional<span style="color: rgb(98,98,98)">.</span>sigmoid(out<span style="color: rgb(98,98,98)">.</span>squeeze())
+<span class="ansi-green-intense-fg ansi-bold">    127</span>     <span style="color: rgb(95,135,135)"># out = torch.nn.functional.softmax(out, dim=1)</span>
+<span class="ansi-green-intense-fg ansi-bold">    128</span>     <span style="color: rgb(95,135,135)"># y = torch.nn.functional.one_hot(y, num_classes=3)</span>
+
+<span class="ansi-red-fg">KeyboardInterrupt</span>:
 </pre></div></div>
 </div>
 </section>
 <section id="Save-sample-patches-and-labels-from-image-files">
 <h3>Save sample patches and labels from image files<a class="headerlink" href="#Save-sample-patches-and-labels-from-image-files" title="Link to this heading"></a></h3>
 <div class="nbinput nblast docutils container">
-<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[12]:
+<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[ ]:
 </pre></div>
 </div>
 <div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="c1"># save sample patches from the images centered at the sample points</span>
-<span class="n">image_dir</span> <span class="o">=</span> <span class="s2">&quot;/home/brysongray/data/simulated_neurons/neuromorpho_sub1_with_artifacts&quot;</span>
+<span class="c1"># image_dir = &quot;/home/brysongray/data/simulated_neurons/neuromorpho_sub1_with_artifacts&quot;</span>
+<span class="n">image_dir</span> <span class="o">=</span> <span class="s2">&quot;/home/brysongray/&quot;</span>
 <span class="n">out_dir</span> <span class="o">=</span> <span class="s2">&quot;classifier_data&quot;</span>
 <span class="k">if</span> <span class="ow">not</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">exists</span><span class="p">(</span><span class="n">out_dir</span><span class="p">):</span>
     <span class="n">os</span><span class="o">.</span><span class="n">makedirs</span><span class="p">(</span><span class="n">out_dir</span><span class="p">,</span> <span class="n">exist_ok</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
@@ -524,8 +1227,8 @@ loading file: /home/brysongray/data/neuromorpho_sub1/allen cell types/CNG versio
 </div>
 </div>
 </section>
-<section id="View-some-example-input-images">
-<h3>View some example input images<a class="headerlink" href="#View-some-example-input-images" title="Link to this heading"></a></h3>
+<section id="id1">
+<h3>View some example input images<a class="headerlink" href="#id1" title="Link to this heading"></a></h3>
 <div class="nbinput docutils container">
 <div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[10]:
 </pre></div>
@@ -549,21 +1252,21 @@ loading file: /home/brysongray/data/neuromorpho_sub1/allen cell types/CNG versio
 <div class="prompt empty docutils container">
 </div>
 <div class="output_area docutils container">
-<img alt="_images/branch_classifier_23_0.png" src="_images/branch_classifier_23_0.png" />
+<img alt="_images/branch_classifier_26_0.png" src="_images/branch_classifier_26_0.png" />
 </div>
 </div>
 </section>
 </section>
-<section id="Train-branch-classifier">
-<h2>Train branch classifier<a class="headerlink" href="#Train-branch-classifier" title="Link to this heading"></a></h2>
-<section id="Instantiate-dataloader-for-training-and-test-datasets">
-<h3>Instantiate dataloader for training and test datasets<a class="headerlink" href="#Instantiate-dataloader-for-training-and-test-datasets" title="Link to this heading"></a></h3>
+<section id="id2">
+<h2>Train branch classifier<a class="headerlink" href="#id2" title="Link to this heading"></a></h2>
+<section id="id3">
+<h3>Instantiate dataloader for training and test datasets<a class="headerlink" href="#id3" title="Link to this heading"></a></h3>
 <div class="line-block">
 <div class="line">Dataloaders use a weighted random sampler to balance classes. Additionally, the training dataset</div>
 <div class="line">adds a random permutation and flip to the image patch at retrieval.</div>
 </div>
 <div class="nbinput nblast docutils container">
-<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[13]:
+<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[ ]:
 </pre></div>
 </div>
 <div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="c1"># set source data files paths</span>
@@ -608,7 +1311,7 @@ loading file: /home/brysongray/data/neuromorpho_sub1/allen cell types/CNG versio
 <div class="prompt empty docutils container">
 </div>
 <div class="output_area docutils container">
-<img alt="_images/branch_classifier_28_0.png" src="_images/branch_classifier_28_0.png" />
+<img alt="_images/branch_classifier_31_0.png" src="_images/branch_classifier_31_0.png" />
 </div>
 </div>
 <div class="nbinput docutils container">

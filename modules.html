@@ -117,9 +117,13 @@
 <li class="toctree-l3"><a class="reference internal" href="data_prep.html#data_prep.load.Rx"><code class="docutils literal notranslate"><span class="pre">Rx()</span></code></a></li>
 <li class="toctree-l3"><a class="reference internal" href="data_prep.html#data_prep.load.Ry"><code class="docutils literal notranslate"><span class="pre">Ry()</span></code></a></li>
 <li class="toctree-l3"><a class="reference internal" href="data_prep.html#data_prep.load.Rz"><code class="docutils literal notranslate"><span class="pre">Rz()</span></code></a></li>
-<li class="toctree-l3"><a class="reference internal" href="data_prep.html#data_prep.load.parse_swc_list"><code class="docutils literal notranslate"><span class="pre">parse_swc_list()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="data_prep.html#data_prep.load.adjust_neuron_coords"><code class="docutils literal notranslate"><span class="pre">adjust_neuron_coords()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="data_prep.html#data_prep.load.get_critical_points"><code class="docutils literal notranslate"><span class="pre">get_critical_points()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="data_prep.html#data_prep.load.parse_swc"><code class="docutils literal notranslate"><span class="pre">parse_swc()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="data_prep.html#data_prep.load.parse_swc_list_original"><code class="docutils literal notranslate"><span class="pre">parse_swc_list_original()</span></code></a></li>
 <li class="toctree-l3"><a class="reference internal" href="data_prep.html#data_prep.load.swc"><code class="docutils literal notranslate"><span class="pre">swc()</span></code></a></li>
 <li class="toctree-l3"><a class="reference internal" href="data_prep.html#data_prep.load.tiff"><code class="docutils literal notranslate"><span class="pre">tiff()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="data_prep.html#data_prep.load.undirected_edge_list"><code class="docutils literal notranslate"><span class="pre">undirected_edge_list()</span></code></a></li>
 </ul>
 </li>
 <li class="toctree-l2"><a class="reference internal" href="data_prep.html#module-data_prep">Module contents</a></li>
@@ -212,15 +216,23 @@
 </ul>
 </li>
 <li class="toctree-l2"><a class="reference internal" href="models.html#module-models.resblock">models.resblock module</a><ul>
-<li class="toctree-l3"><a class="reference internal" href="models.html#models.resblock.ResidualBlock"><code class="docutils literal notranslate"><span class="pre">ResidualBlock</span></code></a><ul>
-<li class="toctree-l4"><a class="reference internal" href="models.html#models.resblock.ResidualBlock.forward"><code class="docutils literal notranslate"><span class="pre">ResidualBlock.forward()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="models.html#models.resblock.ResidualBlock2D"><code class="docutils literal notranslate"><span class="pre">ResidualBlock2D</span></code></a><ul>
+<li class="toctree-l4"><a class="reference internal" href="models.html#models.resblock.ResidualBlock2D.forward"><code class="docutils literal notranslate"><span class="pre">ResidualBlock2D.forward()</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="models.html#models.resblock.ResidualBlock3D"><code class="docutils literal notranslate"><span class="pre">ResidualBlock3D</span></code></a><ul>
+<li class="toctree-l4"><a class="reference internal" href="models.html#models.resblock.ResidualBlock3D.forward"><code class="docutils literal notranslate"><span class="pre">ResidualBlock3D.forward()</span></code></a></li>
 </ul>
 </li>
 </ul>
 </li>
 <li class="toctree-l2"><a class="reference internal" href="models.html#module-models.resnet">models.resnet module</a><ul>
-<li class="toctree-l3"><a class="reference internal" href="models.html#models.resnet.ResNet"><code class="docutils literal notranslate"><span class="pre">ResNet</span></code></a><ul>
-<li class="toctree-l4"><a class="reference internal" href="models.html#models.resnet.ResNet.forward"><code class="docutils literal notranslate"><span class="pre">ResNet.forward()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="models.html#models.resnet.ResNet2D"><code class="docutils literal notranslate"><span class="pre">ResNet2D</span></code></a><ul>
+<li class="toctree-l4"><a class="reference internal" href="models.html#models.resnet.ResNet2D.forward"><code class="docutils literal notranslate"><span class="pre">ResNet2D.forward()</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="models.html#models.resnet.ResNet3D"><code class="docutils literal notranslate"><span class="pre">ResNet3D</span></code></a><ul>
+<li class="toctree-l4"><a class="reference internal" href="models.html#models.resnet.ResNet3D.forward"><code class="docutils literal notranslate"><span class="pre">ResNet3D.forward()</span></code></a></li>
 </ul>
 </li>
 </ul>
@@ -257,6 +269,7 @@
 <li class="toctree-l3"><a class="reference internal" href="solvers.html#solvers.branch_classifier.train"><code class="docutils literal notranslate"><span class="pre">train()</span></code></a></li>
 <li class="toctree-l3"><a class="reference internal" href="solvers.html#solvers.branch_classifier.train_loop"><code class="docutils literal notranslate"><span class="pre">train_loop()</span></code></a></li>
 <li class="toctree-l3"><a class="reference internal" href="solvers.html#solvers.branch_classifier.transform"><code class="docutils literal notranslate"><span class="pre">transform()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="solvers.html#solvers.branch_classifier.transform_spherical_patch"><code class="docutils literal notranslate"><span class="pre">transform_spherical_patch()</span></code></a></li>
 </ul>
 </li>
 <li class="toctree-l2"><a class="reference internal" href="solvers.html#module-solvers.sac">solvers.sac module</a><ul>

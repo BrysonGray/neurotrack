@@ -223,6 +223,12 @@ as neuron voxels within one standard deviation from the peak neuron value, where
 intensities are assumed to be normally distributed around the centerline.</p></li>
 </ul>
 </dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p><strong>mask</strong> – A binary mask of the neuron.</p>
+</dd>
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>torch.Tensor</p>
+</dd>
 </dl>
 </dd></dl>
 
@@ -503,7 +509,7 @@ Interpolation is not currently implemented.</p>
 
 <dl class="py method">
 <dt class="sig sig-object py" id="data_prep.image.Image.draw_point">
-<span class="sig-name descname"><span class="pre">draw_point</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">point</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">radius</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">float</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">3.0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">channel</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">-1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">binary</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">value</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">1</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#data_prep.image.Image.draw_point" title="Link to this definition"></a></dt>
+<span class="sig-name descname"><span class="pre">draw_point</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">point</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">radius</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">float</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">3.0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">channel</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">-1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">mode</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Literal</span><span class="p"><span class="pre">[</span></span><span class="s"><span class="pre">'mask'</span></span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="s"><span class="pre">'gaussian'</span></span><span class="p"><span class="pre">]</span></span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">'mask'</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">binary</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">value</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">1</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#data_prep.image.Image.draw_point" title="Link to this definition"></a></dt>
 <dd><p>Draw a point on the image data with a specified radius and value.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span></dt>
@@ -511,12 +517,20 @@ Interpolation is not currently implemented.</p>
 <li><p><strong>point</strong> (<em>torch.Tensor</em>) – The coordinates of the point to be drawn.</p></li>
 <li><p><strong>radius</strong> (<em>float</em><em>, </em><em>optional</em>) – The radius of the point to be drawn. Default is 3.0.</p></li>
 <li><p><strong>channel</strong> (<em>int</em><em>, </em><em>optional</em>) – The channel on which to draw the point. Default is -1.</p></li>
+<li><p><strong>mode</strong> (<em>str</em><em>, </em><em>optional</em>) – The mode to use for drawing the point. Default is
+“mask”. Options are “mask”, which draws the point
+as a uniform cube with value determined by the
+“value” argument, or “gaussian”, which draws a
+gaussian blurred point.</p></li>
 <li><p><strong>binary</strong> (<em>bool</em><em>, </em><em>optional</em>) – If True, the point will be drawn as a binary value. Default is False.</p></li>
 <li><p><strong>value</strong> (<em>int</em><em>, </em><em>optional</em>) – The value to assign to the point. Default is 1.</p></li>
 </ul>
 </dd>
 <dt class="field-even">Return type<span class="colon">:</span></dt>
 <dd class="field-even"><p>None</p>
+</dd>
+<dt class="field-odd">Raises<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>TypeError</strong> – If binary is True and self.data.dtype is not a boolean type.</p>
 </dd>
 </dl>
 </dd></dl>
@@ -564,24 +578,32 @@ Interpolation is not currently implemented.</p>
 <dd></dd></dl>
 
 <dl class="py function">
-<dt class="sig sig-object py" id="data_prep.load.parse_swc_list">
-<span class="sig-prename descclassname"><span class="pre">data_prep.load.</span></span><span class="sig-name descname"><span class="pre">parse_swc_list</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">swc_list</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">adjust</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">transpose</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#data_prep.load.parse_swc_list" title="Link to this definition"></a></dt>
-<dd><p>Parses a list of SWC data and constructs sections, section graph, branches, and terminals.</p>
+<dt class="sig sig-object py" id="data_prep.load.adjust_neuron_coords">
+<span class="sig-prename descclassname"><span class="pre">data_prep.load.</span></span><span class="sig-name descname"><span class="pre">adjust_neuron_coords</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">sections</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">branches</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">terminals</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#data_prep.load.adjust_neuron_coords" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="data_prep.load.get_critical_points">
+<span class="sig-prename descclassname"><span class="pre">data_prep.load.</span></span><span class="sig-name descname"><span class="pre">get_critical_points</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">swc_list</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">sections</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">transpose</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#data_prep.load.get_critical_points" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="data_prep.load.parse_swc">
+<span class="sig-prename descclassname"><span class="pre">data_prep.load.</span></span><span class="sig-name descname"><span class="pre">parse_swc</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">swc_list</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">transpose</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#data_prep.load.parse_swc" title="Link to this definition"></a></dt>
+<dd><p>Parse a list of SWC lines and return an directed adjacency list of neuron sections,
+and a dictionary of sections with their corresponding coordinates. Sections are defined
+as the nodes between and including branching points or terminal points.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span></dt>
 <dd class="field-odd"><ul class="simple">
-<li><p><strong>swc_list</strong> (<em>list</em>) – A list of SWC data where each element is a list representing a node in the SWC format.</p></li>
-<li><p><strong>adjust</strong> (<em>bool</em><em>, </em><em>optional</em>) – If True, scales and shifts the coordinates (default is True).</p></li>
-<li><p><strong>transpose</strong> (<em>bool</em><em>, </em><em>optional</em>) – If True, transposes the coordinates (default is True).</p></li>
+<li><p><strong>swc_list</strong> (<em>list</em><em> of </em><em>lists</em>) – The list of SWC lines</p></li>
+<li><p><strong>transpose</strong> (<em>bool</em><em>, </em><em>optional</em>) – Whether to transpose coordinates (i.e. (x,y,z)-&gt;(z,y,x)). (default is True)</p></li>
 </ul>
 </dd>
 <dt class="field-even">Returns<span class="colon">:</span></dt>
 <dd class="field-even"><p><ul class="simple">
-<li><p><strong>sections</strong> (<em>dict</em>) – A dictionary where keys are section IDs and values are tensors of section coordinates.</p></li>
-<li><p><strong>section_graph</strong> (<em>dict</em>) – A dictionary representing the graph of sections.</p></li>
-<li><p><strong>branches</strong> (<em>torch.Tensor</em>) – A tensor of branch points.</p></li>
-<li><p><strong>terminals</strong> (<em>torch.Tensor</em>) – A tensor of terminal points.</p></li>
-<li><p><strong>scale</strong> (<em>float</em>) – The scaling factor applied to the coordinates.</p></li>
+<li><p><strong>sections</strong> (<em>dict</em>) – The dictionary of sections with their corresponding coordinates.</p></li>
+<li><p><strong>sections_graph</strong> (<em>dict</em>) – The directed adjacency list of neuron sections.</p></li>
 </ul>
 </p>
 </dd>
@@ -589,8 +611,13 @@ Interpolation is not currently implemented.</p>
 </dd></dl>
 
 <dl class="py function">
+<dt class="sig sig-object py" id="data_prep.load.parse_swc_list_original">
+<span class="sig-prename descclassname"><span class="pre">data_prep.load.</span></span><span class="sig-name descname"><span class="pre">parse_swc_list_original</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">swc_list</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">transpose</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#data_prep.load.parse_swc_list_original" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+<dl class="py function">
 <dt class="sig sig-object py" id="data_prep.load.swc">
-<span class="sig-prename descclassname"><span class="pre">data_prep.load.</span></span><span class="sig-name descname"><span class="pre">swc</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">labels_file</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">rotate</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#data_prep.load.swc" title="Link to this definition"></a></dt>
+<span class="sig-prename descclassname"><span class="pre">data_prep.load.</span></span><span class="sig-name descname"><span class="pre">swc</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">labels_file</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">rotate</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">verbose</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#data_prep.load.swc" title="Link to this definition"></a></dt>
 <dd><p>Load and parse an SWC file.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span></dt>
@@ -630,6 +657,12 @@ Lines starting with ‘#’ or empty lines are ignored.</p>
 <dd class="field-odd"><p>torch.Tensor</p>
 </dd>
 </dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="data_prep.load.undirected_edge_list">
+<span class="sig-prename descclassname"><span class="pre">data_prep.load.</span></span><span class="sig-name descname"><span class="pre">undirected_edge_list</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">swc_list</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#data_prep.load.undirected_edge_list" title="Link to this definition"></a></dt>
+<dd><p>Parse a list of SWC lines into an undirected edge list.</p>
 </dd></dl>
 
 </section>

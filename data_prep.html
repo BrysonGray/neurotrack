@@ -98,6 +98,21 @@
 </dd></dl>
 
 <dl class="py function">
+<dt class="sig sig-object py" id="data_prep.collect.random_points_from_mask">
+<span class="sig-prename descclassname"><span class="pre">data_prep.collect.</span></span><span class="sig-name descname"><span class="pre">random_points_from_mask</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">mask</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">branches</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">samples_per_neuron</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">rng</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#data_prep.collect.random_points_from_mask" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="data_prep.collect.save_spherical_patches">
+<span class="sig-prename descclassname"><span class="pre">data_prep.collect.</span></span><span class="sig-name descname"><span class="pre">save_spherical_patches</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">img_path</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">branch_coords</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">non_branch_coords</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">out_dir</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">start_id</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">annotations</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#data_prep.collect.save_spherical_patches" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="data_prep.collect.spherical_patch_dataset">
+<span class="sig-prename descclassname"><span class="pre">data_prep.collect.</span></span><span class="sig-name descname"><span class="pre">spherical_patch_dataset</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">swc_dir</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">img_dir</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">out_dir</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">samples_per_neuron</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">1000</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#data_prep.collect.spherical_patch_dataset" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+<dl class="py function">
 <dt class="sig sig-object py" id="data_prep.collect.swc_random_points">
 <span class="sig-prename descclassname"><span class="pre">data_prep.collect.</span></span><span class="sig-name descname"><span class="pre">swc_random_points</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">samples_per_file</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">swc_lists</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">file_names</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">adjust</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">rng</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#data_prep.collect.swc_random_points" title="Link to this definition"></a></dt>
 <dd><p>Choose random points near the neuron coordinates from swc data.</p>
@@ -557,6 +572,38 @@ gaussian blurred point.</p></li>
 <dd class="field-odd"><p>torch.Tensor</p>
 </dd>
 </dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="data_prep.image.extract_spherical_patch">
+<span class="sig-prename descclassname"><span class="pre">data_prep.image.</span></span><span class="sig-name descname"><span class="pre">extract_spherical_patch</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">volume</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">center</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">radius</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">resolution</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">(180,</span> <span class="pre">360)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">order</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">permutation</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">normalize</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#data_prep.image.extract_spherical_patch" title="Link to this definition"></a></dt>
+<dd><p>Extract a spherical patch from a 3D image volume and project it onto a 2D surface.</p>
+<section id="parameters">
+<h3>Parameters:<a class="headerlink" href="#parameters" title="Link to this heading"></a></h3>
+<dl class="simple">
+<dt>volume<span class="classifier">3D numpy array</span></dt><dd><p>The 3D image volume</p>
+</dd>
+<dt>center<span class="classifier">tuple of 3 ints</span></dt><dd><p>The (z, y, x) coordinates of the center of the sphere</p>
+</dd>
+<dt>radius<span class="classifier">float</span></dt><dd><p>The radius of the sphere</p>
+</dd>
+<dt>resolution<span class="classifier">tuple of 2 ints</span></dt><dd><p>The resolution of the resulting 2D projection (theta_res, phi_res)</p>
+</dd>
+<dt>order<span class="classifier">int, optional</span></dt><dd><p>The order of the spline interpolation (0=nearest, 1=linear, etc.)</p>
+</dd>
+<dt>permutation<span class="classifier">list or tuple of ints, optional</span></dt><dd><p>Permutation to apply to volume and center point axes before patch extraction.</p>
+</dd>
+<dt>normalize<span class="classifier">bool, optional</span></dt><dd><p>Whether to normalize the output to [0, 1]</p>
+</dd>
+</dl>
+</section>
+<section id="returns">
+<h3>Returns:<a class="headerlink" href="#returns" title="Link to this heading"></a></h3>
+<dl class="simple">
+<dt>2D numpy array</dt><dd><p>The 2D projection of the spherical surface (equirectangular projection)</p>
+</dd>
+</dl>
+</section>
 </dd></dl>
 
 </section>

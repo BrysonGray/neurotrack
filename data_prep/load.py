@@ -121,23 +121,6 @@ def swc(labels_file, rotate=False, verbose=True):
     return swc_list
 
 
-# def swc_to_graph(swc_list):
-#     swc_list = np.array(swc_list)
-
-#     graph = {}
-#     if -1 in swc_list[:,0]:
-#         for parent in swc_list:
-#             children = []
-#             for child in swc_list:
-#                 if int(child[6]) == int(parent[0]):
-#                     children.append(int(child[0]))
-#             graph[int(parent[0])] = children
-#     elif -1 in swc_list[:,6]:
-#         for parent in swc_list:
-#             children = []
-#             for child in swc_list:
-#                 if int(child[0]) == int(parent[0])
-
 def parse_swc_list_original(swc_list, transpose=True):
     graph = {}
     for parent in swc_list:
@@ -260,8 +243,10 @@ def parse_swc(swc_list, transpose=True):
                     sections[terminal] = section
                     section_ends[terminal] = node
 
+                    # repeat with a new list of terminals until the edge list only contains one final node
                     break
     
+    # make undirected sections graph
     sections_graph = {}
     for section in section_ends:
         sections_graph[section] = []

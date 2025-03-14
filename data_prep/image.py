@@ -10,6 +10,7 @@ Author: Bryson Gray
 '''
 import torch
 import numpy as np
+from scipy.ndimage import map_coordinates
 from skimage.draw import line_nd
 from skimage.filters import gaussian
 from skimage.morphology import dilation, footprint_rectangle
@@ -65,6 +66,72 @@ def draw_line_segment(segment, width, binary=False, value=1.0):
             X = X / torch.amax(X) * value
     
     return X.to(device=segment.device)
+
+
+def extract_spherical_patch(volume, center, radius, resolution=(180, 360), order=1, permutation=None, normalize=False):
+    """
+    Extract a spherical patch from a 3D image volume and project it onto a 2D surface.
+    
+    Parameters:
+    -----------
+    volume : 3D numpy array
+        The 3D image volume
+    center : tuple of 3 ints
+        The (z, y, x) coordinates of the center of the sphere
+    radius : float
+        The radius of the sphere
+    resolution : tuple of 2 ints
+        The resolution of the resulting 2D projection (theta_res, phi_res)
+    order : int, optional
+        The order of the spline interpolation (0=nearest, 1=linear, etc.)
+    permutation : list or tuple of ints, optional
+        Permutation to apply to volume and center point axes before patch extraction.
+    normalize : bool, optional
+        Whether to normalize the output to [0, 1]
+        
+    Returns:
+    --------
+    2D numpy array
+        The 2D projection of the spherical surface (equirectangular projection)
+    """
+    # Create meshgrid for spherical coordinates
+    theta_res, phi_res = resolution
+    theta = np.linspace(0, np.pi, theta_res)
+    phi = np.linspace(0, 2*np.pi, phi_res)
+    theta_grid, phi_grid = np.meshgrid(theta, phi, indexing='ij')
+    
+    # Convert to cartesian coordinates (points on a unit sphere)
+    x = np.sin(theta_grid) * np.cos(phi_grid)
+    y = np.sin(theta_grid) * np.sin(phi_grid)
+    z = np.cos(theta_grid)
+
+    if permutation:
+        # Apply permutation to volume and center
+        volume = np.transpose(volume, axes=permutation)
+        # Create a new center with the permuted coordinates
+        new_center = []
+        for i in range(3):
+            new_center.append(center[permutation[i]])
+        center = new_center
+    
+    # Scale by radius and translate to center
+    coords = np.array([
+        center[0].item() + radius * z,
+        center[1].item() + radius * y,
+        center[2].item() + radius * x
+    ])
+    
+    # Sample the volume using interpolation
+    values = map_coordinates(volume, coords, order=order, mode='constant', cval=0)
+    
+    # Reshape to 2D projection
+    projection = values.reshape(theta_res, phi_res)
+    
+    # Normalize if requested
+    if normalize and projection.max() != projection.min():
+        projection = (projection - projection.min()) / (projection.max() - projection.min())
+    
+    return projection
 
 
 class Image:

@@ -1,14 +1,17 @@
+from datetime import datetime
 from glob import glob
 import numpy as np
 import os
 import pandas as pd
 from pathlib import Path
 import sys
+import tifffile as tf
 import torch
+from tqdm import tqdm
 
 sys.path.append(str(Path(__file__).parent))
-import load
-from image import Image
+import load, draw
+from image import Image, extract_spherical_patch
 
 
 def swc_random_points(samples_per_file, swc_lists, file_names, adjust=False, rng=None):
@@ -56,6 +59,148 @@ def swc_random_points(samples_per_file, swc_lists, file_names, adjust=False, rng
         sample_points[fname] = points
     
     return sample_points
+
+
+def random_points_from_mask(mask, branches, samples_per_neuron, rng=None):
+    
+    if rng is None:
+        rng = np.random.default_rng()
+
+    # create branch mask
+    branch_mask = Image(torch.zeros_like(mask, dtype=torch.bool))
+    for point in branches:
+        branch_mask.draw_point(point[:3], radius=point[3].item(), binary=True, value=1, channel=0)
+
+    # get a random sample of branch coordinates
+    branch_coords = np.argwhere(branch_mask.data[0])
+    branch_coords = rng.choice(branch_coords, int(samples_per_neuron/2), replace=False, axis=1)
+
+    # get a random sample of non-branch neuron coordinates
+    neuron_nonbranch = mask[0] & ~branch_mask.data[0]
+    neuron_nonbranch_coords = np.argwhere(neuron_nonbranch)
+    neuron_nonbranch_coords = rng.choice(neuron_nonbranch_coords, int(samples_per_neuron/4), replace=False, axis=1)
+
+    # background is voxels not in the neuron mask or branch mask
+    background = ~(mask[0] & branch_mask.data[0])
+    del mask
+
+    # get sample_per_neuron/4 background samples
+    # background mask has too many voxels to use argwhere. Instead, sample randomly and keep foreground coordinates
+    background_coords = []
+    shape = mask[0].shape
+    i = 0
+    while i < int(samples_per_neuron/4):
+        # randomly sample a point in the image
+        z = rng.integers(0, shape[0])
+        y = rng.integers(0, shape[1])
+        x = rng.integers(0, shape[2])
+        # if the point is in background, add it to the list
+        if background[z, y, x]:
+            background_coords.append([z, y, x])
+            i += 1
+
+    del background
+
+    non_branch_coords = np.concatenate((background_coords, neuron_nonbranch_coords.T), axis=0)
+
+    return branch_coords, non_branch_coords
+
+
+def save_spherical_patches(img_path, branch_coords, non_branch_coords, out_dir, start_id=0, annotations=None):
+
+    obs_id = start_id
+    if annotations is None:
+        annotations = {}
+
+    # Sample spherical patches from the corresponding neuron image
+    img = tf.imread(img_path)
+    permutations = [[0,1,2],
+                    [0,2,1],
+                    [1,2,0],
+                    [1,0,2],
+                    [2,0,1],
+                    [2,1,0]]
+    # Sample branch positive patches
+    for i in range(len(branch_coords)):
+        spherical_patches = []
+        for r in range(3,55,3):
+            for perm in permutations:
+                patch = extract_spherical_patch(img, branch_coords[i], radius=r, permutation=perm)
+                spherical_patches.append(patch)
+        patch = np.stack(spherical_patches, axis=0)
+        fname = f"obs_{obs_id}.pt"
+        torch.save(torch.from_numpy(patch), os.path.join(os.path.join(out_dir, "observations"), fname))
+        annotations[fname] = 1
+        obs_id += 1
+    # Sample non branch patches
+    for i in range(len(non_branch_coords)):
+        spherical_patches = []
+        for r in range(3,55,3):
+            for perm in permutations:
+                patch = extract_spherical_patch(img, branch_coords[i], radius=r, permutation=perm)
+                spherical_patches.append(patch)
+        patch = np.stack(spherical_patches, axis=0)
+        fname = f"obs_{obs_id}.pt"
+        torch.save(torch.from_numpy(patch), os.path.join(os.path.join(out_dir, "observations"), fname))
+        annotations[fname] = 0
+        obs_id += 1
+
+    return annotations, obs_id
+
+
+def spherical_patch_dataset(swc_dir, img_dir, out_dir, samples_per_neuron=1000):
+
+    rng = np.random.default_rng(0)
+
+    annotations = {}
+    obs_id = 0
+    swc_files = os.listdir(swc_dir)
+    img_files = os.listdir(img_dir)
+    for i in tqdm(range(len(swc_files))):
+        swc_list = load.swc(os.path.join(swc_dir, swc_files[i]), verbose=False)
+        img_name = [img_file for img_file in img_files if img_file.split('.tif')[0] in swc_files[i]]
+        try:
+            img_name = img_name[0]
+        except IndexError:
+            continue
+        img_path = os.path.join(img_dir, img_name)
+        img = tf.imread(img_path)
+        shape = img.shape
+
+        del img
+
+        sections, sections_graph = load.parse_swc(swc_list)
+        branches, terminals = load.get_critical_points(swc_list, sections)
+        segments = []
+        for section in sections.values():
+            segments.append(section)
+        segments = torch.concatenate(segments)
+
+
+        density = draw.draw_neuron_density(segments, shape)
+        mask = draw.draw_neuron_mask(density, threshold=5.0)
+        del density
+
+        branch_coords, non_branch_coords = random_points_from_mask(mask, branches, samples_per_neuron, rng=rng)
+        
+        annotations, obs_id = save_spherical_patches(img_path, branch_coords, non_branch_coords, out_dir, start_id=obs_id, annotations=annotations)
+
+    # save annotations
+    # split into test and training data
+    name = "gold166"
+    data_permutation = torch.randperm(len(annotations))
+    test_idxs = data_permutation[:len(data_permutation)//5].tolist()
+    training_idxs = data_permutation[len(data_permutation)//5:].tolist()
+    training_annotations = {list(annotations)[i]: list(annotations.values())[i] for i in training_idxs}
+    test_annotations = {list(annotations)[i]: list(annotations.values())[i] for i in test_idxs}
+    # save
+    date = datetime.now().strftime("%m-%d-%y")
+    df = pd.DataFrame.from_dict(training_annotations, orient="index")
+    df.to_csv(os.path.join(out_dir, f"branch_classifier_{name}_{date}_training_labels.csv"))
+    df = pd.DataFrame.from_dict(test_annotations, orient="index")
+    df.to_csv(os.path.join(out_dir, f"branch_classifier_{name}_{date}_test_labels.csv"))
+
+    return
 
 
 def collect_data(sample_points, image_dir, out_dir, name, date, rng=None):

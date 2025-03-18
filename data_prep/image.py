@@ -13,7 +13,7 @@ import numpy as np
 from scipy.ndimage import map_coordinates
 from skimage.draw import line_nd
 from skimage.filters import gaussian
-from skimage.morphology import dilation, footprint_rectangle
+from skimage.morphology import dilation
 from typing import Literal
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -59,7 +59,7 @@ def draw_line_segment(segment, width, binary=False, value=1.0):
     # if width is 0, don't blur
     if width > 0:
         if binary:
-            X = torch.tensor(dilation(X, footprint_rectangle((int(width),)*3)))
+            X = torch.tensor(dilation(X, np.ones((int(width),)*3, dtype=np.uint8)))
         else:
             sigma = width/2
             X = torch.tensor(gaussian(X, sigma=sigma))
@@ -68,7 +68,7 @@ def draw_line_segment(segment, width, binary=False, value=1.0):
     return X.to(device=segment.device)
 
 
-def extract_spherical_patch(volume, center, radius, resolution=(180, 360), order=1, permutation=None, normalize=False):
+def extract_spherical_patch(volume, x, y, z, center, radius, order=1, permutation=None, normalize=False):
     """
     Extract a spherical patch from a 3D image volume and project it onto a 2D surface.
     
@@ -76,6 +76,12 @@ def extract_spherical_patch(volume, center, radius, resolution=(180, 360), order
     -----------
     volume : 3D numpy array
         The 3D image volume
+    x : numpy array
+        x components of sample points as a meshgrid.
+    y : numpy array
+        y components of sample points as a meshgrid.
+    z : numpy array
+        z components of sample points as a meshgrid.
     center : tuple of 3 ints
         The (z, y, x) coordinates of the center of the sphere
     radius : float
@@ -94,16 +100,16 @@ def extract_spherical_patch(volume, center, radius, resolution=(180, 360), order
     2D numpy array
         The 2D projection of the spherical surface (equirectangular projection)
     """
-    # Create meshgrid for spherical coordinates
-    theta_res, phi_res = resolution
-    theta = np.linspace(0, np.pi, theta_res)
-    phi = np.linspace(0, 2*np.pi, phi_res)
-    theta_grid, phi_grid = np.meshgrid(theta, phi, indexing='ij')
+    # # Create meshgrid for spherical coordinates
+    # theta_res, phi_res = resolution
+    # theta = np.linspace(0, np.pi, theta_res)
+    # phi = np.linspace(0, 2*np.pi, phi_res)
+    # theta_grid, phi_grid = np.meshgrid(theta, phi, indexing='ij')
     
-    # Convert to cartesian coordinates (points on a unit sphere)
-    x = np.sin(theta_grid) * np.cos(phi_grid)
-    y = np.sin(theta_grid) * np.sin(phi_grid)
-    z = np.cos(theta_grid)
+    # # Convert to cartesian coordinates (points on a unit sphere)
+    # x = np.sin(theta_grid) * np.cos(phi_grid)
+    # y = np.sin(theta_grid) * np.sin(phi_grid)
+    # z = np.cos(theta_grid)
 
     if permutation:
         # Apply permutation to volume and center
@@ -125,7 +131,7 @@ def extract_spherical_patch(volume, center, radius, resolution=(180, 360), order
     values = map_coordinates(volume, coords, order=order, mode='constant', cval=0)
     
     # Reshape to 2D projection
-    projection = values.reshape(theta_res, phi_res)
+    projection = values.reshape(resolution[0], resolution[1])
     
     # Normalize if requested
     if normalize and projection.max() != projection.min():
@@ -189,7 +195,7 @@ class Image:
             padding : ndarray
                 Length that patch overlaps with image boundaries on each end of each dimension.
         """
-        i,j,k = [int(torch.round(x)) for x in center]
+        i,j,k = [int(round(x.item())) for x in center]
         shape = self.data.shape[1:]
 
         # get amount of padding for each face
@@ -260,7 +266,8 @@ class Image:
         X = draw_line_segment(segment, width, binary, value)
 
         # get the patch centered on the new segment start point from the current image.
-        center = torch.round(segment[0]).to(torch.int)
+        # center = torch.round(segment[0]).to(torch.int)
+        center = segment[0]
         patch_radius = int((X.shape[0] - 1)/2)
         patch, padding = self.crop(center, patch_radius, interp=False, pad=False) # patch is a view of self.data (c x h x w x d)
         old_patch = patch[channel].clone()

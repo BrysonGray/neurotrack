@@ -280,9 +280,10 @@ def get_critical_points(swc_list, sections, transpose=True):
             node = child
             prev = branch
             l = np.linalg.norm(np.array(swc_list[node-1][2:5]) - np.array(swc_list[prev-1][2:5]))
-            while len(edge_list[node]) == 2:
+            while len(edge_list[node]) >= 2:
+                next_node = [n for n in edge_list[node] if n != prev][0]
                 prev = node
-                node = [n for n in edge_list[node] if n != prev][0]
+                node = next_node
                 l += np.linalg.norm(np.array(swc_list[node-1][2:5]) - np.array(swc_list[prev-1][2:5]))
                 if l > 2*avg_length:
                     num_long_sections += 1

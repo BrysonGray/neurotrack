@@ -63,6 +63,8 @@ def swc_random_points(samples_per_file, swc_lists, file_names, adjust=False, rng
 
 def random_points_from_mask(mask, branches, samples_per_neuron, rng=None):
     
+    if len(branches) == 0:
+       raise Exception("Branches list must not be empty.")         
     if rng is None:
         rng = np.random.default_rng()
 
@@ -87,7 +89,7 @@ def random_points_from_mask(mask, branches, samples_per_neuron, rng=None):
     # get sample_per_neuron/4 background samples
     # background mask has too many voxels to use argwhere. Instead, sample randomly and keep foreground coordinates
     background_coords = []
-    shape = mask[0].shape
+    shape = background.shape
     i = 0
     while i < int(samples_per_neuron/4):
         # randomly sample a point in the image
@@ -103,29 +105,41 @@ def random_points_from_mask(mask, branches, samples_per_neuron, rng=None):
 
     non_branch_coords = np.concatenate((background_coords, neuron_nonbranch_coords.T), axis=0)
 
-    return branch_coords, non_branch_coords
+    return branch_coords.T, non_branch_coords
 
 
-def save_spherical_patches(img_path, branch_coords, non_branch_coords, out_dir, start_id=0, annotations=None):
+def save_spherical_patches(img, branch_coords, non_branch_coords, out_dir, resolution=(180, 360), start_id=0, annotations=None):
 
     obs_id = start_id
     if annotations is None:
         annotations = {}
 
     # Sample spherical patches from the corresponding neuron image
-    img = tf.imread(img_path)
+    # img = tf.imread(img_path)
+    img = img / img.max()
     permutations = [[0,1,2],
                     [0,2,1],
                     [1,2,0],
                     [1,0,2],
                     [2,0,1],
                     [2,1,0]]
+    # Create meshgrid for spherical coordinates
+    theta_res, phi_res = resolution
+    theta = np.linspace(0, np.pi, theta_res)
+    phi = np.linspace(0, 2*np.pi, phi_res)
+    theta_grid, phi_grid = np.meshgrid(theta, phi, indexing='ij')
+    
+    # Convert to cartesian coordinates (points on a unit sphere)
+    x = np.sin(theta_grid) * np.cos(phi_grid)
+    y = np.sin(theta_grid) * np.sin(phi_grid)
+    z = np.cos(theta_grid)
+
     # Sample branch positive patches
     for i in range(len(branch_coords)):
         spherical_patches = []
         for r in range(3,55,3):
             for perm in permutations:
-                patch = extract_spherical_patch(img, branch_coords[i], radius=r, permutation=perm)
+                patch = extract_spherical_patch(img, x, y, z, branch_coords[i], radius=r, permutation=perm)
                 spherical_patches.append(patch)
         patch = np.stack(spherical_patches, axis=0)
         fname = f"obs_{obs_id}.pt"
@@ -137,7 +151,7 @@ def save_spherical_patches(img_path, branch_coords, non_branch_coords, out_dir, 
         spherical_patches = []
         for r in range(3,55,3):
             for perm in permutations:
-                patch = extract_spherical_patch(img, branch_coords[i], radius=r, permutation=perm)
+                patch = extract_spherical_patch(img, non_branch_coords[i], radius=r, permutation=perm)
                 spherical_patches.append(patch)
         patch = np.stack(spherical_patches, axis=0)
         fname = f"obs_{obs_id}.pt"
@@ -148,12 +162,11 @@ def save_spherical_patches(img_path, branch_coords, non_branch_coords, out_dir, 
     return annotations, obs_id
 
 
-def spherical_patch_dataset(swc_dir, img_dir, out_dir, samples_per_neuron=1000):
+def save_coordinates_and_annotations(swc_dir, img_dir, out_dir, samples_per_neuron=100, seed=0):
+    rng = np.random.default_rng(seed)
 
-    rng = np.random.default_rng(0)
-
+    sample_points = {}
     annotations = {}
-    obs_id = 0
     swc_files = os.listdir(swc_dir)
     img_files = os.listdir(img_dir)
     for i in tqdm(range(len(swc_files))):
@@ -166,16 +179,81 @@ def spherical_patch_dataset(swc_dir, img_dir, out_dir, samples_per_neuron=1000):
         img_path = os.path.join(img_dir, img_name)
         img = tf.imread(img_path)
         shape = img.shape
-
         del img
 
         sections, sections_graph = load.parse_swc(swc_list)
         branches, terminals = load.get_critical_points(swc_list, sections)
+
         segments = []
         for section in sections.values():
             segments.append(section)
-        segments = torch.concatenate(segments)
+        segments = np.concatenate(segments)
 
+        density = draw.draw_neuron_density(segments, shape)
+        mask = draw.draw_neuron_mask(density, threshold=5.0)
+        del density
+
+        branch_coords, non_branch_coords = random_points_from_mask(mask, branches, samples_per_neuron, rng=rng)
+        sample_points[img_name] = np.concatenate((branch_coords, non_branch_coords))
+        current_size = len(annotations)
+        for i in range(current_size,len(sample_points)+current_size):
+            k = i - current_size < len(branch_coords)
+            annotations[f"obs_{i}.pt"] = k
+
+    np.save(os.path.join(out_dir, "sample_points.npy"), sample_points)
+    # save annotations
+    # split into test and training data
+    name = "gold166"
+    data_permutation = torch.randperm(len(annotations))
+    test_idxs = data_permutation[:len(data_permutation)//5].tolist()
+    training_idxs = data_permutation[len(data_permutation)//5:].tolist()
+    training_annotations = {list(annotations)[i]: list(annotations.values())[i] for i in training_idxs}
+    test_annotations = {list(annotations)[i]: list(annotations.values())[i] for i in test_idxs}
+    # save
+    date = datetime.now().strftime("%m-%d-%y")
+    df = pd.DataFrame.from_dict(training_annotations, orient="index")
+    df.to_csv(os.path.join(out_dir, f"branch_classifier_{name}_{date}_training_labels.csv"))
+    df = pd.DataFrame.from_dict(test_annotations, orient="index")
+    df.to_csv(os.path.join(out_dir, f"branch_classifier_{name}_{date}_test_labels.csv"))
+
+    return
+
+
+
+def spherical_patch_dataset(swc_dir, img_dir, out_dir, samples_per_neuron=100, sync=False, seed=0):
+
+    rng = np.random.default_rng(seed)
+    obs_id = 0
+    ncomplete = 0
+    if sync:
+        existing_files = os.listdir(os.path.join(out_dir, "observations"))
+        ids = [int(f.split('.')[0].split('_')[1]) for f in existing_files]
+        obs_id = max(ids) + 1
+        ncomplete = obs_id//1000
+
+    annotations = {}
+    swc_files = os.listdir(swc_dir)
+    img_files = os.listdir(img_dir)
+    for i in tqdm(range(ncomplete, len(swc_files))):
+        swc_list = load.swc(os.path.join(swc_dir, swc_files[i]), verbose=False)
+        img_name = [img_file for img_file in img_files if img_file.split('.tif')[0] in swc_files[i]]
+        try:
+            img_name = img_name[0]
+        except IndexError:
+            continue
+        img_path = os.path.join(img_dir, img_name)
+        img = tf.imread(img_path)
+        shape = img.shape
+        # del img
+
+        sections, sections_graph = load.parse_swc(swc_list)
+        branches, terminals = load.get_critical_points(swc_list, sections)
+        if len(branches)==0:
+            continue
+        segments = []
+        for section in sections.values():
+            segments.append(section)
+        segments = np.concatenate(segments)
 
         density = draw.draw_neuron_density(segments, shape)
         mask = draw.draw_neuron_mask(density, threshold=5.0)
@@ -183,7 +261,7 @@ def spherical_patch_dataset(swc_dir, img_dir, out_dir, samples_per_neuron=1000):
 
         branch_coords, non_branch_coords = random_points_from_mask(mask, branches, samples_per_neuron, rng=rng)
         
-        annotations, obs_id = save_spherical_patches(img_path, branch_coords, non_branch_coords, out_dir, start_id=obs_id, annotations=annotations)
+        annotations, obs_id = save_spherical_patches(img, branch_coords, non_branch_coords, out_dir, start_id=obs_id, annotations=annotations)
 
     # save annotations
     # split into test and training data

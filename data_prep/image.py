@@ -15,6 +15,7 @@ from skimage.draw import line_nd
 from skimage.filters import gaussian
 from skimage.morphology import dilation
 from typing import Literal
+import warnings
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -40,6 +41,8 @@ def draw_line_segment(segment, width, binary=False, value=1.0):
     """
     
     segment = segment[1] - segment[0]
+    if isinstance(segment, np.ndarray):
+        segment = torch.from_numpy(segment)
     segment_length = torch.sqrt(torch.sum(segment**2))
 
     # the patch should contain both line end points plus some blur
@@ -197,7 +200,12 @@ class Image:
         """
         i,j,k = [int(round(x.item())) for x in center]
         shape = self.data.shape[1:]
-
+        if any([i < 0, j < 0, k < 0, i >= shape[0], j >= shape[1], k >= shape[2]]):
+            warnings.warn(f"Center {center} is out of bounds for image shape {shape}. Translating to the nearest valid index.")
+            i = np.clip(i, 0, shape[0]-1)
+            j = np.clip(j, 0, shape[1]-1)
+            k = np.clip(k, 0, shape[2]-1)
+            
         # get amount of padding for each face
         zpad_top = zpad_btm = ypad_front = ypad_back = xpad_left = xpad_right = 0
 

@@ -189,7 +189,7 @@ def draw_neuron(segments, shape, width, noise, neuron_color=None, background_col
     return img
 
 
-def neuron_from_swc(swc_list, width=3, noise=0.05, dropout=True, adjust=True, background_color=None, neuron_color=None, random_brightness=False, binary=False, rng=None):
+def neuron_from_swc(swc_list, width=3, noise=0.05, dropout=True, adjust=False, background_color=None, neuron_color=None, random_brightness=False, binary=False, rng=None):
     """
     Generate a neuron image from an SWC list.
     
@@ -239,16 +239,20 @@ def neuron_from_swc(swc_list, width=3, noise=0.05, dropout=True, adjust=True, ba
     if rng is None:
         rng = np.random.default_rng()
 
-    sections, graph, branches, terminals, scale = load.parse_swc_list(swc_list, adjust=adjust)
-
+    # sections, graph, branches, terminals, scale = load.parse_swc_list(swc_list, adjust=adjust)
+    sections, graph = load.parse_swc(swc_list)
+    branches, terminals = load.get_critical_points(swc_list, sections)
+    scale = 1.0
+    if adjust:
+        sections, branches, terminals, scale = load.adjust_neuron_coords(sections, branches, terminals)
     segments = []
     for section in sections.values():
         segments.append(section)
-    segments = torch.concatenate(segments)
+    segments = np.concatenate(segments)
 
-    shape = torch.ceil(torch.amax(segments, dim=(0,1)))
-    shape = shape.to(torch.int)
-    shape = shape + torch.tensor([10, 10, 10])  # type: ignore
+    shape = np.ceil(np.max(segments[...,:3], axis=(0,1)))
+    shape = shape.astype(np.uint16)
+    shape = shape + np.array([10, 10, 10])  # type: ignore
     shape = tuple(shape.tolist())
 
     img = draw_neuron(segments, shape=shape, width=width, noise=noise, neuron_color=neuron_color,
@@ -275,11 +279,11 @@ def neuron_from_swc(swc_list, width=3, noise=0.05, dropout=True, adjust=True, ba
 
     branch_mask = Image(torch.zeros_like(mask))
     for point in branches:
-        branch_mask.draw_point(point, radius=3, binary=True, value=1, channel=0)
+        branch_mask.draw_point(point[:3], radius=3, binary=True, value=1, channel=0)
     # set branch_mask.data to zero where mask is zero
     branch_mask.data = branch_mask.data * mask.data
 
-    seed = sections[1][0,0].round().to(int).tolist() # type: ignore
+    seed = sections[1][0,0].round().astype(np.uint16).tolist() # type: ignore
 
     swc_data = {"image": img.data,
                 "neuron_density": density.data,

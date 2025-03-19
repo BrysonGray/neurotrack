@@ -113,7 +113,7 @@
 </pre></div>
 </div>
 </div>
-<div class="nbinput docutils container">
+<div class="nbinput nblast docutils container">
 <div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[2]:
 </pre></div>
 </div>
@@ -144,15 +144,6 @@
 </pre></div>
 </div>
 </div>
-<div class="nboutput nblast docutils container">
-<div class="prompt empty docutils container">
-</div>
-<div class="output_area stderr docutils container">
-<div class="highlight"><pre>
-/home/bgray/anaconda3/envs/neurotrack/lib/python3.8/site-packages/tqdm/auto.py:21: TqdmWarning: IProgress not found. Please update jupyter and ipywidgets. See https://ipywidgets.readthedocs.io/en/stable/user_install.html
-  from .autonotebook import tqdm as notebook_tqdm
-</pre></div></div>
-</div>
 <section id="Collect-branch-classifier-training-data">
 <h2>Collect branch classifier training data<a class="headerlink" href="#Collect-branch-classifier-training-data" title="Link to this heading"></a></h2>
 <div class="line-block">
@@ -163,17 +154,17 @@
 <section id="Get-sample-points-from-swc-files-then-save-sample-spherical-patches">
 <h3>Get sample points from swc files then save sample spherical patches<a class="headerlink" href="#Get-sample-points-from-swc-files-then-save-sample-spherical-patches" title="Link to this heading"></a></h3>
 <div class="nbinput nblast docutils container">
-<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[9]:
+<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[53]:
 </pre></div>
 </div>
 <div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="c1"># Load SWC file data into python lists</span>
-<span class="n">swc_dir</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">expanduser</span><span class="p">(</span><span class="s2">&quot;~/bmap/gold166_swc_scaled&quot;</span><span class="p">)</span>
+<span class="n">swc_dir</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">expanduser</span><span class="p">(</span><span class="s2">&quot;~/data/gold166_swc_scaled&quot;</span><span class="p">)</span>
 <span class="n">swc_files</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">listdir</span><span class="p">(</span><span class="n">swc_dir</span><span class="p">)</span>
 
-<span class="n">img_dir</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">expanduser</span><span class="p">(</span><span class="s2">&quot;~/bmap/gold166_tifs_scaled/&quot;</span><span class="p">)</span>
-<span class="n">image_files</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">listdir</span><span class="p">(</span><span class="n">img_dir</span><span class="p">)</span>
+<span class="n">img_dir</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">expanduser</span><span class="p">(</span><span class="s2">&quot;~/data/gold166_tifs_scaled/&quot;</span><span class="p">)</span>
+<span class="n">img_files</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">listdir</span><span class="p">(</span><span class="n">img_dir</span><span class="p">)</span>
 
-<span class="n">out_dir</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">expanduser</span><span class="p">(</span><span class="s2">&quot;~/bmap/gold166_classifier_data/&quot;</span><span class="p">)</span>
+<span class="n">out_dir</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">expanduser</span><span class="p">(</span><span class="s2">&quot;~/data/gold166_classifier_data/&quot;</span><span class="p">)</span>
 <span class="k">if</span> <span class="ow">not</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">exists</span><span class="p">(</span><span class="n">out_dir</span><span class="p">):</span>
     <span class="n">os</span><span class="o">.</span><span class="n">makedirs</span><span class="p">(</span><span class="n">out_dir</span><span class="p">,</span> <span class="n">exist_ok</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
     <span class="nb">print</span><span class="p">(</span><span class="sa">f</span><span class="s2">&quot;Created directory: </span><span class="si">{</span><span class="n">out_dir</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">)</span>
@@ -2139,19 +2130,223 @@
 </pre></div></div>
 </div>
 <div class="nbinput docutils container">
-<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[ ]:
+<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[57]:
 </pre></div>
 </div>
-<div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">collect</span><span class="o">.</span><span class="n">save_coordinates_and_annotations</span><span class="p">(</span><span class="n">swc_dir</span><span class="p">,</span> <span class="n">img_dir</span><span class="p">,</span> <span class="n">out_dir</span><span class="p">,</span> <span class="n">samples_per_neuron</span><span class="o">=</span><span class="mi">100</span><span class="p">,</span> <span class="n">seed</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+<div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">swc_files</span><span class="p">[</span><span class="mi">104</span><span class="p">]</span>
 </pre></div>
 </div>
+</div>
+<div class="nboutput nblast docutils container">
+<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[57]:
+</pre></div>
+</div>
+<div class="output_area docutils container">
+<div class="highlight"><pre>
+&#39;case1-slide2-section1-left-cell1_merge_c2.v3dpbd.swc&#39;
+</pre></div></div>
+</div>
+<div class="nbinput docutils container">
+<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[64]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">swc_file</span> <span class="o">=</span> <span class="s1">&#39;/home/brysongray/data/gold166/e_checked6_chick_uw/DONE_case1-slide2-section1-left-cell1_merge_c2/case1-slide2-section1-left-cell1_merge_c2.v3dpbd.swc&#39;</span>
+<span class="n">img_file</span> <span class="o">=</span> <span class="s1">&#39;/home/brysongray/data/gold166_tifs/case1-slide2-section1-left-cell1_merge_c2.tif&#39;</span>
+
+<span class="n">swc_list</span> <span class="o">=</span> <span class="n">load</span><span class="o">.</span><span class="n">swc</span><span class="p">(</span><span class="n">swc_file</span><span class="p">)</span>
+<span class="n">img</span> <span class="o">=</span> <span class="n">tf</span><span class="o">.</span><span class="n">imread</span><span class="p">(</span><span class="n">img_file</span><span class="p">)</span>
+
+<span class="n">shape</span> <span class="o">=</span> <span class="n">img</span><span class="o">.</span><span class="n">shape</span>
+<span class="k">del</span> <span class="n">img</span>
+
+<span class="n">sections</span><span class="p">,</span> <span class="n">sections_graph</span> <span class="o">=</span> <span class="n">load</span><span class="o">.</span><span class="n">parse_swc</span><span class="p">(</span><span class="n">swc_list</span><span class="p">)</span>
+<span class="n">branches</span><span class="p">,</span> <span class="n">terminals</span> <span class="o">=</span> <span class="n">load</span><span class="o">.</span><span class="n">get_critical_points</span><span class="p">(</span><span class="n">swc_list</span><span class="p">,</span> <span class="n">sections</span><span class="p">)</span>
+
+<span class="n">segments</span> <span class="o">=</span> <span class="p">[]</span>
+<span class="k">for</span> <span class="n">section</span> <span class="ow">in</span> <span class="n">sections</span><span class="o">.</span><span class="n">values</span><span class="p">():</span>
+    <span class="n">segments</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">section</span><span class="p">)</span>
+<span class="n">segments</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">concatenate</span><span class="p">(</span><span class="n">segments</span><span class="p">)</span>
+
+<span class="n">density</span> <span class="o">=</span> <span class="n">draw</span><span class="o">.</span><span class="n">draw_neuron_density</span><span class="p">(</span><span class="n">segments</span><span class="p">,</span> <span class="n">shape</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+<div class="nboutput docutils container">
+<div class="prompt empty docutils container">
+</div>
+<div class="output_area docutils container">
+<div class="highlight"><pre>
+loading file: /home/brysongray/data/gold166/e_checked6_chick_uw/DONE_case1-slide2-section1-left-cell1_merge_c2/case1-slide2-section1-left-cell1_merge_c2.v3dpbd.swc
+</pre></div></div>
 </div>
 <div class="nboutput nblast docutils container">
 <div class="prompt empty docutils container">
 </div>
 <div class="output_area stderr docutils container">
 <div class="highlight"><pre>
-  5%|▌         | 7/140 [07:14&lt;2:49:37, 76.53s/it]
+/home/brysongray/neurotrack/notebooks/../data_prep/image.py:202: UserWarning: Center tensor([ 78.0350, 603.8480, 556.5220], dtype=torch.float64) is out of bounds for image shape torch.Size([76, 1024, 1024]). Translating to the nearest valid index.
+  # get amount of padding for each face
+/home/brysongray/neurotrack/notebooks/../data_prep/image.py:202: UserWarning: Center tensor([ 78.0350, 598.4050, 528.3160], dtype=torch.float64) is out of bounds for image shape torch.Size([76, 1024, 1024]). Translating to the nearest valid index.
+  # get amount of padding for each face
+/home/brysongray/neurotrack/notebooks/../data_prep/image.py:202: UserWarning: Center tensor([ 78.0350, 594.4450, 517.9240], dtype=torch.float64) is out of bounds for image shape torch.Size([76, 1024, 1024]). Translating to the nearest valid index.
+  # get amount of padding for each face
+/home/brysongray/neurotrack/notebooks/../data_prep/image.py:202: UserWarning: Center tensor([ 78.0350, 593.9520, 517.9240], dtype=torch.float64) is out of bounds for image shape torch.Size([76, 1024, 1024]). Translating to the nearest valid index.
+  # get amount of padding for each face
+/home/brysongray/neurotrack/notebooks/../data_prep/image.py:202: UserWarning: Center tensor([ 78.0350, 592.9610, 500.6050], dtype=torch.float64) is out of bounds for image shape torch.Size([76, 1024, 1024]). Translating to the nearest valid index.
+  # get amount of padding for each face
+/home/brysongray/neurotrack/notebooks/../data_prep/image.py:202: UserWarning: Center tensor([ 78.0350, 592.9610, 500.1100], dtype=torch.float64) is out of bounds for image shape torch.Size([76, 1024, 1024]). Translating to the nearest valid index.
+  # get amount of padding for each face
+/home/brysongray/neurotrack/notebooks/../data_prep/image.py:202: UserWarning: Center tensor([ 76.9550, 598.4050, 476.8520], dtype=torch.float64) is out of bounds for image shape torch.Size([76, 1024, 1024]). Translating to the nearest valid index.
+  # get amount of padding for each face
+/home/brysongray/neurotrack/notebooks/../data_prep/image.py:202: UserWarning: Center tensor([ 76.9550, 598.4050, 476.3580], dtype=torch.float64) is out of bounds for image shape torch.Size([76, 1024, 1024]). Translating to the nearest valid index.
+  # get amount of padding for each face
+/home/brysongray/neurotrack/notebooks/../data_prep/image.py:202: UserWarning: Center tensor([ 76.9550, 598.9000, 463.9870], dtype=torch.float64) is out of bounds for image shape torch.Size([76, 1024, 1024]). Translating to the nearest valid index.
+  # get amount of padding for each face
+/home/brysongray/neurotrack/notebooks/../data_prep/image.py:202: UserWarning: Center tensor([ 75.8760, 596.4240, 445.6780], dtype=torch.float64) is out of bounds for image shape torch.Size([76, 1024, 1024]). Translating to the nearest valid index.
+  # get amount of padding for each face
+/home/brysongray/neurotrack/notebooks/../data_prep/image.py:202: UserWarning: Center tensor([ 76.9550, 274.7840, 333.3510], dtype=torch.float64) is out of bounds for image shape torch.Size([76, 1024, 1024]). Translating to the nearest valid index.
+  # get amount of padding for each face
+/home/brysongray/neurotrack/notebooks/../data_prep/image.py:202: UserWarning: Center tensor([ 75.8760, 280.2270, 336.3200], dtype=torch.float64) is out of bounds for image shape torch.Size([76, 1024, 1024]). Translating to the nearest valid index.
+  # get amount of padding for each face
+/home/brysongray/neurotrack/notebooks/../data_prep/image.py:202: UserWarning: Center tensor([ 76.9550, 209.9600, 322.9590], dtype=torch.float64) is out of bounds for image shape torch.Size([76, 1024, 1024]). Translating to the nearest valid index.
+  # get amount of padding for each face
+/home/brysongray/neurotrack/notebooks/../data_prep/image.py:202: UserWarning: Center tensor([ 76.9550, 215.8980, 327.4130], dtype=torch.float64) is out of bounds for image shape torch.Size([76, 1024, 1024]). Translating to the nearest valid index.
+  # get amount of padding for each face
+/home/brysongray/neurotrack/notebooks/../data_prep/image.py:202: UserWarning: Center tensor([ 76.9550, 219.8570, 332.3610], dtype=torch.float64) is out of bounds for image shape torch.Size([76, 1024, 1024]). Translating to the nearest valid index.
+  # get amount of padding for each face
+/home/brysongray/neurotrack/notebooks/../data_prep/image.py:202: UserWarning: Center tensor([ 76.9550, 221.3420, 338.7940], dtype=torch.float64) is out of bounds for image shape torch.Size([76, 1024, 1024]). Translating to the nearest valid index.
+  # get amount of padding for each face
+/home/brysongray/neurotrack/notebooks/../data_prep/image.py:202: UserWarning: Center tensor([ 76.9550, 231.7330, 343.2480], dtype=torch.float64) is out of bounds for image shape torch.Size([76, 1024, 1024]). Translating to the nearest valid index.
+  # get amount of padding for each face
+/home/brysongray/neurotrack/notebooks/../data_prep/image.py:202: UserWarning: Center tensor([ 76.9550, 248.0630, 347.2070], dtype=torch.float64) is out of bounds for image shape torch.Size([76, 1024, 1024]). Translating to the nearest valid index.
+  # get amount of padding for each face
+/home/brysongray/neurotrack/notebooks/../data_prep/image.py:202: UserWarning: Center tensor([ 76.9550, 248.5570, 347.2070], dtype=torch.float64) is out of bounds for image shape torch.Size([76, 1024, 1024]). Translating to the nearest valid index.
+  # get amount of padding for each face
+/home/brysongray/neurotrack/notebooks/../data_prep/image.py:202: UserWarning: Center tensor([ 75.8760, 248.0630, 333.8460], dtype=torch.float64) is out of bounds for image shape torch.Size([76, 1024, 1024]). Translating to the nearest valid index.
+  # get amount of padding for each face
+/home/brysongray/neurotrack/notebooks/../data_prep/image.py:202: UserWarning: Center tensor([ 75.8760, 249.0530, 331.8660], dtype=torch.float64) is out of bounds for image shape torch.Size([76, 1024, 1024]). Translating to the nearest valid index.
+  # get amount of padding for each face
+/home/brysongray/neurotrack/notebooks/../data_prep/image.py:202: UserWarning: Center tensor([ 75.8760, 249.0530, 331.3710], dtype=torch.float64) is out of bounds for image shape torch.Size([76, 1024, 1024]). Translating to the nearest valid index.
+  # get amount of padding for each face
+/home/brysongray/neurotrack/notebooks/../data_prep/image.py:202: UserWarning: Center tensor([ 75.8760, 253.5060, 325.4340], dtype=torch.float64) is out of bounds for image shape torch.Size([76, 1024, 1024]). Translating to the nearest valid index.
+  # get amount of padding for each face
+/home/brysongray/neurotrack/notebooks/../data_prep/image.py:202: UserWarning: Center tensor([ 75.8760, 254.0000, 325.4340], dtype=torch.float64) is out of bounds for image shape torch.Size([76, 1024, 1024]). Translating to the nearest valid index.
+  # get amount of padding for each face
+/home/brysongray/neurotrack/notebooks/../data_prep/image.py:202: UserWarning: Center tensor([ 75.8760, 263.4030, 329.8870], dtype=torch.float64) is out of bounds for image shape torch.Size([76, 1024, 1024]). Translating to the nearest valid index.
+  # get amount of padding for each face
+/home/brysongray/neurotrack/notebooks/../data_prep/image.py:202: UserWarning: Center tensor([ 75.8760, 263.8970, 329.8870], dtype=torch.float64) is out of bounds for image shape torch.Size([76, 1024, 1024]). Translating to the nearest valid index.
+  # get amount of padding for each face
+/home/brysongray/neurotrack/notebooks/../data_prep/image.py:202: UserWarning: Center tensor([ 75.8760, 267.8550, 337.8040], dtype=torch.float64) is out of bounds for image shape torch.Size([76, 1024, 1024]). Translating to the nearest valid index.
+  # get amount of padding for each face
+/home/brysongray/neurotrack/notebooks/../data_prep/image.py:202: UserWarning: Center tensor([ 75.8760, 264.3920, 344.2370], dtype=torch.float64) is out of bounds for image shape torch.Size([76, 1024, 1024]). Translating to the nearest valid index.
+  # get amount of padding for each face
+/home/brysongray/neurotrack/notebooks/../data_prep/image.py:202: UserWarning: Center tensor([ 75.8760, 278.2480, 348.6910], dtype=torch.float64) is out of bounds for image shape torch.Size([76, 1024, 1024]). Translating to the nearest valid index.
+  # get amount of padding for each face
+/home/brysongray/neurotrack/notebooks/../data_prep/image.py:202: UserWarning: Center tensor([ 75.8760, 278.7420, 348.6910], dtype=torch.float64) is out of bounds for image shape torch.Size([76, 1024, 1024]). Translating to the nearest valid index.
+  # get amount of padding for each face
+/home/brysongray/neurotrack/notebooks/../data_prep/image.py:202: UserWarning: Center tensor([ 75.8760, 287.1550, 348.1950], dtype=torch.float64) is out of bounds for image shape torch.Size([76, 1024, 1024]). Translating to the nearest valid index.
+  # get amount of padding for each face
+/home/brysongray/neurotrack/notebooks/../data_prep/image.py:202: UserWarning: Center tensor([ 75.8760, 287.1550, 347.7010], dtype=torch.float64) is out of bounds for image shape torch.Size([76, 1024, 1024]). Translating to the nearest valid index.
+  # get amount of padding for each face
+</pre></div></div>
+</div>
+<div class="nbinput docutils container">
+<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[63]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">swc_dir</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">expanduser</span><span class="p">(</span><span class="s2">&quot;~/data/gold166&quot;</span><span class="p">)</span>
+<span class="n">swc_files</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">listdir</span><span class="p">(</span><span class="n">swc_dir</span><span class="p">)</span>
+
+<span class="n">img_dir</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">expanduser</span><span class="p">(</span><span class="s2">&quot;~/data/gold166_tifs_scaled/&quot;</span><span class="p">)</span>
+<span class="n">img_files</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">listdir</span><span class="p">(</span><span class="n">img_dir</span><span class="p">)</span>
+
+<span class="n">i</span> <span class="o">=</span> <span class="mi">104</span>
+<span class="n">swc_list</span> <span class="o">=</span> <span class="n">load</span><span class="o">.</span><span class="n">swc</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">swc_dir</span><span class="p">,</span> <span class="n">swc_files</span><span class="p">[</span><span class="n">i</span><span class="p">]),</span> <span class="n">verbose</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+<span class="n">img_name</span> <span class="o">=</span> <span class="p">[</span><span class="n">img_file</span> <span class="k">for</span> <span class="n">img_file</span> <span class="ow">in</span> <span class="n">img_files</span> <span class="k">if</span> <span class="n">img_file</span><span class="o">.</span><span class="n">split</span><span class="p">(</span><span class="s1">&#39;.tif&#39;</span><span class="p">)[</span><span class="mi">0</span><span class="p">]</span> <span class="ow">in</span> <span class="n">swc_files</span><span class="p">[</span><span class="n">i</span><span class="p">]]</span>
+<span class="n">img_name</span> <span class="o">=</span> <span class="n">img_name</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+
+<span class="n">img_path</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">img_dir</span><span class="p">,</span> <span class="n">img_name</span><span class="p">)</span>
+<span class="n">img</span> <span class="o">=</span> <span class="n">tf</span><span class="o">.</span><span class="n">imread</span><span class="p">(</span><span class="n">img_path</span><span class="p">)</span>
+<span class="n">shape</span> <span class="o">=</span> <span class="n">img</span><span class="o">.</span><span class="n">shape</span>
+<span class="k">del</span> <span class="n">img</span>
+
+<span class="n">sections</span><span class="p">,</span> <span class="n">sections_graph</span> <span class="o">=</span> <span class="n">load</span><span class="o">.</span><span class="n">parse_swc</span><span class="p">(</span><span class="n">swc_list</span><span class="p">)</span>
+<span class="n">branches</span><span class="p">,</span> <span class="n">terminals</span> <span class="o">=</span> <span class="n">load</span><span class="o">.</span><span class="n">get_critical_points</span><span class="p">(</span><span class="n">swc_list</span><span class="p">,</span> <span class="n">sections</span><span class="p">)</span>
+
+<span class="n">segments</span> <span class="o">=</span> <span class="p">[]</span>
+<span class="k">for</span> <span class="n">section</span> <span class="ow">in</span> <span class="n">sections</span><span class="o">.</span><span class="n">values</span><span class="p">():</span>
+    <span class="n">segments</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="n">section</span><span class="p">)</span>
+<span class="n">segments</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">concatenate</span><span class="p">(</span><span class="n">segments</span><span class="p">)</span>
+
+<span class="n">density</span> <span class="o">=</span> <span class="n">draw</span><span class="o">.</span><span class="n">draw_neuron_density</span><span class="p">(</span><span class="n">segments</span><span class="p">,</span> <span class="n">shape</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+<div class="nboutput nblast docutils container">
+<div class="prompt empty docutils container">
+</div>
+<div class="output_area docutils container">
+<div class="highlight"><pre>
+<span class="ansi-red-fg">---------------------------------------------------------------------------</span>
+<span class="ansi-red-fg">IndexError</span>                                Traceback (most recent call last)
+Cell <span class="ansi-green-fg">In[63], line 8</span>
+<span class="ansi-green-intense-fg ansi-bold">      5</span> img_files <span style="color: rgb(98,98,98)">=</span> os<span style="color: rgb(98,98,98)">.</span>listdir(img_dir)
+<span class="ansi-green-intense-fg ansi-bold">      7</span> i <span style="color: rgb(98,98,98)">=</span> <span style="color: rgb(98,98,98)">104</span>
+<span class="ansi-green-fg">----&gt; 8</span> swc_list <span style="color: rgb(98,98,98)">=</span> load<span style="color: rgb(98,98,98)">.</span>swc(os<span style="color: rgb(98,98,98)">.</span>path<span style="color: rgb(98,98,98)">.</span>join(swc_dir, <span class="ansi-yellow-bg">swc_files</span><span class="ansi-yellow-bg">[</span><span class="ansi-yellow-bg">i</span><span class="ansi-yellow-bg">]</span>), verbose<span style="color: rgb(98,98,98)">=</span><span class="ansi-bold" style="color: rgb(0,135,0)">False</span>)
+<span class="ansi-green-intense-fg ansi-bold">      9</span> img_name <span style="color: rgb(98,98,98)">=</span> [img_file <span class="ansi-bold" style="color: rgb(0,135,0)">for</span> img_file <span class="ansi-bold" style="color: rgb(175,0,255)">in</span> img_files <span class="ansi-bold" style="color: rgb(0,135,0)">if</span> img_file<span style="color: rgb(98,98,98)">.</span>split(<span style="color: rgb(175,0,0)">&#39;</span><span style="color: rgb(175,0,0)">.tif</span><span style="color: rgb(175,0,0)">&#39;</span>)[<span style="color: rgb(98,98,98)">0</span>] <span class="ansi-bold" style="color: rgb(175,0,255)">in</span> swc_files[i]]
+<span class="ansi-green-intense-fg ansi-bold">     10</span> img_name <span style="color: rgb(98,98,98)">=</span> img_name[<span style="color: rgb(98,98,98)">0</span>]
+
+<span class="ansi-red-fg">IndexError</span>: list index out of range
+</pre></div></div>
+</div>
+<div class="nbinput docutils container">
+<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[54]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">collect</span><span class="o">.</span><span class="n">save_coordinates_and_annotations</span><span class="p">(</span><span class="n">swc_dir</span><span class="p">,</span> <span class="n">img_dir</span><span class="p">,</span> <span class="n">out_dir</span><span class="p">,</span> <span class="n">samples_per_neuron</span><span class="o">=</span><span class="mi">100</span><span class="p">,</span> <span class="n">seed</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+<div class="nboutput docutils container">
+<div class="prompt empty docutils container">
+</div>
+<div class="output_area stderr docutils container">
+<div class="highlight"><pre>
+ 76%|███████▌  | 104/137 [14:27&lt;04:35,  8.34s/it]
+</pre></div></div>
+</div>
+<div class="nboutput nblast docutils container">
+<div class="prompt empty docutils container">
+</div>
+<div class="output_area docutils container">
+<div class="highlight"><pre>
+<span class="ansi-red-fg">---------------------------------------------------------------------------</span>
+<span class="ansi-red-fg">RuntimeError</span>                              Traceback (most recent call last)
+Cell <span class="ansi-green-fg">In[54], line 1</span>
+<span class="ansi-green-fg">----&gt; 1</span> <span class="ansi-yellow-bg">collect</span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">.</span><span class="ansi-yellow-bg">save_coordinates_and_annotations</span><span class="ansi-yellow-bg">(</span><span class="ansi-yellow-bg">swc_dir</span><span class="ansi-yellow-bg">,</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg">img_dir</span><span class="ansi-yellow-bg">,</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg">out_dir</span><span class="ansi-yellow-bg">,</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg">samples_per_neuron</span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">=</span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">100</span><span class="ansi-yellow-bg">,</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg">seed</span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">=</span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">0</span><span class="ansi-yellow-bg">)</span>
+
+File <span class="ansi-green-fg">~/neurotrack/notebooks/../data_prep/collect.py:192</span>, in <span class="ansi-cyan-fg">save_coordinates_and_annotations</span><span class="ansi-blue-fg">(swc_dir, img_dir, out_dir, samples_per_neuron, seed)</span>
+<span class="ansi-green-intense-fg ansi-bold">    189</span>     segments<span style="color: rgb(98,98,98)">.</span>append(section)
+<span class="ansi-green-intense-fg ansi-bold">    190</span> segments <span style="color: rgb(98,98,98)">=</span> np<span style="color: rgb(98,98,98)">.</span>concatenate(segments)
+<span class="ansi-green-fg">--&gt; 192</span> density <span style="color: rgb(98,98,98)">=</span> <span class="ansi-yellow-bg">draw</span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">.</span><span class="ansi-yellow-bg">draw_neuron_density</span><span class="ansi-yellow-bg">(</span><span class="ansi-yellow-bg">segments</span><span class="ansi-yellow-bg">,</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg">shape</span><span class="ansi-yellow-bg">)</span>
+<span class="ansi-green-intense-fg ansi-bold">    193</span> mask <span style="color: rgb(98,98,98)">=</span> draw<span style="color: rgb(98,98,98)">.</span>draw_neuron_mask(density, threshold<span style="color: rgb(98,98,98)">=</span><span style="color: rgb(98,98,98)">5.0</span>)
+<span class="ansi-green-intense-fg ansi-bold">    194</span> <span class="ansi-bold" style="color: rgb(0,135,0)">del</span> density
+
+File <span class="ansi-green-fg">~/neurotrack/notebooks/../data_prep/draw.py:39</span>, in <span class="ansi-cyan-fg">draw_neuron_density</span><span class="ansi-blue-fg">(segments, shape, width)</span>
+<span class="ansi-green-intense-fg ansi-bold">     37</span>     <span class="ansi-bold" style="color: rgb(0,135,0)">for</span> s <span class="ansi-bold" style="color: rgb(175,0,255)">in</span> segments:
+<span class="ansi-green-intense-fg ansi-bold">     38</span>         width <span style="color: rgb(98,98,98)">=</span> ((s[<span style="color: rgb(98,98,98)">0</span>,<span style="color: rgb(98,98,98)">3</span>]<span style="color: rgb(98,98,98)">+</span>s[<span style="color: rgb(98,98,98)">1</span>,<span style="color: rgb(98,98,98)">3</span>])<span style="color: rgb(98,98,98)">/</span><span style="color: rgb(98,98,98)">2</span>)<span style="color: rgb(98,98,98)">.</span>item()
+<span class="ansi-green-fg">---&gt; 39</span>         <span class="ansi-yellow-bg">density</span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">.</span><span class="ansi-yellow-bg">draw_line_segment</span><span class="ansi-yellow-bg">(</span><span class="ansi-yellow-bg">s</span><span class="ansi-yellow-bg">[</span><span class="ansi-yellow-bg">:</span><span class="ansi-yellow-bg">,</span><span class="ansi-yellow-bg">:</span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">3</span><span class="ansi-yellow-bg">]</span><span class="ansi-yellow-bg">,</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg">width</span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">=</span><span class="ansi-yellow-bg">width</span><span class="ansi-yellow-bg">,</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg">channel</span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">=</span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">0</span><span class="ansi-yellow-bg">)</span>
+<span class="ansi-green-intense-fg ansi-bold">     40</span> <span class="ansi-bold" style="color: rgb(0,135,0)">else</span>:
+<span class="ansi-green-intense-fg ansi-bold">     41</span>     <span class="ansi-bold" style="color: rgb(0,135,0)">for</span> s <span class="ansi-bold" style="color: rgb(175,0,255)">in</span> segments:
+
+File <span class="ansi-green-fg">~/neurotrack/notebooks/../data_prep/image.py:282</span>, in <span class="ansi-cyan-fg">Image.draw_line_segment</span><span class="ansi-blue-fg">(self, segment, width, channel, value, binary)</span>
+<span class="ansi-green-intense-fg ansi-bold">    280</span>     patch[channel] <span style="color: rgb(98,98,98)">=</span> torch<span style="color: rgb(98,98,98)">.</span>where(X<span style="color: rgb(98,98,98)">*</span>patch[channel] <span style="color: rgb(98,98,98)">&gt;</span> <span style="color: rgb(98,98,98)">0</span>, torch<span style="color: rgb(98,98,98)">.</span>minimum(X,patch[channel]), torch<span style="color: rgb(98,98,98)">.</span>maximum(X,patch[channel]))
+<span class="ansi-green-intense-fg ansi-bold">    281</span> <span class="ansi-bold" style="color: rgb(0,135,0)">else</span>:
+<span class="ansi-green-fg">--&gt; 282</span>     patch[channel] <span style="color: rgb(98,98,98)">=</span> <span class="ansi-yellow-bg">torch</span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">.</span><span class="ansi-yellow-bg">maximum</span><span class="ansi-yellow-bg">(</span><span class="ansi-yellow-bg">X</span><span class="ansi-yellow-bg">,</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg">patch</span><span class="ansi-yellow-bg">[</span><span class="ansi-yellow-bg">channel</span><span class="ansi-yellow-bg">]</span><span class="ansi-yellow-bg">)</span>
+<span class="ansi-green-intense-fg ansi-bold">    283</span> new_patch <span style="color: rgb(98,98,98)">=</span> patch[channel]<span style="color: rgb(98,98,98)">.</span>clone()
+<span class="ansi-green-intense-fg ansi-bold">    285</span> <span class="ansi-bold" style="color: rgb(0,135,0)">return</span> old_patch, new_patch
+
+<span class="ansi-red-fg">RuntimeError</span>: The size of tensor a (3) must match the size of tensor b (0) at non-singleton dimension 0
 </pre></div></div>
 </div>
 <div class="nbinput docutils container">
@@ -2246,7 +2441,7 @@ File <span class="ansi-green-fg">~/neurotrack/notebooks/../data_prep/collect.py:
 <div class="prompt empty docutils container">
 </div>
 <div class="output_area docutils container">
-<img alt="_images/branch_classifier_10_1.png" src="_images/branch_classifier_10_1.png" />
+<img alt="_images/branch_classifier_13_1.png" src="_images/branch_classifier_13_1.png" />
 </div>
 </div>
 <div class="nbinput nblast docutils container">
@@ -2276,7 +2471,7 @@ File <span class="ansi-green-fg">~/neurotrack/notebooks/../data_prep/collect.py:
 <div class="prompt empty docutils container">
 </div>
 <div class="output_area docutils container">
-<img alt="_images/branch_classifier_12_0.png" src="_images/branch_classifier_12_0.png" />
+<img alt="_images/branch_classifier_15_0.png" src="_images/branch_classifier_15_0.png" />
 </div>
 </div>
 <div class="nbinput nblast docutils container">
@@ -2430,7 +2625,7 @@ Cell <span class="ansi-green-fg">In[14], line 2</span>
 <div class="prompt empty docutils container">
 </div>
 <div class="output_area docutils container">
-<img alt="_images/branch_classifier_17_0.png" src="_images/branch_classifier_17_0.png" />
+<img alt="_images/branch_classifier_20_0.png" src="_images/branch_classifier_20_0.png" />
 </div>
 </div>
 </section>
@@ -3007,7 +3202,7 @@ File <span class="ansi-green-fg">~/neurotrack/notebooks/../solvers/branch_classi
 <div class="prompt empty docutils container">
 </div>
 <div class="output_area docutils container">
-<img alt="_images/branch_classifier_25_0.png" src="_images/branch_classifier_25_0.png" />
+<img alt="_images/branch_classifier_28_0.png" src="_images/branch_classifier_28_0.png" />
 </div>
 </div>
 </section>
@@ -3066,7 +3261,7 @@ File <span class="ansi-green-fg">~/neurotrack/notebooks/../solvers/branch_classi
 <div class="prompt empty docutils container">
 </div>
 <div class="output_area docutils container">
-<img alt="_images/branch_classifier_30_0.png" src="_images/branch_classifier_30_0.png" />
+<img alt="_images/branch_classifier_33_0.png" src="_images/branch_classifier_33_0.png" />
 </div>
 </div>
 <div class="nbinput docutils container">

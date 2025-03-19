@@ -317,8 +317,8 @@ def adjust_neuron_coords(sections, branches, terminals):
     max = torch.tensor([-1e6, -1e6, -1e6])
     min = torch.tensor([1e6, 1e6, 1e6])
     for id, section in sections.items():
-        max = torch.maximum(max, section.amax(dim=(0,1))) # type: ignore #
-        min = torch.minimum(min, section.amin(dim=(0,1))) # type: ignore #
+        max = torch.maximum(max, section.max(axis=(0,1))) # type: ignore #
+        min = torch.minimum(min, section.max(axis=(0,1))) # type: ignore #
     vol = torch.prod(max - min)
     scale = torch.round((5e7 / vol)**(1/3)) # scale depends on the volume
 
@@ -328,6 +328,8 @@ def adjust_neuron_coords(sections, branches, terminals):
     if len(branches) > 0:
         branches = (branches - min) * scale + torch.tensor([10.0, 10.0, 10.0])
     terminals = (terminals - min) * scale + torch.tensor([10.0, 10.0, 10.0])
+
+    return sections, branches, terminals, scale
 
 
 if __name__ == "__main__":

@@ -200,21 +200,22 @@ def save_coordinates_and_annotations(swc_dir, img_dir, out_dir, samples_per_neur
             k = i - current_size < len(branch_coords)
             annotations[f"obs_{i}.pt"] = k
 
-    np.save(os.path.join(out_dir, "sample_points.npy"), sample_points)
-    # save annotations
-    # split into test and training data
-    name = "gold166"
-    data_permutation = torch.randperm(len(annotations))
-    test_idxs = data_permutation[:len(data_permutation)//5].tolist()
-    training_idxs = data_permutation[len(data_permutation)//5:].tolist()
-    training_annotations = {list(annotations)[i]: list(annotations.values())[i] for i in training_idxs}
-    test_annotations = {list(annotations)[i]: list(annotations.values())[i] for i in test_idxs}
-    # save
-    date = datetime.now().strftime("%m-%d-%y")
-    df = pd.DataFrame.from_dict(training_annotations, orient="index")
-    df.to_csv(os.path.join(out_dir, f"branch_classifier_{name}_{date}_training_labels.csv"))
-    df = pd.DataFrame.from_dict(test_annotations, orient="index")
-    df.to_csv(os.path.join(out_dir, f"branch_classifier_{name}_{date}_test_labels.csv"))
+        # overwrite sample points and annotations after every file
+        np.save(os.path.join(out_dir, "sample_points.npy"), sample_points)
+        # save annotations
+        # split into test and training data
+        name = "gold166"
+        data_permutation = torch.randperm(len(annotations))
+        test_idxs = data_permutation[:len(data_permutation)//5].tolist()
+        training_idxs = data_permutation[len(data_permutation)//5:].tolist()
+        training_annotations = {list(annotations)[i]: list(annotations.values())[i] for i in training_idxs}
+        test_annotations = {list(annotations)[i]: list(annotations.values())[i] for i in test_idxs}
+        # save
+        date = datetime.now().strftime("%m-%d-%y")
+        df = pd.DataFrame.from_dict(training_annotations, orient="index")
+        df.to_csv(os.path.join(out_dir, f"branch_classifier_{name}_{date}_training_labels.csv"))
+        df = pd.DataFrame.from_dict(test_annotations, orient="index")
+        df.to_csv(os.path.join(out_dir, f"branch_classifier_{name}_{date}_test_labels.csv"))
 
     return
 

@@ -108,7 +108,53 @@ def random_points_from_mask(mask, branches, samples_per_neuron, rng=None):
     return branch_coords.T, non_branch_coords
 
 
-def save_spherical_patches(img, branch_coords, non_branch_coords, out_dir, resolution=(180, 360), start_id=0, annotations=None):
+def save_spherical_patches(sample_points, img_dir, out_dir, resolution=(180,360), seed=0):
+    """
+    Parameters
+    ----------
+    sample_points : dict
+        dictionary with file names as keys and Nx3 numpy arrays of coordinates as values.
+    img_dir : str
+        directory where images are stored
+    out_dir : str
+        output directory
+    """
+
+    rng = np.random.default_rng(seed)
+    permutations = [[0,1,2],
+                    [0,2,1],
+                    [1,2,0],
+                    [1,0,2],
+                    [2,0,1],
+                    [2,1,0]]
+    # Create meshgrid for spherical coordinates
+    theta_res, phi_res = resolution
+    theta = np.linspace(0, np.pi, theta_res)
+    phi = np.linspace(0, 2*np.pi, phi_res)
+    theta_grid, phi_grid = np.meshgrid(theta, phi, indexing='ij')
+    
+    # Convert to cartesian coordinates (points on a unit sphere)
+    x = np.sin(theta_grid) * np.cos(phi_grid)
+    y = np.sin(theta_grid) * np.sin(phi_grid)
+    z = np.cos(theta_grid)
+    obs_id = 0
+    for fname, points in tqdm(sample_points.items(), total=len(sample_points)):
+        img_path = os.path.join(img_dir, fname)
+        img = tf.imread(img_path)
+        img = img / img.max()
+        for point in points:
+            spherical_patches = []
+            perm = rng.choice(permutations)
+            for r in range(3,55,3):
+                patch = extract_spherical_patch(img, x, y, z, point, radius=r, permutation=perm)
+                spherical_patches.append(patch)
+            patch = np.stack(spherical_patches, axis=0)
+            fname_out = f"obs_{obs_id}.pt"
+            torch.save(torch.from_numpy(patch), os.path.join(os.path.join(out_dir, "observations"), fname_out))
+            obs_id += 1
+    
+
+def save_spherical_patches_v0(img, branch_coords, non_branch_coords, out_dir, resolution=(180, 360), start_id=0, annotations=None):
 
     obs_id = start_id
     if annotations is None:
@@ -168,10 +214,12 @@ def save_coordinates_and_annotations(swc_dir, img_dir, out_dir, samples_per_neur
     sample_points = {}
     annotations = {}
     swc_files = os.listdir(swc_dir)
+    swc_files = sorted(swc_files)
     img_files = os.listdir(img_dir)
+    img_files = sorted(img_files)
     for i in tqdm(range(len(swc_files))):
         swc_list = load.swc(os.path.join(swc_dir, swc_files[i]), verbose=False)
-        img_name = [img_file for img_file in img_files if img_file.split('.tif')[0] in swc_files[i]]
+        img_name = [img_file for img_file in img_files if img_file.split('.tif')[0] == swc_files[i].split('.')[0]]
         try:
             img_name = img_name[0]
         except IndexError:
@@ -218,7 +266,6 @@ def save_coordinates_and_annotations(swc_dir, img_dir, out_dir, samples_per_neur
         df.to_csv(os.path.join(out_dir, f"branch_classifier_{name}_{date}_test_labels.csv"))
 
     return
-
 
 
 def spherical_patch_dataset(swc_dir, img_dir, out_dir, samples_per_neuron=100, sync=False, seed=0):

@@ -114,7 +114,7 @@ def extract_spherical_patch(volume, x, y, z, center, radius, order=1, permutatio
     # y = np.sin(theta_grid) * np.sin(phi_grid)
     # z = np.cos(theta_grid)
 
-    if permutation:
+    if permutation is not None:
         # Apply permutation to volume and center
         volume = np.transpose(volume, axes=permutation)
         # Create a new center with the permuted coordinates
@@ -134,7 +134,7 @@ def extract_spherical_patch(volume, x, y, z, center, radius, order=1, permutatio
     values = map_coordinates(volume, coords, order=order, mode='constant', cval=0)
     
     # Reshape to 2D projection
-    projection = values.reshape(resolution[0], resolution[1])
+    projection = values.reshape(x.shape[0], x.shape[1])
     
     # Normalize if requested
     if normalize and projection.max() != projection.min():

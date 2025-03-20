@@ -219,8 +219,14 @@ def parse_swc(swc_list, transpose=True):
     sections = {}
     section_ends = {}
     while len(edge_list) > 1:
+        terminals_ = None
+        if 'terminals' in locals():
+            terminals_ = terminals
         # Make list of terminal nodes
         terminals = [i for i in edge_list.keys() if len(edge_list[i]) == 1]
+        # check if the list of terminals has changed
+        if terminals == terminals_:
+            raise Exception("Could not parse swc list. The list likely has disconnected sections.")
         # from each terminal node walk along the tree until you reach a branching node
         # or another terminal node
         for terminal in terminals:

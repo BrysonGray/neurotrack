@@ -12,6 +12,7 @@ from tqdm import tqdm
 sys.path.append(str(Path(__file__).parent))
 import load, draw
 from image import Image, extract_spherical_patch
+from interp import SphericalSampler
 
 
 def swc_random_points(samples_per_file, swc_lists, file_names, adjust=False, rng=None):
@@ -108,7 +109,7 @@ def random_points_from_mask(mask, branches, samples_per_neuron, rng=None):
     return branch_coords.T, non_branch_coords
 
 
-def save_spherical_patches(sample_points, img_dir, out_dir, resolution=(180,360), seed=0):
+def save_spherical_patches(sample_points, img_dir, out_dir, radii, resolution=(180,360), batch_size=50):
     """
     Parameters
     ----------
@@ -118,40 +119,42 @@ def save_spherical_patches(sample_points, img_dir, out_dir, resolution=(180,360)
         directory where images are stored
     out_dir : str
         output directory
+    radii : torch.Tensor
+        Radii of concentric spheres from which to sample the image.
     """
 
-    rng = np.random.default_rng(seed)
-    permutations = [[0,1,2],
-                    [0,2,1],
-                    [1,2,0],
-                    [1,0,2],
-                    [2,0,1],
-                    [2,1,0]]
-    # Create meshgrid for spherical coordinates
-    theta_res, phi_res = resolution
-    theta = np.linspace(0, np.pi, theta_res)
-    phi = np.linspace(0, 2*np.pi, phi_res)
-    theta_grid, phi_grid = np.meshgrid(theta, phi, indexing='ij')
-    
-    # Convert to cartesian coordinates (points on a unit sphere)
-    x = np.sin(theta_grid) * np.cos(phi_grid)
-    y = np.sin(theta_grid) * np.sin(phi_grid)
-    z = np.cos(theta_grid)
+    permutations = [[-3,-2,-1],
+                    [-3,-1,-2],
+                    [-2,-1,-3],
+                    [-2,-3,-1],
+                    [-1,-3,-2],
+                    [-1,-2,-3]]
+    # initialize spherical sampler
+    patch_radius = int(torch.amax(radii) + 1)
+    patch_shape = (patch_radius*2+1,) * 3
+    spherical_sampler = SphericalSampler(input_shape=patch_shape, radii=radii, resolution=resolution)
+
     obs_id = 0
     for fname, points in tqdm(sample_points.items(), total=len(sample_points)):
         img_path = os.path.join(img_dir, fname)
         img = tf.imread(img_path)
         img = img / img.max()
-        for point in points:
+        img = Image(img[None])
+        for batch in range(int(np.ceil(len(points)/batch_size))):
+            patches = []
+            for point in points[batch*batch_size:(batch+1)*batch_size]:
+                patches.append(img.crop(point,radius=patch_radius)[0])
+            patches = torch.stack(patches) # shape (N,1,D,H,W)
             spherical_patches = []
-            perm = rng.choice(permutations)
-            for r in range(3,55,3):
-                patch = extract_spherical_patch(img, x, y, z, point, radius=r, permutation=perm)
-                spherical_patches.append(patch)
-            patch = np.stack(spherical_patches, axis=0)
-            fname_out = f"obs_{obs_id}.pt"
-            torch.save(torch.from_numpy(patch), os.path.join(os.path.join(out_dir, "observations"), fname_out))
-            obs_id += 1
+            for perm in permutations:
+                patch_perm = patches.permute(0,1,*perm)
+                spherical_patch = spherical_sampler.map_coordinates(patch_perm) # output shape (N,len(radii),1,H,W)
+                spherical_patches.append(spherical_patch.squeeze())
+            spherical_patches = torch.concatenate(spherical_patches, dim=1) # shape (N, len(radii)*len(permutations), H, W)
+            for j in range(len(spherical_patches)):
+                fname_out = f"obs_{obs_id}.pt"
+                torch.save(spherical_patches[j], os.path.join(os.path.join(out_dir, "observations"), fname_out))
+                obs_id += 1
     
 
 def save_spherical_patches_v0(img, branch_coords, non_branch_coords, out_dir, resolution=(180, 360), start_id=0, annotations=None):

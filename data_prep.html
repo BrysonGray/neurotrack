@@ -109,13 +109,14 @@
 
 <dl class="py function">
 <dt class="sig sig-object py" id="data_prep.collect.save_spherical_patches">
-<span class="sig-prename descclassname"><span class="pre">data_prep.collect.</span></span><span class="sig-name descname"><span class="pre">save_spherical_patches</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">sample_points</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">img_dir</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">out_dir</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">resolution</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">(180,</span> <span class="pre">360)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">seed</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">0</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#data_prep.collect.save_spherical_patches" title="Link to this definition"></a></dt>
+<span class="sig-prename descclassname"><span class="pre">data_prep.collect.</span></span><span class="sig-name descname"><span class="pre">save_spherical_patches</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">sample_points</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">img_dir</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">out_dir</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">radii</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">resolution</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">(180,</span> <span class="pre">360)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">batch_size</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">50</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#data_prep.collect.save_spherical_patches" title="Link to this definition"></a></dt>
 <dd><dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span></dt>
 <dd class="field-odd"><ul class="simple">
 <li><p><strong>sample_points</strong> (<em>dict</em>) – dictionary with file names as keys and Nx3 numpy arrays of coordinates as values.</p></li>
 <li><p><strong>img_dir</strong> (<em>str</em>) – directory where images are stored</p></li>
 <li><p><strong>out_dir</strong> (<em>str</em>) – output directory</p></li>
+<li><p><strong>radii</strong> (<em>torch.Tensor</em>) – Radii of concentric spheres from which to sample the image.</p></li>
 </ul>
 </dd>
 </dl>

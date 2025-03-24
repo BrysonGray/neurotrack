@@ -1,5 +1,4 @@
 from datetime import datetime
-from glob import glob
 import numpy as np
 import os
 import pandas as pd
@@ -152,8 +151,8 @@ def save_spherical_patches(sample_points, img_dir, out_dir, radii, resolution=(1
                 spherical_patches.append(spherical_patch.squeeze())
             spherical_patches = torch.concatenate(spherical_patches, dim=1) # shape (N, len(radii)*len(permutations), H, W)
             for j in range(len(spherical_patches)):
-                fname_out = f"obs_{obs_id}.pt"
-                torch.save(spherical_patches[j], os.path.join(os.path.join(out_dir, "observations"), fname_out))
+                fname_out = f"obs_{obs_id}.tif"
+                tf.imwrite(os.path.join(os.path.join(out_dir, "observations"), fname_out), spherical_patches[j].detach().cpu().numpy(), compression='zlib')
                 obs_id += 1
     
 

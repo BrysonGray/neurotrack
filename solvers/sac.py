@@ -8,6 +8,7 @@ updating the Q-networks and actor, performing target network updates, and traini
 from datetime import datetime
 from itertools import count
 import matplotlib.pyplot as plt
+import numpy as np
 import os
 from pathlib import Path
 import sys
@@ -17,7 +18,6 @@ from tqdm import tqdm
 sys.path.append(str(Path(__file__).parents[1]))
 from memory.buffer import ReplayBuffer, PrioritizedReplayBuffer
 from plot.show_state import show_state
-
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 dtype = torch.float32
@@ -311,7 +311,7 @@ def train(env,
     if not os.path.isdir(outdir):
         os.makedirs(outdir, exist_ok=True)
     if show_states:
-        fig, ax = plt.subplots(3,3, figure=plt.figure(num=1))
+        fig, ax = plt.subplots(3,3)
         plt.ion()
 
     # Train the Network
@@ -456,7 +456,7 @@ def inference(env, actor, outdir, n_trials=5, show=True):
     """
 
     if show:
-        fig, ax = plt.subplots(2,3, figure=plt.figure(num=1))
+        fig, ax = plt.subplots(2, 3)
         plt.ion()
     actor.eval()
     for i in tqdm(range(len(env.img_files))):
@@ -500,9 +500,24 @@ def inference(env, actor, outdir, n_trials=5, show=True):
         name = env.img_files[env.img_idx].split('/')[-1].split('.')[0]
         if not os.path.exists(outdir):
             os.makedirs(outdir)
+        # Convert paths to a serializable format
+        paths_to_save = [path.detach().cpu().numpy().tolist() if isinstance(path, torch.Tensor) else path for path in env.paths]
+        labeled_neuron_np = labeled_neuron.numpy()
 
-        to_save = {"labeled_neuron": labeled_neuron, "paths": env.paths, "coverage": coverage}
-        torch.save(to_save, os.path.join(outdir, f"{name}_{date}_inference.pt"))
+        # Option 1: Using numpy's compressed format
+        np.savez_compressed(os.path.join(outdir, f"{name}_{date}_inference.npz"),
+                            labeled_neuron=labeled_neuron_np,
+                            paths=np.array(paths_to_save, dtype=object),
+                            coverage=np.float32(coverage))
+
+        # Option 2: Using HDF5 (more efficient for large arrays)
+        # import h5py
+        # with h5py.File(os.path.join(outdir, f"{name}_{date}_inference.h5"), 'w') as f:
+        #     f.create_dataset('labeled_neuron', data=labeled_neuron_np, compression='gzip')
+        #     f.create_dataset('coverage', data=np.float32(coverage))
+        #     # For complex nested lists like paths, store as JSON string
+        #     import json
+        #     f.create_dataset('paths', data=json.dumps(paths_to_save).encode('utf-8'))
 
         env.reset()
 

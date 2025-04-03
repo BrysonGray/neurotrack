@@ -7,7 +7,11 @@ Author: Bryson Gray
 2024
 """
 
+from glob import glob
+import json
+import numpy as np
 import os
+import tifffile as tf
 from typing import Literal
 
 from matplotlib import category
@@ -120,16 +124,20 @@ class Environment():
             self.img_files = [img_path]
 
         self.img_idx = 0
-        neuron_data = torch.load(self.img_files[self.img_idx], weights_only=False)
-        img = neuron_data["image"]
-        self.img = Image(img.to(device=DEVICE))
-        neuron_density = neuron_data["neuron_density"]
-        self.true_density = Image(neuron_density.to(device=DEVICE))
-        section_labels = neuron_data["section_labels"]
-        self.section_labels = Image(section_labels.to(device=DEVICE))
-        self.mask = neuron_data["branch_mask"]
-        self.seeds = neuron_data["seeds"]
-        self.graph = neuron_data["graph"]
+
+        self.__load_data(self.img_files[self.img_idx])
+
+        # TODO: remove old data format loader in next version update
+        # neuron_data = torch.load(self.img_files[self.img_idx], weights_only=False)
+        # img = neuron_data["image"]
+        # self.img = Image(img.to(device=DEVICE))
+        # neuron_density = neuron_data["neuron_density"]
+        # self.true_density = Image(neuron_density.to(device=DEVICE))
+        # section_labels = neuron_data["section_labels"]
+        # self.section_labels = Image(section_labels.to(device=DEVICE))
+        # self.mask = neuron_data["branch_mask"]
+        # self.seeds = neuron_data["seeds"]
+        # self.graph = neuron_data["graph"]
         
         self.radius = radius
         # make copies of the branch and terminal points so these can be changed while saving the originals
@@ -189,7 +197,7 @@ class Environment():
                 s = torch.stack((self.paths[self.head_id][-1], new_position)) - self.paths[self.head_id][-2:]
                 cos_dist = torch.dot(s[1]/torch.linalg.norm(s[1]), s[0]/torch.linalg.norm(s[0]))
                 angle = torch.arccos(cos_dist)
-                turn_around = angle > 3*torch.pi/4
+                turn_around = angle > 3*np.pi/4
 
             too_long = len(self.paths[self.head_id]) > self.max_len
 
@@ -202,6 +210,26 @@ class Environment():
                 status = "choose_stop"
 
         return terminate_path, status
+    
+
+    def __load_data(self, path):
+        img_file = glob(os.path.join(path, "*image.tif"))[0]
+        img = tf.imread(img_file)
+        self.img = Image(torch.from_numpy(img).to(device=DEVICE))
+        density_file = glob(os.path.join(path, "*density.tif"))[0]
+        density = tf.imread(density_file)
+        self.true_density = Image(torch.from_numpy(density).to(device=DEVICE))
+        section_labels_file = glob(os.path.join(path, "*sections.tif"))[0]
+        section_labels = tf.imread(section_labels_file)
+        self.section_labels = Image(torch.from_numpy(section_labels).to(device=DEVICE))
+        seeds = glob(os.path.join(path, "*seeds.txt"))[0]
+        with open(seeds, 'r') as f:
+            self.seeds = [[int(x) for x in line.strip().split(' ')] for line in f if line.strip()]
+        graph_file = glob(os.path.join(path, '*section_graph.json'))[0]
+        with open(graph_file, 'r') as f:
+            graph = json.load(f)
+            # Convert all keys from string to int
+            self.graph = {int(k): v for k, v in graph.items()}
     
 
     def get_state(self, terminate=False):
@@ -378,7 +406,7 @@ class Environment():
             # decide if path branches
             if self.classifier is not None:
                 out = self.classifier(observation[:,:3, 10:25, 10:25, 10:25])
-                out = torch.nn.functional.sigmoid(out.squeeze())
+                out = torch.sigmoid(out.squeeze())
                 if out > 0.5: # create branch
                     distances = torch.linalg.norm(torch.stack(self.roots) - new_position, dim=1)
                     if not torch.any(distances < 3.0):
@@ -411,17 +439,20 @@ class Environment():
                 self.img_idx += 1
                 self.img_idx = self.img_idx % len(self.img_files)
 
-                # load the next image
-                neuron_data = torch.load(self.img_files[self.img_idx], weights_only=False)
-                img = neuron_data["image"]
-                self.img = Image(img.to(device=DEVICE))
-                neuron_density = neuron_data["neuron_density"]
-                self.true_density = Image(neuron_density.to(device=DEVICE))
-                section_labels = neuron_data["section_labels"]
-                self.section_labels = Image(section_labels.to(device=DEVICE))
-                self.mask = neuron_data["branch_mask"]
-                self.seeds = neuron_data["seeds"]
-                self.graph = neuron_data["graph"]
+                self.__load_data(self.img_files[self.img_idx])
+                
+                # TODO: remove in next version
+                # # load the next image
+                # neuron_data = torch.load(self.img_files[self.img_idx], weights_only=False)
+                # img = neuron_data["image"]
+                # self.img = Image(img.to(device=DEVICE))
+                # neuron_density = neuron_data["neuron_density"]
+                # self.true_density = Image(neuron_density.to(device=DEVICE))
+                # section_labels = neuron_data["section_labels"]
+                # self.section_labels = Image(section_labels.to(device=DEVICE))
+                # self.mask = neuron_data["branch_mask"]
+                # self.seeds = neuron_data["seeds"]
+                # self.graph = neuron_data["graph"]
 
         seed = torch.tensor(self.seeds[self.seed_idx]) # type: ignore
         self.r = 0.0 # radius around center to randomly place starting points

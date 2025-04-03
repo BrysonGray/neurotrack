@@ -1,4 +1,5 @@
 import torch
+import numpy as np
 
 class SphericalSampler():
 
@@ -38,9 +39,9 @@ class SphericalSampler():
 
         # compute sample points
         theta_res, phi_res = resolution
-        theta = torch.linspace(0, torch.pi, theta_res)
-        phi = torch.linspace(0, 2*torch.pi, phi_res)
-        theta_grid, phi_grid = torch.meshgrid(theta, phi, indexing='ij')
+        theta = torch.linspace(0, np.pi, theta_res)
+        phi = torch.linspace(0, 2*np.pi, phi_res)
+        theta_grid, phi_grid = torch.meshgrid(theta, phi)
 
         # Convert to cartesian coordinates (points on a unit sphere)
         x = (torch.sin(theta_grid) * torch.cos(phi_grid) + 1) # ndim is 2, i.e. shape is equal to resolution
@@ -54,7 +55,7 @@ class SphericalSampler():
         z = z * radii[:,None,None]
 
         points_f000 = torch.stack((z,y,x), dim=-1).reshape(-1,3)
-        points_i000 = torch.floor(points_f000).int()
+        points_i000 = torch.floor(points_f000).long()
         p000 = points_f000 - points_i000
 
         # compute sample weights

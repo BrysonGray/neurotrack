@@ -286,12 +286,14 @@ def get_critical_points(swc_list, sections, transpose=True):
             node = child
             prev = branch
             l = np.linalg.norm(np.array(swc_list[node-1][2:5]) - np.array(swc_list[prev-1][2:5]))
+            if l >= avg_length:
+                num_long_sections += 1
             while len(edge_list[node]) >= 2:
                 next_node = [n for n in edge_list[node] if n != prev][0]
                 prev = node
                 node = next_node
                 l += np.linalg.norm(np.array(swc_list[node-1][2:5]) - np.array(swc_list[prev-1][2:5]))
-                if l > 2*avg_length:
+                if l >= avg_length:
                     num_long_sections += 1
                     break
             # if the length of at least two sections is greater than 2*avg_length, continue
@@ -300,6 +302,7 @@ def get_critical_points(swc_list, sections, transpose=True):
         # else, mark the branch for removal
         if num_long_sections <= 2:
             branches_to_remove.append(branch)
+    print(f'removing {len(branches_to_remove)} branches')
     for branch in branches_to_remove:
         branches.remove(branch)
 
@@ -320,20 +323,20 @@ def get_critical_points(swc_list, sections, transpose=True):
 def adjust_neuron_coords(sections, branches, terminals):
     scale = 1
     # scale and shift coordinates
-    max = torch.tensor([-1e6, -1e6, -1e6])
-    min = torch.tensor([1e6, 1e6, 1e6])
+    max = np.array([-1e6, -1e6, -1e6])
+    min = np.array([1e6, 1e6, 1e6])
     for id, section in sections.items():
-        max = torch.maximum(max, section.max(axis=(0,1))) # type: ignore #
-        min = torch.minimum(min, section.max(axis=(0,1))) # type: ignore #
-    vol = torch.prod(max - min)
-    scale = torch.round((5e7 / vol)**(1/3)) # scale depends on the volume
+        max = np.maximum(max, section.max(axis=(0,1))[:3]) # type: ignore #
+        min = np.minimum(min, section.min(axis=(0,1))[:3]) # type: ignore #
+    vol = np.prod(max - min)
+    scale = np.round((5e7 / vol)**(1/3)) # scale depends on the volume
 
     for id, section in sections.items():
-        section = (section - min) * scale + torch.tensor([10.0, 10.0, 10.0])
+        section[...,:3] = (section[...,:3] - min) * scale + np.array([10.0, 10.0, 10.0])
         sections[id] = section # type: ignore #
     if len(branches) > 0:
-        branches = (branches - min) * scale + torch.tensor([10.0, 10.0, 10.0])
-    terminals = (terminals - min) * scale + torch.tensor([10.0, 10.0, 10.0])
+        branches[...,:3] = (branches[...,:3] - min) * scale + np.array([10.0, 10.0, 10.0])
+    terminals[...,:3] = (terminals[...,:3] - min) * scale + np.array([10.0, 10.0, 10.0])
 
     return sections, branches, terminals, scale
 

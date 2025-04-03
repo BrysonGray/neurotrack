@@ -13,6 +13,8 @@ import load, draw
 from image import Image, extract_spherical_patch
 from interp import SphericalSampler
 
+DATE = datetime.now().strftime("%m-%d-%y")
+
 
 def swc_random_points(samples_per_file, swc_lists, file_names, adjust=False, rng=None):
     """
@@ -75,12 +77,12 @@ def random_points_from_mask(mask, branches, samples_per_neuron, rng=None):
 
     # get a random sample of branch coordinates
     branch_coords = np.argwhere(branch_mask.data[0])
-    branch_coords = rng.choice(branch_coords, int(samples_per_neuron/2), replace=False, axis=1)
+    branch_coords = rng.choice(branch_coords, int(samples_per_neuron/2), replace=True, axis=1)
 
     # get a random sample of non-branch neuron coordinates
     neuron_nonbranch = mask[0] & ~branch_mask.data[0]
     neuron_nonbranch_coords = np.argwhere(neuron_nonbranch)
-    neuron_nonbranch_coords = rng.choice(neuron_nonbranch_coords, int(samples_per_neuron/4), replace=False, axis=1)
+    neuron_nonbranch_coords = rng.choice(neuron_nonbranch_coords, int(samples_per_neuron/4), replace=True, axis=1)
 
     # background is voxels not in the neuron mask or branch mask
     background = ~(mask[0] & branch_mask.data[0])
@@ -108,6 +110,27 @@ def random_points_from_mask(mask, branches, samples_per_neuron, rng=None):
     return branch_coords.T, non_branch_coords
 
 
+def save_square_patches(sample_points, img_dir, out_dir, radius):
+    out_dir = os.path.join(out_dir, f"observations_{DATE}")
+    if not os.path.exists(out_dir):
+        os.makedirs(out_dir, exist_ok=True)
+
+    obs_id = 0
+    for fname, points in tqdm(sample_points.items(), total=len(sample_points)):
+        img_path = os.path.join(img_dir, fname)
+        img = tf.imread(img_path)
+        img = img / img.max()
+        img = Image(img[None])
+        
+        for point in points:
+            patch, _ = img.crop(torch.tensor(point), radius, pad=True, value=0.0)
+            fname_out = f"obs_{obs_id}.tif"
+            tf.imwrite(os.path.join(out_dir, fname_out), patch[0].detach().cpu().numpy(), compression='zlib')
+            obs_id += 1
+
+    return
+
+
 def save_spherical_patches(sample_points, img_dir, out_dir, radii, resolution=(180,360), batch_size=50):
     """
     Parameters
@@ -121,6 +144,10 @@ def save_spherical_patches(sample_points, img_dir, out_dir, radii, resolution=(1
     radii : torch.Tensor
         Radii of concentric spheres from which to sample the image.
     """
+
+    obs_out = os.path.join(out_dir, f"observations_{DATE}")
+    if not os.path.exists(obs_out):
+        os.makedirs(obs_out, exist_ok=True)
 
     permutations = [[-3,-2,-1],
                     [-3,-1,-2],
@@ -148,11 +175,11 @@ def save_spherical_patches(sample_points, img_dir, out_dir, radii, resolution=(1
             for perm in permutations:
                 patch_perm = patches.permute(0,1,*perm)
                 spherical_patch = spherical_sampler.map_coordinates(patch_perm) # output shape (N,len(radii),1,H,W)
-                spherical_patches.append(spherical_patch.squeeze())
-            spherical_patches = torch.concatenate(spherical_patches, dim=1) # shape (N, len(radii)*len(permutations), H, W)
+                spherical_patches.append(spherical_patch.squeeze(2))
+            spherical_patches = torch.cat(spherical_patches, dim=1) # shape (N, len(radii)*len(permutations), H, W)
             for j in range(len(spherical_patches)):
                 fname_out = f"obs_{obs_id}.tif"
-                tf.imwrite(os.path.join(os.path.join(out_dir, "observations"), fname_out), spherical_patches[j].detach().cpu().numpy(), compression='zlib')
+                tf.imwrite(os.path.join(os.path.join(out_dir, f"observations_{DATE}"), fname_out), spherical_patches[j].detach().cpu().numpy(), compression='zlib')
                 obs_id += 1
     
 
@@ -210,7 +237,7 @@ def save_spherical_patches_v0(img, branch_coords, non_branch_coords, out_dir, re
     return annotations, obs_id
 
 
-def save_coordinates_and_annotations(swc_dir, img_dir, out_dir, samples_per_neuron=100, seed=0):
+def save_coordinates_and_annotations(swc_dir, img_dir, out_dir, samples_per_neuron=100, seed=0, branch_radius_filter=None):
     rng = np.random.default_rng(seed)
 
     sample_points = {}
@@ -232,7 +259,13 @@ def save_coordinates_and_annotations(swc_dir, img_dir, out_dir, samples_per_neur
         del img
 
         sections, sections_graph = load.parse_swc(swc_list)
-        branches, terminals = load.get_critical_points(swc_list, sections)
+        branches_, terminals = load.get_critical_points(swc_list, sections)
+
+        # optionally filter out large branches by their radii
+        if branch_radius_filter is not None:
+            branches = branches_[branches_[:,-1] < branch_radius_filter]
+        else:
+            branches = branches_
 
         segments = []
         for section in sections.values():
@@ -246,12 +279,12 @@ def save_coordinates_and_annotations(swc_dir, img_dir, out_dir, samples_per_neur
         branch_coords, non_branch_coords = random_points_from_mask(mask, branches, samples_per_neuron, rng=rng)
         sample_points[img_name] = np.concatenate((branch_coords, non_branch_coords))
         current_size = len(annotations)
-        for i in range(current_size,len(sample_points)+current_size):
+        for i in range(current_size, current_size + len(sample_points)*samples_per_neuron):
             k = i - current_size < len(branch_coords)
-            annotations[f"obs_{i}.pt"] = k
+            annotations[f"obs_{i}.tif"] = k
 
         # overwrite sample points and annotations after every file
-        np.save(os.path.join(out_dir, "sample_points.npy"), sample_points)
+        np.save(os.path.join(out_dir, f"sample_points_{DATE}.npy"), sample_points)
         # save annotations
         # split into test and training data
         name = "gold166"
@@ -261,11 +294,10 @@ def save_coordinates_and_annotations(swc_dir, img_dir, out_dir, samples_per_neur
         training_annotations = {list(annotations)[i]: list(annotations.values())[i] for i in training_idxs}
         test_annotations = {list(annotations)[i]: list(annotations.values())[i] for i in test_idxs}
         # save
-        date = datetime.now().strftime("%m-%d-%y")
         df = pd.DataFrame.from_dict(training_annotations, orient="index")
-        df.to_csv(os.path.join(out_dir, f"branch_classifier_{name}_{date}_training_labels.csv"))
+        df.to_csv(os.path.join(out_dir, f"branch_classifier_{name}_{DATE}_training_labels.csv"))
         df = pd.DataFrame.from_dict(test_annotations, orient="index")
-        df.to_csv(os.path.join(out_dir, f"branch_classifier_{name}_{date}_test_labels.csv"))
+        df.to_csv(os.path.join(out_dir, f"branch_classifier_{name}_{DATE}_test_labels.csv"))
 
     return
 
@@ -322,16 +354,15 @@ def spherical_patch_dataset(swc_dir, img_dir, out_dir, samples_per_neuron=100, s
     training_annotations = {list(annotations)[i]: list(annotations.values())[i] for i in training_idxs}
     test_annotations = {list(annotations)[i]: list(annotations.values())[i] for i in test_idxs}
     # save
-    date = datetime.now().strftime("%m-%d-%y")
     df = pd.DataFrame.from_dict(training_annotations, orient="index")
-    df.to_csv(os.path.join(out_dir, f"branch_classifier_{name}_{date}_training_labels.csv"))
+    df.to_csv(os.path.join(out_dir, f"branch_classifier_{name}_{DATE}_training_labels.csv"))
     df = pd.DataFrame.from_dict(test_annotations, orient="index")
-    df.to_csv(os.path.join(out_dir, f"branch_classifier_{name}_{date}_test_labels.csv"))
+    df.to_csv(os.path.join(out_dir, f"branch_classifier_{name}_{DATE}_test_labels.csv"))
 
     return
 
 
-def collect_data(sample_points, image_dir, out_dir, name, date, rng=None):
+def collect_data(sample_points, image_dir, out_dir, name, rng=None):
     """
     Collect data from images and save labels.
 
@@ -345,8 +376,6 @@ def collect_data(sample_points, image_dir, out_dir, name, date, rng=None):
         Directory to save the output data.
     name : str
         Name for the output files.
-    date : str
-        Date for the output files.
     rng : numpy.random.Generator, optional
         Random number generator for data collection.
     """
@@ -382,9 +411,9 @@ def collect_data(sample_points, image_dir, out_dir, name, date, rng=None):
     test_annotations = {list(annotations)[i]: list(annotations.values())[i] for i in test_idxs}
     # save 
     df = pd.DataFrame.from_dict(training_annotations, orient="index")
-    df.to_csv(os.path.join(out_dir, f"branch_classifier_{name}_{date}_training_labels.csv"))
+    df.to_csv(os.path.join(out_dir, f"branch_classifier_{name}_{DATE}_training_labels.csv"))
     df = pd.DataFrame.from_dict(test_annotations, orient="index")
-    df.to_csv(os.path.join(out_dir, f"branch_classifier_{name}_{date}_test_labels.csv"))
+    df.to_csv(os.path.join(out_dir, f"branch_classifier_{name}_{DATE}_test_labels.csv"))
 
     return
 

@@ -9,7 +9,7 @@ from image import Image
 import load
 
 
-def draw_neuron_density(segments, shape, width=3):
+def draw_neuron_density(segments, shape, width=3, scale=1.0):
     """
     Draws neuron density on an image based on given segments.
     
@@ -21,6 +21,8 @@ def draw_neuron_density(segments, shape, width=3):
         The shape of the output density image (height, width, depth).
     width : int, optional
         The width of the line segments to be drawn, by default 3.
+    scale : float
+        The pixel size
         
     Returns
     -------
@@ -35,7 +37,7 @@ def draw_neuron_density(segments, shape, width=3):
         segments = torch.tensor(segments)
     if segments.shape[2] == 4: # segments include width in the last column
         for s in segments:
-            width = ((s[0,3]+s[1,3])/2).item()
+            width = ((s[0,3]+s[1,3])/2).item() / scale # convert from real coordinates to pixels
             density.draw_line_segment(s[:,:3], width=width, channel=0)
     else:
         for s in segments:
@@ -279,11 +281,11 @@ def neuron_from_swc(swc_list, width=3, noise=0.05, dropout=True, adjust=False, b
 
     branch_mask = Image(torch.zeros_like(mask))
     for point in branches:
-        branch_mask.draw_point(point[:3], radius=3, binary=True, value=1, channel=0)
+        branch_mask.draw_point(point[:3], radius=width/2, binary=True, value=1, channel=0)
     # set branch_mask.data to zero where mask is zero
     branch_mask.data = branch_mask.data * mask.data
-
-    seed = sections[1][0,0].round().astype(np.uint16).tolist() # type: ignore
+    root_key = min(sections.keys())
+    seed = sections[root_key][0,0,:3].round().astype(np.uint16).tolist() # type: ignore
 
     swc_data = {"image": img.data,
                 "neuron_density": density.data,

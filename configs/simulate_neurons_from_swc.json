@@ -1,6 +1,6 @@
 {   
-    "labels_dir": "/home/brysongray/data/neuromorpho_sub1",
-    "out": "/home/brysongray/data/simulated_neurons/neuromorpho_sub1_with_artifacts",
+    "labels_dir": "/nafs/dtward/bryson/data/neuromorpho",
+    "out": "/home/bgray/bmap/data/simulated_neurons/neuromorpho_with_artifacts",
     "width": 3,
     "noise": 0.05,
     "binary": 0,

@@ -103,16 +103,6 @@ def extract_spherical_patch(volume, x, y, z, center, radius, order=1, permutatio
     2D numpy array
         The 2D projection of the spherical surface (equirectangular projection)
     """
-    # # Create meshgrid for spherical coordinates
-    # theta_res, phi_res = resolution
-    # theta = np.linspace(0, np.pi, theta_res)
-    # phi = np.linspace(0, 2*np.pi, phi_res)
-    # theta_grid, phi_grid = np.meshgrid(theta, phi, indexing='ij')
-    
-    # # Convert to cartesian coordinates (points on a unit sphere)
-    # x = np.sin(theta_grid) * np.cos(phi_grid)
-    # y = np.sin(theta_grid) * np.sin(phi_grid)
-    # z = np.cos(theta_grid)
 
     if permutation is not None:
         # Apply permutation to volume and center

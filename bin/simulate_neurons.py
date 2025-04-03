@@ -12,10 +12,13 @@ import numpy as np
 import os
 from pathlib import Path
 import sys
+import tifffile as tf
 import torch
 from tqdm import tqdm
 
-sys.path.append(str(Path(__file__).parents[1]))
+script_path = Path(os.path.abspath(__file__))
+parent_dir = script_path.parent.parent  # Go up two levels
+sys.path.append(str(parent_dir))
 from data_prep import generate, draw, load
 
 
@@ -103,7 +106,7 @@ branches : int, optional
         fnames = []
         for f in files:
             swc_lists.append(load.swc(f))
-            fnames.append(f.split('/')[-1].split('.swc')[0])
+            fnames.append(f.split('/')[-1].split('.')[0])
         print("done")
 
     else: # Generate simulated neuron trees
@@ -152,6 +155,12 @@ branches : int, optional
     )
     
     for i in tqdm(range(len(swc_lists))):
+
+        if os.path.exists(os.path.join(out, f"{fnames[i]}")):
+            continue
+        else:
+            os.makedirs(os.path.join(out, f"{fnames[i]}"), exist_ok=True)
+            
         color = np.array([1.0, 1.0, 1.0])
         background = np.array([0., 0., 0.])
         if random_contrast:
@@ -169,10 +178,22 @@ branches : int, optional
                                         dropout=dropout,
                                         binary=binary) # Use simulated paths to draw the image.
         
-        torch.save(swc_data, os.path.join(out, f"{fnames[i]}.pt"))
+        # torch.save(swc_data, os.path.join(out, f"{fnames[i]}.pt"))
+        if not os.path.exists(os.path.join(out, f"{fnames[i]}")):
+            os.makedirs(os.path.join(out, f"{fnames[i]}"), exist_ok=True)
+        tf.imsave(os.path.join(out, f"{fnames[i]}", f"{fnames[i]}_image.tif"), swc_data['image'].numpy().astype(np.float32), compression='zlib')
+        tf.imsave(os.path.join(out, f"{fnames[i]}", f"{fnames[i]}_density.tif"), swc_data['neuron_density'].numpy().astype(np.float32), compression='zlib')
+        tf.imsave(os.path.join(out, f"{fnames[i]}", f"{fnames[i]}_sections.tif"), swc_data['section_labels'].numpy().astype(np.float32), compression='zlib')
+        tf.imsave(os.path.join(out, f"{fnames[i]}", f"{fnames[i]}_branches.tif"), swc_data['branch_mask'].numpy().astype(np.float32), compression='zlib')
+        with open(os.path.join(out, f"{fnames[i]}", f"{fnames[i]}_seeds.txt"), 'w') as f:
+            for seed_point in swc_data['seeds']:
+                # Convert the seed point coordinates to string and write to file
+                f.write(f"{seed_point[0]} {seed_point[1]} {seed_point[2]}\n")
+        with open(os.path.join(out, f"{fnames[i]}", f"{fnames[i]}_section_graph.json"), 'w') as f:
+                json.dump(swc_data['graph'], f)
 
     print("done")
 
 
 if __name__ == "__main__":
-    main(parser)
+    main()

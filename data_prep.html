@@ -81,7 +81,7 @@
 <span id="data-prep-collect-module"></span><h2>data_prep.collect module<a class="headerlink" href="#module-data_prep.collect" title="Link to this heading"></a></h2>
 <dl class="py function">
 <dt class="sig sig-object py" id="data_prep.collect.collect_data">
-<span class="sig-prename descclassname"><span class="pre">data_prep.collect.</span></span><span class="sig-name descname"><span class="pre">collect_data</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">sample_points</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">image_dir</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">out_dir</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">name</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">date</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">rng</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#data_prep.collect.collect_data" title="Link to this definition"></a></dt>
+<span class="sig-prename descclassname"><span class="pre">data_prep.collect.</span></span><span class="sig-name descname"><span class="pre">collect_data</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">sample_points</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">image_dir</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">out_dir</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">name</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">rng</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#data_prep.collect.collect_data" title="Link to this definition"></a></dt>
 <dd><p>Collect data from images and save labels.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span></dt>
@@ -90,7 +90,6 @@
 <li><p><strong>image_dir</strong> (<em>str</em>) – Directory containing the images.</p></li>
 <li><p><strong>out_dir</strong> (<em>str</em>) – Directory to save the output data.</p></li>
 <li><p><strong>name</strong> (<em>str</em>) – Name for the output files.</p></li>
-<li><p><strong>date</strong> (<em>str</em>) – Date for the output files.</p></li>
 <li><p><strong>rng</strong> (<em>numpy.random.Generator</em><em>, </em><em>optional</em>) – Random number generator for data collection.</p></li>
 </ul>
 </dd>
@@ -104,7 +103,7 @@
 
 <dl class="py function">
 <dt class="sig sig-object py" id="data_prep.collect.save_coordinates_and_annotations">
-<span class="sig-prename descclassname"><span class="pre">data_prep.collect.</span></span><span class="sig-name descname"><span class="pre">save_coordinates_and_annotations</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">swc_dir</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">img_dir</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">out_dir</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">samples_per_neuron</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">100</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">seed</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">0</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#data_prep.collect.save_coordinates_and_annotations" title="Link to this definition"></a></dt>
+<span class="sig-prename descclassname"><span class="pre">data_prep.collect.</span></span><span class="sig-name descname"><span class="pre">save_coordinates_and_annotations</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">swc_dir</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">img_dir</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">out_dir</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">samples_per_neuron</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">100</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">seed</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">branch_radius_filter</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#data_prep.collect.save_coordinates_and_annotations" title="Link to this definition"></a></dt>
 <dd></dd></dl>
 
 <dl class="py function">
@@ -125,6 +124,11 @@
 <dl class="py function">
 <dt class="sig sig-object py" id="data_prep.collect.save_spherical_patches_v0">
 <span class="sig-prename descclassname"><span class="pre">data_prep.collect.</span></span><span class="sig-name descname"><span class="pre">save_spherical_patches_v0</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">img</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">branch_coords</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">non_branch_coords</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">out_dir</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">resolution</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">(180,</span> <span class="pre">360)</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">start_id</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">annotations</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#data_prep.collect.save_spherical_patches_v0" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="data_prep.collect.save_square_patches">
+<span class="sig-prename descclassname"><span class="pre">data_prep.collect.</span></span><span class="sig-name descname"><span class="pre">save_square_patches</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">sample_points</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">img_dir</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">out_dir</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">radius</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#data_prep.collect.save_square_patches" title="Link to this definition"></a></dt>
 <dd></dd></dl>
 
 <dl class="py function">
@@ -225,7 +229,7 @@ This is the input image resampled at the points stored in phii.</p>
 
 <dl class="py function">
 <dt class="sig sig-object py" id="data_prep.draw.draw_neuron_density">
-<span class="sig-prename descclassname"><span class="pre">data_prep.draw.</span></span><span class="sig-name descname"><span class="pre">draw_neuron_density</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">segments</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">shape</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">width</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">3</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#data_prep.draw.draw_neuron_density" title="Link to this definition"></a></dt>
+<span class="sig-prename descclassname"><span class="pre">data_prep.draw.</span></span><span class="sig-name descname"><span class="pre">draw_neuron_density</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">segments</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">shape</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">width</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">3</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">scale</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">1.0</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#data_prep.draw.draw_neuron_density" title="Link to this definition"></a></dt>
 <dd><p>Draws neuron density on an image based on given segments.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span></dt>
@@ -233,6 +237,7 @@ This is the input image resampled at the points stored in phii.</p>
 <li><p><strong>segments</strong> (<em>array-like</em><em> or </em><em>torch.Tensor</em>) – A list or tensor of neuron segments, where each segment is represented by a set of points.</p></li>
 <li><p><strong>shape</strong> (<em>tuple</em><em> of </em><em>int</em>) – The shape of the output density image (height, width, depth).</p></li>
 <li><p><strong>width</strong> (<em>int</em><em>, </em><em>optional</em>) – The width of the line segments to be drawn, by default 3.</p></li>
+<li><p><strong>scale</strong> (<em>float</em>) – The pixel size</p></li>
 </ul>
 </dd>
 <dt class="field-even">Returns<span class="colon">:</span></dt>

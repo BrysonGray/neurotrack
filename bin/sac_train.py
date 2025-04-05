@@ -5,17 +5,20 @@ Train a Soft Actor-Critic (SAC) model for neuron tracing.
 import argparse
 from datetime import datetime
 import json
+import os
 from pathlib import Path
 import sys
 import torch
 from torch.optim.adamw import AdamW
 from torch.optim.adam import Adam
 
-sys.path.append(str(Path(__file__).parents[1]))
+script_path = Path(os.path.abspath(__file__))
+parent_dir = script_path.parent.parent  # Go up two levels
+sys.path.append(str(parent_dir))
 from environments.sac_tracking_env import Environment
 from memory.buffer import PrioritizedReplayBuffer
-from models.resblock import ResidualBlock
-from models.resnet import ResNet
+from models.resblock import ResidualBlock3D
+from models.resnet import ResNet3D
 from models.cnn import ConvNet
 from solvers import sac
 
@@ -97,8 +100,8 @@ def main():
 
     if "classifier_weights" in params:
         classifier_path = params["classifier_weights"]
-        classifier_state_dict = torch.load(classifier_path, weights_only=True)
-        classifier = ResNet(ResidualBlock, [3, 4, 6, 3], num_classes=1)
+        classifier_state_dict = torch.load(classifier_path)#, weights_only=True)
+        classifier = ResNet3D(ResidualBlock3D, [3, 4, 6, 3], num_classes=1)
         classifier = classifier.to(device=DEVICE, dtype=dtype)
         classifier.load_state_dict(classifier_state_dict)
         classifier.eval()
@@ -109,7 +112,7 @@ def main():
                     radius=patch_radius,
                     step_size=step_size,
                     step_width=step_width,
-                    max_len=10000,
+                    max_len=1000,
                     alpha=alpha,
                     beta=beta,
                     friction=friction,
@@ -132,7 +135,7 @@ def main():
 
     if "sac_weights" in params:
         sac_path = params["sac_weights"]
-        state_dicts = torch.load(sac_path, weights_only=True)
+        state_dicts = torch.load(sac_path)#, weights_only=True)
         actor.load_state_dict(state_dicts["policy_state_dict"])
         Q1.load_state_dict(state_dicts["Q1_state_dict"])
         Q2.load_state_dict(state_dicts["Q2_state_dict"])
@@ -147,14 +150,13 @@ def main():
     actor_optimizer = AdamW(actor.parameters(), lr=lr)
     log_alpha_optimizer = Adam([log_alpha], lr=lr)
 
-    criterion = torch.nn.MSELoss()
     memory = PrioritizedReplayBuffer(100000, obs_shape=(in_channels,input_size,input_size,input_size), action_shape=(3,), alpha=0.8)
 
     sac.train(env, actor, Q1, Q2, Q1_target, Q2_target, log_alpha,
           actor_optimizer, Q1_optimizer, Q2_optimizer, log_alpha_optimizer,
           memory, target_entropy, batch_size, gamma, tau, outdir, name,
           show_states=True, save_snapshots=False, update_after=256,
-          updates_per_step=1, update_every=1, n_episodes=n_episodes, n_trials=5)
+          updates_per_step=1, update_every=1, n_episodes=n_episodes, n_trials=1)
     
     print("Done!")
     

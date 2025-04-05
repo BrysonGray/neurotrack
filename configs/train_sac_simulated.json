@@ -1,0 +1,19 @@
+{
+    "img_path": "/nafs/dtward/bryson/data/simulated_neurons/3d_with_artifacts_b-0",
+    "outdir": "/home/bgray/bmap/data/neurotrack_outputs/simulated_with_artifacts_sac_training_output",
+    "sac_weights": "/nafs/dtward/bryson/data/neurotrack_outputs/simulated_with_artifacts_sac_training_output/model_state_dicts_simulated_b-0_04-03-25.pt",
+    "name": "simulated_b-0_v1",
+    "n_seeds": 1,
+    "step_size": 2.0,
+    "step_width": 3.0,
+    "batch_size": 256,
+    "tau": 0.005,
+    "gamma": 0.1,
+    "lr": 0.001,
+    "alpha": 1.0,
+    "beta": 0.2,
+    "friction": 0.0,
+    "n_episodes": 500,
+    "init_temperature": 0.005,
+    "target_entropy": 0.0
+}

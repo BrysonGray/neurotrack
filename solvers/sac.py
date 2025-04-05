@@ -15,11 +15,14 @@ import sys
 import torch
 from tqdm import tqdm
 
-sys.path.append(str(Path(__file__).parents[1]))
+script_path = Path(os.path.abspath(__file__))
+parent_dir = script_path.parent.parent
+sys.path.append(str(parent_dir))
 from memory.buffer import ReplayBuffer, PrioritizedReplayBuffer
 from plot.show_state import show_state
+import csv
 
-DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+DEVICE = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 dtype = torch.float32
 date = datetime.now().strftime("%m-%d-%y")
 
@@ -51,7 +54,7 @@ def sample_from_output(out, random=False):
     meannorm_ = torch.tanh(meannorm)*10 # maximum of 10
     mean = mean * meannorm_/(meannorm + torch.finfo(torch.float).eps)
     logvar = torch.tanh(logvar)*3 + 1 # no very low variance (std is order of 1 pixel) 
-    direction_dist = torch.distributions.MultivariateNormal(mean[:,:3], torch.exp(logvar)[:,None]*torch.eye(3, device=DEVICE)[None])
+    direction_dist = torch.distributions.MultivariateNormal(mean[:,:3], torch.exp(logvar)[:,None]*torch.eye(3)[None])
 
     return direction_dist
 
@@ -106,18 +109,20 @@ def update_Q(actor, Q1, Q1_target, Q2, Q2_target,
     with torch.no_grad():
         # sample next actions from the current policy
         actor_out = actor(next_obs) # set steps_done to start_steps so that this samples from the current policy
-        direction_dist = sample_from_output(actor_out)
+        direction_dist = sample_from_output(actor_out.detach().cpu())
         next_directions = direction_dist.rsample()
         logprobs = direction_dist.log_prob(next_directions)
-        # next_directions = torch.concatenate((torch.zeros(next_directions.shape[0],1, device=DEVICE), next_directions), dim=1) # for paths constrained to a 2d slice
+        next_directions = next_directions.to(DEVICE)
+        logprobs = logprobs.to(DEVICE)
+        # next_directions = torch.cat((torch.zeros(next_directions.shape[0],1, device=DEVICE), next_directions), dim=1) # for paths constrained to a 2d slice
         # get target q-values
-        next_states = torch.concatenate((next_obs, torch.ones((next_obs.shape[0], 1, next_obs.shape[2], next_obs.shape[3], next_obs.shape[4]), 
+        next_states = torch.cat((next_obs, torch.ones((next_obs.shape[0], 1, next_obs.shape[2], next_obs.shape[3], next_obs.shape[4]), 
                                             device=DEVICE)*next_directions[:,:,None,None,None]), dim=1)
         Q1_target_vals = Q1_target(next_states) # vector of q-values for each choice
         Q2_target_vals = Q2_target(next_states)
         targets = rewards + gamma * torch.logical_not(dones) * (torch.minimum(Q1_target_vals, Q2_target_vals) - log_alpha.exp() * logprobs[:,None])
     # compute q-values to compare against targets
-    current_state = torch.concatenate((obs, 
+    current_state = torch.cat((obs, 
                         torch.ones((obs.shape[0], 1, obs.shape[2], obs.shape[3], obs.shape[4]), 
                                     device=DEVICE)*actions[:,:,None,None,None]), dim=1)
     
@@ -176,11 +181,13 @@ def update_actor(obs, actor, actor_optimizer, Q1, Q2, log_alpha, log_alpha_optim
     """
 
     actor_out = actor(obs)
-    direction_dist = sample_from_output(actor_out, random=False)
+    direction_dist = sample_from_output(actor_out.detach().cpu(), random=False)
     directions = direction_dist.rsample()
     logprobs = direction_dist.log_prob(directions)
+    directions = directions.to(DEVICE)
+    logprobs = logprobs.to(DEVICE)
     # get expected Q-vals
-    current_state = torch.concatenate((obs, torch.ones((obs.shape[0], 1, obs.shape[2], obs.shape[3], obs.shape[4]),device=DEVICE)*directions[:,:,None,None,None]), dim=1)
+    current_state = torch.cat((obs, torch.ones((obs.shape[0], 1, obs.shape[2], obs.shape[3], obs.shape[4]),device=DEVICE)*directions[:,:,None,None,None]), dim=1)
     Q1_vals = Q1(current_state)[:,0]
     Q2_vals = Q2(current_state)[:,0]
     # entropy regularized Q values
@@ -329,10 +336,10 @@ def train(env,
             for t in count():
                 actor.eval()
                 if steps_done < update_after:
-                    action = torch.randn(3).to(DEVICE)*3
+                    action = torch.randn(3)*3
                 else:
-                    actor_out = actor(obs).detach()
-                    direction_dist = sample_from_output(actor_out)
+                    actor_out = actor(obs.to(DEVICE))
+                    direction_dist = sample_from_output(actor_out.detach().cpu())
                     action = direction_dist.rsample()[0]
                     
                 steps_done += 1
@@ -393,15 +400,22 @@ def train(env,
                         try:
                             shell = get_ipython().__class__.__name__ # type: ignore
                             if shell:
-                                show_state(env, ep_returns, ep_rewards, policy_loss, fig)
+                                show_state(env, fig, returns=ep_returns, rewards=ep_rewards, policy_loss=policy_loss)
                                 print(f"num branches: {len(env.finished_paths)}")
                         except NameError:
-                            with open(os.path.join(outdir, f"{name}_{date}_log.txt"), "a") as f:
-                                f.write(f"episode: {ep},\n")
-                                f.write(f"image file: {env.img_files[env.img_idx].split('/')[-1]}\n")
-                                f.write(f"num branches: {len(env.finished_paths)},\n")
-                                f.write(f"episode return: {ep_return},\n")
-                                f.write(f"episode avg. policy loss: {episode_avg_loss}\n\n")
+                            csv_file_path = os.path.join(outdir, f"{name}_{date}_log.csv")
+                            file_exists = os.path.isfile(csv_file_path)
+                            with open(csv_file_path, "a", newline='') as f:
+                                writer = csv.writer(f)
+                                if not file_exists:
+                                    writer.writerow(['episode', 'image_file', 'num_branches', 'episode_return', 'episode_avg_policy_loss'])
+                                writer.writerow([
+                                    ep,
+                                    env.img_files[env.img_idx].split('/')[-1],
+                                    len(env.finished_paths),
+                                    ep_return,
+                                    episode_avg_loss
+                                ])
                     env.reset(move_to_next=False)
                     break
             
@@ -421,7 +435,7 @@ def train(env,
             to_save = {"labeled_neuron": labeled_neuron, "true_neuron": env.true_density.data[0].detach().clone().cpu(), "coverage": coverage, "return": best_return}
             torch.save(to_save, os.path.join(paths_dir, f"ep_snapshot_{ep}.pt"))
 
-        # save model every 500 steps
+        # save model after at least 500 steps 
         if steps_done // 500 > last_save:
             model_dicts = {"policy_state_dict": actor.state_dict(),
                         "Q1_state_dict": Q1_target.state_dict(),
@@ -467,8 +481,8 @@ def inference(env, actor, outdir, n_trials=5, show=True):
 
             for t in count():
                 with torch.no_grad():
-                    actor_out = actor(obs)
-                    direction_dist = sample_from_output(actor_out)
+                    actor_out = actor(obs.to(DEVICE))
+                    direction_dist = sample_from_output(actor_out.detach().cpu())
                     action = direction_dist.sample()[0]
 
                 next_obs, reward, terminated = env.step(action)
@@ -509,15 +523,6 @@ def inference(env, actor, outdir, n_trials=5, show=True):
                             labeled_neuron=labeled_neuron_np,
                             paths=np.array(paths_to_save, dtype=object),
                             coverage=np.float32(coverage))
-
-        # Option 2: Using HDF5 (more efficient for large arrays)
-        # import h5py
-        # with h5py.File(os.path.join(outdir, f"{name}_{date}_inference.h5"), 'w') as f:
-        #     f.create_dataset('labeled_neuron', data=labeled_neuron_np, compression='gzip')
-        #     f.create_dataset('coverage', data=np.float32(coverage))
-        #     # For complex nested lists like paths, store as JSON string
-        #     import json
-        #     f.create_dataset('paths', data=json.dumps(paths_to_save).encode('utf-8'))
 
         env.reset()
 

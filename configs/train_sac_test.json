@@ -1,6 +1,6 @@
 {
-    "img_path": "/nafs/dtward/bryson/data/simulated_neurons/neuromorpho_with_artifacts",
-    "outdir": "/home/bgray/bmap/data/neurotrack_outputs/neuromorpho_with_artifacts_sac_training_output",
+    "img_path": "/nafs/dtward/bryson/data/simulated_neurons/neuromorpho_with_artifacts_sub",
+    "outdir": "/home/bgray/neurotrack/notebooks/test_tracking_outputs",
     "name": "neuromorpho_1",
     "classifier_weights" : "/nafs/dtward/bryson/data/neurotrack_outputs/pretrained_models/neurom_with_artifacts_classifier/resnet_classifier_01-24-25_checkpoint-16.pt",
     "sac_weights": "/nafs/dtward/bryson/data/neurotrack_outputs/neuromorpho_with_artifacts_sac_training_output/model_state_dicts_neuromorpho_1_04-04-25.pt",
@@ -14,7 +14,7 @@
     "alpha": 1.0,
     "beta": 0.2,
     "friction": 0.0,
-    "n_episodes": 500,
+    "n_episodes": 4,
     "init_temperature": 0.005,
     "target_entropy": 0.0
 }

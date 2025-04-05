@@ -11,20 +11,19 @@ from glob import glob
 import json
 import numpy as np
 import os
-import tifffile as tf
-from typing import Literal
-
-from matplotlib import category
-import torch
-
 from pathlib import Path
 import sys
-sys.path.insert(1, str(Path(__file__).parent))
+import tifffile as tf
+from typing import Literal
+import torch
+
+script_path = Path(os.path.abspath(__file__))
+parent_dir = script_path.parent.parent
+sys.path.append(str(parent_dir))
 from data_prep.image import Image
-import env_utils
+from environments import env_utils
 
-DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
+DEVICE = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 class Environment():
     """
@@ -130,11 +129,11 @@ class Environment():
         # TODO: remove old data format loader in next version update
         # neuron_data = torch.load(self.img_files[self.img_idx], weights_only=False)
         # img = neuron_data["image"]
-        # self.img = Image(img.to(device=DEVICE))
+        # self.img = Image(img)
         # neuron_density = neuron_data["neuron_density"]
-        # self.true_density = Image(neuron_density.to(device=DEVICE))
+        # self.true_density = Image(neuron_density)
         # section_labels = neuron_data["section_labels"]
-        # self.section_labels = Image(section_labels.to(device=DEVICE))
+        # self.section_labels = Image(section_labels)
         # self.mask = neuron_data["branch_mask"]
         # self.seeds = neuron_data["seeds"]
         # self.graph = neuron_data["graph"]
@@ -153,11 +152,12 @@ class Environment():
         offset /= torch.sum(offset**2, dim=1)**0.5
         r = self.r * torch.rand(1)
         seed = seed[None] + r * offset
-        seed = seed.to(device=DEVICE)
 
         self.paths = [seed] # a list initialized with 1 path, a 1 x 3 tensor.
         self.roots = [seed[0]] # a list of path start points.
-        self.path_labels = [0] # a list of path labels. 0 means the path is not yet labeled.
+        i,j,k = [int(round(x.item())) for x in seed[0]]
+        self.path_labels = [int(self.section_labels.data[0, i, j, k].item())] # a list with the current labels for each path.
+        self.prev_children = [[]] # Keep track of the previous section's children for computing a section mask in reward calculation.
         self.alpha = alpha
         self.beta = beta
         self.friction = friction
@@ -165,7 +165,7 @@ class Environment():
         # we will want to save completed paths
         self.finished_paths = []
 
-        self.img.data = torch.cat((self.img.data, torch.zeros((1,)+self.img.data.shape[1:], device=DEVICE)), dim=0) # add 1 channel for path.
+        self.img.data = torch.cat((self.img.data, torch.zeros((1,)+self.img.data.shape[1:])), dim=0) # add 1 channel for path.
         
         self.head_id = 0 # head id keeps track of the current path since there may be multiple paths per episode 
         self.img.draw_point(self.paths[self.head_id][-1], radius=(self.step_width-1)//2, channel=3, binary=False)
@@ -215,13 +215,13 @@ class Environment():
     def __load_data(self, path):
         img_file = glob(os.path.join(path, "*image.tif"))[0]
         img = tf.imread(img_file)
-        self.img = Image(torch.from_numpy(img).to(device=DEVICE))
+        self.img = Image(torch.from_numpy(img))
         density_file = glob(os.path.join(path, "*density.tif"))[0]
         density = tf.imread(density_file)
-        self.true_density = Image(torch.from_numpy(density).to(device=DEVICE))
+        self.true_density = Image(torch.from_numpy(density))
         section_labels_file = glob(os.path.join(path, "*sections.tif"))[0]
         section_labels = tf.imread(section_labels_file)
-        self.section_labels = Image(torch.from_numpy(section_labels).to(device=DEVICE))
+        self.section_labels = Image(torch.from_numpy(section_labels))
         seeds = glob(os.path.join(path, "*seeds.txt"))[0]
         with open(seeds, 'r') as f:
             self.seeds = [[int(x) for x in line.strip().split(' ')] for line in f if line.strip()]
@@ -247,7 +247,7 @@ class Environment():
             Tensor with shape (c x h x w x d) where the first channels are the input image.
         """
         if terminate:
-            patch = torch.zeros((self.img.data.shape[0],)+(2*self.radius + 1,)*3, device=DEVICE)
+            patch = torch.zeros((self.img.data.shape[0],)+(2*self.radius + 1,)*3)
         else:
             patch, _ = self.img.crop(self.paths[self.head_id][-1], self.radius, pad=True, value=0.0)
             patch = patch.clone()
@@ -313,7 +313,7 @@ class Environment():
         else:
             raise NameError(f"category: {category} was not recognized.")
 
-        return torch.tensor([reward], device=DEVICE, dtype=torch.float32)
+        return torch.tensor([reward], dtype=torch.float32)
 
 
     def step(self, action, max_paths=100, verbose=False):
@@ -348,16 +348,30 @@ class Environment():
 
         terminate_path, status = self.__get_status(new_position)
 
-
         if terminate_path:
             reward = self.get_reward(status, verbose=verbose)
             observation = self.get_state(terminate=True)
             # remove the path from 'paths' and add it to 'ended_paths'
             self.finished_paths.append(self.paths.pop(self.head_id).cpu())
             self.path_labels.pop(self.head_id)
-            # if that was the last path in the list, then terminate the episode
-            if len(self.paths) == 0:
+
+            # check for max branches
+            if len(self.finished_paths) > 80: # TODO: Max branches should be an argument 
                 terminated = True
+            # if that was the last path in the list, then we need to decide what to do
+            elif len(self.paths) == 0:
+                # if the path started at the seed and only took one step, then terminate the episode
+                if torch.all(self.finished_paths[-1][0] == self.roots[0]) and len(self.finished_paths[-1]) <= 2:
+                    terminated = True
+                # otherwise, return to the seed point
+                else:
+                    # reset to the initial seed
+                    self.paths.append(self.roots[0][None])
+                    self.roots.append(self.roots[0])
+                    i,j,k = [int(round(x.item())) for x in self.roots[0]]
+                    self.path_labels = [int(self.section_labels.data[0, i, j, k].item())]
+                    self.head_id = 0
+                    terminated = False
             # otherwise, move to the next path
             else:
                 self.head_id = (self.head_id + 1)%len(self.paths)
@@ -370,32 +384,44 @@ class Environment():
             old_patch, new_patch = self.img.draw_line_segment(segment, width=self.step_width, binary=False)
             # get reward
             center = torch.round(segment[0]).to(dtype=torch.int)
-            segment_length = torch.linalg.norm(segment[1] - segment[0])
+            segment_vec = segment[1] - segment[0]
+            segment_length = torch.linalg.norm(segment_vec)
             L = int(torch.ceil(segment_length)) + 1 # The radius of the patch is the whole line length since the line starts at patch center.
             overhang = int(2*self.step_width) # include space beyond the end of the line
             patch_radius = L + overhang
-            true_patch, _ = self.true_density.crop(center, patch_radius, interp=False, pad=False)
+            density_patch, _ = self.true_density.crop(center, patch_radius, interp=False, pad=False)
 
             # mask out competing paths
-            # true_patch_label, _ = self.section_labels.crop(center, patch_radius, interp=False, pad=False)
+            labels_patch, _ = self.section_labels.crop(center, patch_radius, interp=False, pad=False)
+            end_point = patch_radius + segment_vec
+            new_label_idx = (0, int(round(end_point[0].item())), int(round(end_point[1].item())), int(round(end_point[2].item())))
+            new_label = int(labels_patch[new_label_idx].item())
+            current_label = self.path_labels[self.head_id]
 
-            # new_label = int(true_patch_label[0, patch_radius, patch_radius, patch_radius].item())
-            # current_label = self.path_labels[self.head_id]
-            # # here mask out any sections that are not the current section or its children
-            # if current_label != 0:
-            #     section_ids = [current_label, *self.graph[current_label]]
-            #     section = torch.zeros_like(true_patch)
-            #     for id in section_ids:
-            #         section += torch.where(true_patch_label == id, 1, 0)
-            #     true_patch_masked = true_patch * section
-            #     if new_label != current_label and new_label in section_ids:
-            #         self.path_labels[self.head_id] = new_label
-            # else:
-            #     true_patch_masked = true_patch
-            #     if new_label != current_label:
-            #         self.path_labels[self.head_id] = new_label
+            # Optimize section masking
+            if current_label != 0:
+                # Pre-compute the section IDs
+                prev_children = self.prev_children[self.head_id]
+                graph_current = self.graph[current_label]
+                section_ids = [current_label] + [x for x in graph_current if x not in prev_children]
+                
+                # Create mask using vectorized operations
+                section_mask = torch.zeros_like(density_patch, dtype=torch.bool)
+                for id in section_ids:
+                    section_mask |= (labels_patch == id)
+                
+                true_patch_masked = density_patch * section_mask.float()
+                
+                # Update label if needed
+                if new_label != current_label and new_label in section_ids:
+                    self.path_labels[self.head_id] = new_label
+                    self.prev_children[self.head_id] = graph_current
+            else:
+                true_patch_masked = density_patch
+                if new_label != 0:
+                    self.path_labels[self.head_id] = new_label
 
-            true_patch_masked = true_patch # don't mask
+            true_patch_masked = density_patch # don't mask
             step_accuracy = -env_utils.density_error_change(true_patch_masked[0], old_patch, new_patch)
             reward = self.get_reward(status, step_accuracy, verbose)
 
@@ -405,13 +431,14 @@ class Environment():
 
             # decide if path branches
             if self.classifier is not None:
-                out = self.classifier(observation[:,:3, 10:25, 10:25, 10:25])
+                out = self.classifier(observation[:,:3, 10:25, 10:25, 10:25].to(DEVICE))
                 out = torch.sigmoid(out.squeeze())
                 if out > 0.5: # create branch
                     distances = torch.linalg.norm(torch.stack(self.roots) - new_position, dim=1)
                     if not torch.any(distances < 3.0):
                         self.paths.append(new_position[None])
                         self.path_labels.append(0)
+                        self.prev_children.append(self.prev_children[self.head_id])
                         self.roots.append(new_position)
 
         return observation, reward, terminated
@@ -445,11 +472,11 @@ class Environment():
                 # # load the next image
                 # neuron_data = torch.load(self.img_files[self.img_idx], weights_only=False)
                 # img = neuron_data["image"]
-                # self.img = Image(img.to(device=DEVICE))
+                # self.img = Image(img)
                 # neuron_density = neuron_data["neuron_density"]
-                # self.true_density = Image(neuron_density.to(device=DEVICE))
+                # self.true_density = Image(neuron_density)
                 # section_labels = neuron_data["section_labels"]
-                # self.section_labels = Image(section_labels.to(device=DEVICE))
+                # self.section_labels = Image(section_labels)
                 # self.mask = neuron_data["branch_mask"]
                 # self.seeds = neuron_data["seeds"]
                 # self.graph = neuron_data["graph"]
@@ -460,13 +487,14 @@ class Environment():
         offset /= torch.sum(offset**2, dim=1)**0.5
         r = self.r * torch.rand(1)
         seed = seed[None] + r * offset
-        seed = seed.to(device=DEVICE)
 
         self.paths = [seed] # a list initialized with 1 path, a 1 x 3 tensor.
-        self.roots = [seed[0]]
-        self.path_labels = [0] # a list of path labels. 0 means the path is not yet labeled.
+        self.roots = [seed[0]] # a list of path start points.
+        i,j,k = [int(round(x.item())) for x in seed[0]]
+        self.path_labels = [int(self.section_labels.data[0, i, j, k].item())] # a list with the current labels for each path.
+        self.prev_children = [[]] # Keep track of the previous section's children for computing a section mask in reward calculation.
         self.finished_paths = []
-        self.img.data = torch.cat((self.img.data[:3], torch.zeros((1,)+self.img.data.shape[1:], device=DEVICE)), dim=0) # add 1 channel for path.
+        self.img.data = torch.cat((self.img.data[:3], torch.zeros((1,)+self.img.data.shape[1:])), dim=0) # add 1 channel for path.
 
         self.head_id = 0
         self.img.draw_point(self.paths[self.head_id][-1], radius=(self.step_width-1)//2, channel=3, binary=False)

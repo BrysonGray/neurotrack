@@ -247,20 +247,20 @@ def parse_swc(swc_list, transpose=True):
                     if transpose:
                         section = np.concatenate((section[:,:,:3][:,:,::-1], section[:,:,3,None]), axis=-1)
                     sections[terminal] = section
-                    section_ends[terminal] = node
+                    section_ends[terminal] = [terminal, node]
 
                     # repeat with a new list of terminals until the edge list only contains one final node
                     break
     
-    # make undirected sections graph
+    # make directed sections graph
     sections_graph = {}
     for section in section_ends:
         sections_graph[section] = []
-        # find all sections that have the same end node
+        # find all sections that share an end
         for other_section in section_ends:
             if other_section == section:
                 continue
-            if section_ends[section] == section_ends[other_section]:
+            if any(x in section_ends[other_section] for x in section_ends[section]):
                 sections_graph[section].append(other_section)
 
     return sections, sections_graph
@@ -302,7 +302,7 @@ def get_critical_points(swc_list, sections, transpose=True):
         # else, mark the branch for removal
         if num_long_sections <= 2:
             branches_to_remove.append(branch)
-    print(f'removing {len(branches_to_remove)} branches')
+    # print(f'removing {len(branches_to_remove)} branches')
     for branch in branches_to_remove:
         branches.remove(branch)
 

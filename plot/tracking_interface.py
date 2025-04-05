@@ -36,24 +36,46 @@ def manual_step(env, step_size=2.0):
             # 1) Whole image with path overlayed,
             # 2) Cropped image with path overlayed,
             # 3) Cropped mask, true density, and path overlayed
-            img = env.img.data[:3].amax(dim=1).permute(1,2,0).cpu()
-            path = env.img.data[3].amax(dim=0).cpu()
+            img = env.img.data[:3].amax(dim=1).permute(1,2,0)
+            path = env.img.data[3].amax(dim=0)
             ax[0].imshow(img)
             ax[0].imshow(path, cmap='plasma', alpha=0.5)
-            # patch, _ = env.img.crop(env.paths[env.head_id][-1], env.radius, interp=True)
+            # patch, _ = env.img.crop(env.paths[env.head_id][-1], env.radius, interp=False)
             patch = observation[0]
-            patch = patch[:, env.radius].cpu()
+            patch = patch[:, env.radius]
             ax[1].imshow(patch[:3].permute(1,2,0))
             ax[1].imshow(patch[3], cmap='plasma', alpha=0.5)
 
-            if len(env.paths) > 0:
-                mask = Image(env.mask)
-                mask, _ = mask.crop(env.paths[env.head_id][-1], env.radius, interp=True)
-                mask = mask[0,env.radius].cpu()
-                true_density, _ = env.true_density.crop(env.paths[env.head_id][-1], env.radius, interp=True)
-                true_density = true_density[0,env.radius].cpu()
-                ax[2].imshow(mask, cmap='Blues')
-                ax[2].imshow(true_density, cmap='Reds', alpha=0.5)
+            if not terminated:
+                center = env.paths[env.head_id][-1]
+
+                density_patch = env.true_density.crop(center, env.radius, interp=False)[0]
+
+                labels_patch, _ = env.section_labels.crop(center, env.radius, interp=False, pad=False)
+                new_label = int(labels_patch[0, env.radius, env.radius, env.radius].item())
+                current_label = env.path_labels[env.head_id]
+                # Here mask out any sections that are not the current section or its children. 
+                if current_label != 0:
+                    # The graph is necessarily an undirected graph. Here "children" means connected sections
+                    # that have not been previously available to the path.
+                    children = [x for x in env.graph[current_label] if x not in env.prev_children[env.head_id]]
+                    section_ids = [current_label] + children
+                    section_mask = torch.zeros_like(density_patch)
+                    for id in section_ids:
+                        section_mask += torch.where(labels_patch == id, 1, 0)
+                    density_patch_masked = density_patch * section_mask
+                    if new_label != current_label and new_label in section_ids: # only change label if the new label is a child section
+                        env.path_labels[env.head_id] = new_label
+                        env.prev_children[env.head_id] = env.graph[current_label]
+                else:
+                    density_patch_masked = density_patch
+                    if new_label != 0:
+                        env.path_labels[env.head_id] = new_label
+                        
+                density_patch_masked = density_patch_masked[0,env.radius]
+                # mask = mask[0,env.radius]
+                # ax[2].imshow(mask, cmap='Blues')
+                ax[2].imshow(density_patch_masked, cmap='Reds', alpha=0.5)
                 ax[2].imshow(patch[3], cmap='Greens', alpha=0.5)
             else:
                 ax[2].imshow(torch.zeros_like(patch[3]))

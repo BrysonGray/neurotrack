@@ -11,6 +11,84 @@ sys.path.append(str(Path(__file__).parent))
 import draw
 import load
 
+
+def rvmf(n, mu, k, rng=None):
+    """Random sampling from the von Mises-Fisher distribution
+    
+    Parameters:
+    -----------
+    n : int
+        Sample size
+    mu : numpy.ndarray
+        Mean direction
+    k : float
+        Concentration parameter
+        
+    Returns:
+    --------
+    numpy.ndarray
+        Matrix of random samples
+    """
+    if rng is None:
+        rng = np.random.default_rng()
+    d = len(mu)
+    
+    if k > 0:
+        mu = mu / np.sqrt(np.sum(mu**2))
+        ini = np.zeros(d)
+        ini[-1] = 1.0
+        d1 = d - 1
+        
+        v1 = rng.normal(0, 1, (n, d1))
+        v_rows_norm = np.sqrt(np.sum(v1**2, axis=1))
+        v = v1 / v_rows_norm[:, np.newaxis]
+        
+        b = (-2 * k + np.sqrt(4 * k**2 + d1**2)) / d1
+        x0 = (1 - b) / (1 + b)
+        m = 0.5 * d1
+        ca = k * x0 + (d - 1) * np.log(1 - x0**2)
+        
+        # Modified rejection sampling
+        w = np.zeros(n)
+        for i in range(n):
+            accepted = False
+            while not accepted:
+                z = rng.beta(m, m)
+                u = rng.uniform(0, 1)
+                w_i = (1 - (1 + b) * z) / (1 - (1 - b) * z)
+                ta = k * w_i + d1 * np.log(1 - x0 * w_i)
+                if ta - ca >= np.log(u):
+                    w[i] = w_i
+                    accepted = True
+                    
+        S = np.column_stack((np.sqrt(1 - w**2)[:, np.newaxis] * v, w))
+        
+        # Rotation logic from ini to mu
+        if np.allclose(ini, mu):
+            x = S
+        elif np.allclose(-ini, mu):
+            x = -S
+        else:
+            # Implement rotation matrix calculation
+            # This is a simplified version - would need proper implementation
+            a = ini
+            b = mu
+            ab = np.sum(a * b)
+            ca = a - b * ab
+            ca = ca / np.sqrt(np.sum(ca**2))
+            A = np.outer(b, ca) - np.outer(ca, b)
+            theta = np.arccos(ab)
+            rotation_matrix = np.eye(d) + np.sin(theta) * A + (np.cos(theta) - 1) * (np.outer(b, b) + np.outer(ca, ca))
+            
+            x = S @ rotation_matrix.T
+    else:
+        # Uniform distribution on sphere
+        x1 = rng.normal(0,1,(n,d))
+        x = x1 / np.sqrt(np.sum(x1**2, axis=1))[:, np.newaxis]
+    
+    return x
+
+
 def get_next_point(q0: np.ndarray, q1: np.ndarray, kappa: float, step_size: float=1.0, rng=None) -> np.ndarray:
     """
     Generate the next point in a path using a von Mises-Fisher distribution.
@@ -37,8 +115,9 @@ def get_next_point(q0: np.ndarray, q1: np.ndarray, kappa: float, step_size: floa
     if rng is None:
         rng = np.random.default_rng()
     last_step = (q1 - q0) / step_size
-    vmf = scipy.stats.vonmises_fisher(last_step, kappa)
-    step = vmf.rvs(1, random_state=rng)[0]
+    # vmf = scipy.stats.vonmises_fisher(last_step, kappa)
+    # step = vmf.rvs(1, random_state=rng)[0]
+    step = rvmf(1, last_step, kappa, rng)[0]
     # step[0] = 0.0 # for paths constrained to a 2d slice
     step = step/(np.linalg.norm(step) + np.finfo(float).eps)
     next_point = q1 + step * step_size
@@ -162,6 +241,7 @@ def make_swc_list(size: Tuple[int,...],
     path = get_path(start, boundary=boundary, kappa=kappa, rng=rng, length=length, step_size=step_size, uniform_len=uniform_len,
                     random_start=random_start)
     graph = [[i+1, i] for i in range(len(path))]
+    graph[0][1] = -1
     paths = [path]
     branch_points = []
     for i in range(num_branches):

@@ -97,8 +97,10 @@ branches : int, optional
     binary = parameters["binary"]
     seed = parameters["seed"]
     rng = np.random.default_rng(seed)
+    adjust=False
 
     if labels_dir is not None: # Load existing neuron trees as swc files
+        adjust=True
         print(f"Loading existing neuron trees as swc files...\n"
               f"    labels_dir: {labels_dir}")
         files = [f for x in os.walk(labels_dir) for f in glob(os.path.join(x[0], "*.swc"))]
@@ -171,7 +173,7 @@ branches : int, optional
         swc_data = draw.neuron_from_swc(swc_lists[i],
                                         width=width,
                                         noise=noise,
-                                        adjust=True,
+                                        adjust=adjust,
                                         neuron_color=color,
                                         background_color=background,
                                         random_brightness=random_brightness,
@@ -181,10 +183,10 @@ branches : int, optional
         # torch.save(swc_data, os.path.join(out, f"{fnames[i]}.pt"))
         if not os.path.exists(os.path.join(out, f"{fnames[i]}")):
             os.makedirs(os.path.join(out, f"{fnames[i]}"), exist_ok=True)
-        tf.imsave(os.path.join(out, f"{fnames[i]}", f"{fnames[i]}_image.tif"), swc_data['image'].numpy().astype(np.float32), compression='zlib')
-        tf.imsave(os.path.join(out, f"{fnames[i]}", f"{fnames[i]}_density.tif"), swc_data['neuron_density'].numpy().astype(np.float32), compression='zlib')
-        tf.imsave(os.path.join(out, f"{fnames[i]}", f"{fnames[i]}_sections.tif"), swc_data['section_labels'].numpy().astype(np.float32), compression='zlib')
-        tf.imsave(os.path.join(out, f"{fnames[i]}", f"{fnames[i]}_branches.tif"), swc_data['branch_mask'].numpy().astype(np.float32), compression='zlib')
+        tf.imwrite(os.path.join(out, f"{fnames[i]}", f"{fnames[i]}_image.tif"), swc_data['image'].numpy().astype(np.float32), compression='zlib')
+        tf.imwrite(os.path.join(out, f"{fnames[i]}", f"{fnames[i]}_density.tif"), swc_data['neuron_density'].numpy().astype(np.float32), compression='zlib')
+        tf.imwrite(os.path.join(out, f"{fnames[i]}", f"{fnames[i]}_sections.tif"), swc_data['section_labels'].numpy().astype(np.float32), compression='zlib')
+        tf.imwrite(os.path.join(out, f"{fnames[i]}", f"{fnames[i]}_branches.tif"), swc_data['branch_mask'].numpy().astype(np.float32), compression='zlib')
         with open(os.path.join(out, f"{fnames[i]}", f"{fnames[i]}_seeds.txt"), 'w') as f:
             for seed_point in swc_data['seeds']:
                 # Convert the seed point coordinates to string and write to file

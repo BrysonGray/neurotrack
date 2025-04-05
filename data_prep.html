@@ -466,6 +466,30 @@ path length will be equal to “length”.</p></li>
 </dd></dl>
 
 <dl class="py function">
+<dt class="sig sig-object py" id="data_prep.generate.rvmf">
+<span class="sig-prename descclassname"><span class="pre">data_prep.generate.</span></span><span class="sig-name descname"><span class="pre">rvmf</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">n</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">mu</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">k</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">rng</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#data_prep.generate.rvmf" title="Link to this definition"></a></dt>
+<dd><p>Random sampling from the von Mises-Fisher distribution</p>
+<section id="parameters">
+<h3>Parameters:<a class="headerlink" href="#parameters" title="Link to this heading"></a></h3>
+<dl class="simple">
+<dt>n<span class="classifier">int</span></dt><dd><p>Sample size</p>
+</dd>
+<dt>mu<span class="classifier">numpy.ndarray</span></dt><dd><p>Mean direction</p>
+</dd>
+<dt>k<span class="classifier">float</span></dt><dd><p>Concentration parameter</p>
+</dd>
+</dl>
+</section>
+<section id="returns">
+<h3>Returns:<a class="headerlink" href="#returns" title="Link to this heading"></a></h3>
+<dl class="simple">
+<dt>numpy.ndarray</dt><dd><p>Matrix of random samples</p>
+</dd>
+</dl>
+</section>
+</dd></dl>
+
+<dl class="py function">
 <dt class="sig sig-object py" id="data_prep.generate.save_images_from_swc">
 <span class="sig-prename descclassname"><span class="pre">data_prep.generate.</span></span><span class="sig-name descname"><span class="pre">save_images_from_swc</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">labels_dir</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">outdir</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">sync</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">random_contrast</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">rng</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#data_prep.generate.save_images_from_swc" title="Link to this definition"></a></dt>
 <dd><p>Save images generated from SWC files to the specified output directory.</p>
@@ -603,8 +627,8 @@ gaussian blurred point.</p></li>
 <dt class="sig sig-object py" id="data_prep.image.extract_spherical_patch">
 <span class="sig-prename descclassname"><span class="pre">data_prep.image.</span></span><span class="sig-name descname"><span class="pre">extract_spherical_patch</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">volume</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">x</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">y</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">z</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">center</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">radius</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">order</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">permutation</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">normalize</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#data_prep.image.extract_spherical_patch" title="Link to this definition"></a></dt>
 <dd><p>Extract a spherical patch from a 3D image volume and project it onto a 2D surface.</p>
-<section id="parameters">
-<h3>Parameters:<a class="headerlink" href="#parameters" title="Link to this heading"></a></h3>
+<section id="id1">
+<h3>Parameters:<a class="headerlink" href="#id1" title="Link to this heading"></a></h3>
 <dl class="simple">
 <dt>volume<span class="classifier">3D numpy array</span></dt><dd><p>The 3D image volume</p>
 </dd>
@@ -628,8 +652,8 @@ gaussian blurred point.</p></li>
 </dd>
 </dl>
 </section>
-<section id="returns">
-<h3>Returns:<a class="headerlink" href="#returns" title="Link to this heading"></a></h3>
+<section id="id2">
+<h3>Returns:<a class="headerlink" href="#id2" title="Link to this heading"></a></h3>
 <dl class="simple">
 <dt>2D numpy array</dt><dd><p>The 2D projection of the spherical surface (equirectangular projection)</p>
 </dd>

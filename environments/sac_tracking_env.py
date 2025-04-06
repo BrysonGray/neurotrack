@@ -385,15 +385,14 @@ class Environment():
             # get reward
             center = torch.round(segment[0]).to(dtype=torch.int)
             segment_vec = segment[1] - segment[0]
-            segment_length = torch.linalg.norm(segment_vec)
-            L = int(torch.ceil(segment_length)) + 1 # The radius of the patch is the whole line length since the line starts at patch center.
+            L = int(max(abs(segment_vec))) # The radius of the patch is the whole line length since the line starts at patch center.
             overhang = int(2*self.step_width) # include space beyond the end of the line
             patch_radius = L + overhang
             density_patch, _ = self.true_density.crop(center, patch_radius, interp=False, pad=False)
 
             # mask out competing paths
             labels_patch, _ = self.section_labels.crop(center, patch_radius, interp=False, pad=False)
-            end_point = patch_radius + segment_vec
+            end_point = [x//2 + v for x,v in zip(labels_patch.shape[1:], segment_vec)]
             new_label_idx = (0, int(round(end_point[0].item())), int(round(end_point[1].item())), int(round(end_point[2].item())))
             new_label = int(labels_patch[new_label_idx].item())
             current_label = self.path_labels[self.head_id]

@@ -43,10 +43,11 @@ def draw_line_segment(segment, width, binary=False, value=1.0):
     segment = segment[1] - segment[0]
     if isinstance(segment, np.ndarray):
         segment = torch.from_numpy(segment)
-    segment_length = torch.sqrt(torch.sum(segment**2))
+    # segment_length = torch.sqrt(torch.sum(segment**2))
 
     # the patch should contain both line end points plus some blur
-    L = int(torch.ceil(segment_length)) + 1 # The radius of the patch is the whole line length since the line starts at patch center.
+    # L = int(torch.ceil(segment_length)) + 1 # The radius of the patch is the whole line length since the line starts at patch center.
+    L = int(max(abs(segment)))
     overhang = int(2*width) # include space beyond the end of the line
     patch_radius = L + overhang
 

@@ -9,7 +9,7 @@ from image import Image
 import load
 
 
-def draw_neuron_density(segments, shape, width=3, scale=1.0):
+def draw_neuron_density(segments, shape, width=None, scale=1.0):
     """
     Draws neuron density on an image based on given segments.
     
@@ -35,11 +35,13 @@ def draw_neuron_density(segments, shape, width=3, scale=1.0):
 
     if not isinstance(segments, torch.Tensor):
         segments = torch.tensor(segments)
-    if segments.shape[2] == 4: # segments include width in the last column
+    if width is None and segments.shape[2] == 4: # segments include width in the last column
         for s in segments:
             width = ((s[0,3]+s[1,3])/2).item() / scale # convert from real coordinates to pixels
             density.draw_line_segment(s[:,:3], width=width, channel=0)
     else:
+        if width is None:
+            raise ValueError("Width must be specified when segments don't include width information")
         for s in segments:
             density.draw_line_segment(s[:,:3], width=width, channel=0)
     

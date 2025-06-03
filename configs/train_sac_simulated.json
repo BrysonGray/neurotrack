@@ -1,7 +1,7 @@
 {
-    "img_path": "/nafs/dtward/bryson/data/simulated_neurons/3d_with_artifacts_b-0",
-    "outdir": "/home/bgray/bmap/data/neurotrack_outputs/simulated_with_artifacts_sac_training_output",
-    "sac_weights": "/nafs/dtward/bryson/data/neurotrack_outputs/simulated_with_artifacts_sac_training_output/model_state_dicts_simulated_b-0_04-03-25.pt",
+    "img_path": "/home/brysongray/bmap/data/simulated_neurons/3d_with_artifacts_b-0",
+    "outdir": "/home/brysongray/bmap/data/neurotrack_outputs/simulated_with_artifacts_sac_training_output",
+    "sac_weights": "/home/brysongray/bmap/data/neurotrack_outputs/simulated_with_artifacts_sac_training_output/model_state_dicts_simulated_b-0_04-03-25.pt",
     "name": "simulated_b-0_v1",
     "n_seeds": 1,
     "step_size": 2.0,
@@ -13,7 +13,7 @@
     "alpha": 1.0,
     "beta": 0.2,
     "friction": 0.0,
-    "n_episodes": 500,
+    "n_episodes": 1000,
     "init_temperature": 0.005,
     "target_entropy": 0.0
 }

@@ -1,9 +1,9 @@
 {
-    "img_path": "/nafs/dtward/bryson/data/simulated_neurons/neuromorpho_with_artifacts",
-    "outdir": "/home/bgray/bmap/data/neurotrack_outputs/neuromorpho_with_artifacts_sac_inference_output",
+    "img_path": "/home/brysongray/bmap/data/simulated_neurons/neuromorpho_with_artifacts",
+    "outdir": "/home/brysongray/bmap/data/neurotrack_outputs/neuromorpho_with_artifacts_sac_inference_output",
     "name": "neuromorpho",
-    "classifier_weights" : "/nafs/dtward/bryson/data/neurotrack_outputs/pretrained_models/neurom_with_artifacts_classifier/resnet_classifier_01-24-25_checkpoint-16.pt",
-    "sac_weights": "/nafs/dtward/bryson/data/neurotrack_outputs/model_state_dicts_neurom_with_artifacts_01-25-25.pt",
+    "classifier_weights" : "/home/brysongray/bmap/data/neurotrack_outputs/pretrained_models/neurom_with_artifacts_classifier/resnet_classifier_01-24-25_checkpoint-16.pt",
+    "sac_weights": "/home/brysongray/bmap/data/neurotrack_outputs/model_state_dicts_neurom_with_artifacts_01-25-25_ep-23.pt",
     "step_size": 2.0,
     "step_width": 3.0
 }

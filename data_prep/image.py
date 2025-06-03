@@ -47,7 +47,7 @@ def draw_line_segment(segment, width, binary=False, value=1.0):
 
     # the patch should contain both line end points plus some blur
     # L = int(torch.ceil(segment_length)) + 1 # The radius of the patch is the whole line length since the line starts at patch center.
-    L = int(max(abs(segment)))
+    L = int(max(abs(segment).tolist()))
     overhang = int(np.ceil(2*width)) # include space beyond the end of the line
     patch_radius = L + overhang
 

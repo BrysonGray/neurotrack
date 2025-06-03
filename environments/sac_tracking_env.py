@@ -38,9 +38,12 @@ class Environment():
             step_size: float = 1.0,
             step_width: float = 1.0,
             max_len: int = 10000,
+            max_paths: int = 100,
             alpha: float = 1.0,
             beta: float = 1e-3,
             friction: float = 1e-4,
+            repeat_starts: bool = True,
+            section_masking: bool = False,
             classifier=None):
         """
         Initialize the SAC tracking environment.
@@ -57,14 +60,20 @@ class Environment():
             Step width for tracking, by default 1.0.
         max_len : int, optional
             Maximum length of the path, by default 10000.
+        max_paths : int, optional
+            Maximum number of paths allowed, by default 100.
         alpha : float, optional
             Alpha parameter for tracking, by default 1.0.
         beta : float, optional
             Beta parameter for tracking, by default 1e-3.
         friction : float, optional
             Friction parameter for tracking, by default 1e-4.
+        repeat_starts : bool, optional
+            Whether to repeatedly restart at the beginning of a completed path, by default True.
+        section_masking : bool, optional
+            Whether to mask out all sections except the current section and its descendants, by default False.  
         classifier : optional
-            Classifier for tracking, by default None.
+            Branch classifier for tracking, by default None.
             
         Attributes
         ----------
@@ -92,8 +101,14 @@ class Environment():
             Step width for tracking.
         max_len : int
             Maximum length of the path.
+        max_paths : int
+            Maximum number of paths allowed
         classifier : optional
             Classifier for tracking.
+        repeat_starts : bool, optional
+            Whether to repeatedly restart at the beginning of a completed path.
+        section_masking : bool, optional
+            Whether to mask out all sections except the current section and its descendants.  
         seed_idx : int
             Index of the current seed point.
         r : float
@@ -143,6 +158,9 @@ class Environment():
         self.step_size = step_size
         self.step_width = step_width
         self.max_len = max_len
+        self.max_paths = max_paths
+        self.repeat_starts = repeat_starts
+        self.section_masking = section_masking
         self.classifier = classifier
 
         self.seed_idx = 0
@@ -316,7 +334,7 @@ class Environment():
         return torch.tensor([reward], dtype=torch.float32)
 
 
-    def step(self, action, max_paths=100, verbose=False):
+    def step(self, action, verbose=False):
         """
         Perform a single step in the environment.
         
@@ -356,24 +374,21 @@ class Environment():
             self.path_labels.pop(self.head_id)
 
             # check for max branches
-            if len(self.finished_paths) > 80: # TODO: Max branches should be an argument 
+            if len(self.finished_paths) > self.max_paths:
                 terminated = True
-            # if that was the last path in the list, then we need to decide what to do
             elif len(self.paths) == 0:
-                # if the path started at the seed and only took one step, then terminate the episode
-                if torch.all(self.finished_paths[-1][0] == self.roots[0]) and len(self.finished_paths[-1]) <= 2:
-                    terminated = True
-                # otherwise, return to the seed point
-                else:
-                    # reset to the initial seed
-                    self.paths.append(self.roots[0][None])
-                    self.roots.append(self.roots[0])
-                    i,j,k = [int(round(x.item())) for x in self.roots[0]]
-                    self.path_labels = [int(self.section_labels.data[0, i, j, k].item())]
-                    self.head_id = 0
-                    terminated = False
+                terminated = True
             # otherwise, move to the next path
             else:
+                if self.repeat_starts:
+                    # if the path took more than one step, then add a new path at the same root.
+                    if len(self.finished_paths[-1]) > 2:
+                        self.paths.append(self.roots[self.head_id][None])
+                        self.roots.append(self.roots[self.head_id])
+                        # i,j,k = [int(round(x.item())) for x in self.roots[self.head_id]]
+                        # self.path_labels.append(int(self.section_labels.data[0, i, j, k].item()))
+                        self.path_labels.append(0)
+
                 self.head_id = (self.head_id + 1)%len(self.paths)
 
         else: # otherwise take a step
@@ -385,42 +400,45 @@ class Environment():
             # get reward
             center = torch.round(segment[0]).to(dtype=torch.int)
             segment_vec = segment[1] - segment[0]
-            L = int(max(abs(segment_vec))) # The radius of the patch is the whole line length since the line starts at patch center.
+            L = int(torch.abs(segment_vec).max().item()) # The radius of the patch is the whole line length since the line starts at patch center.
             overhang = int(2*self.step_width) # include space beyond the end of the line
             patch_radius = L + overhang
             density_patch, _ = self.true_density.crop(center, patch_radius, interp=False, pad=False)
 
             # mask out competing paths
-            # labels_patch, _ = self.section_labels.crop(center, patch_radius, interp=False, pad=False)
-            # end_point = [x//2 + v for x,v in zip(labels_patch.shape[1:], segment_vec)]
-            # new_label_idx = (0, int(round(end_point[0].item())), int(round(end_point[1].item())), int(round(end_point[2].item())))
-            # new_label = int(labels_patch[new_label_idx].item())
-            # current_label = self.path_labels[self.head_id]
+            if self.section_masking:
+                labels_patch, _ = self.section_labels.crop(center, patch_radius, interp=False, pad=False)
+                end_point = [x//2 + v for x,v in zip(labels_patch.shape[1:], segment_vec)]
+                new_label_idx = (0, int(round(end_point[0].item())), int(round(end_point[1].item())), int(round(end_point[2].item())))
+                new_label = int(labels_patch[new_label_idx].item())
+                current_label = self.path_labels[self.head_id]
 
-            # # Optimize section masking
-            # if current_label != 0:
-            #     # Pre-compute the section IDs
-            #     prev_children = self.prev_children[self.head_id]
-            #     graph_current = self.graph[current_label]
-            #     section_ids = [current_label] + [x for x in graph_current if x not in prev_children]
-                
-            #     # Create mask using vectorized operations
-            #     section_mask = torch.zeros_like(density_patch, dtype=torch.bool)
-            #     for id in section_ids:
-            #         section_mask |= (labels_patch == id)
-                
-            #     true_patch_masked = density_patch * section_mask.float()
-                
-            #     # Update label if needed
-            #     if new_label != current_label and new_label in section_ids:
-            #         self.path_labels[self.head_id] = new_label
-            #         self.prev_children[self.head_id] = graph_current
-            # else:
-            #     true_patch_masked = density_patch
-            #     if new_label != 0:
-            #         self.path_labels[self.head_id] = new_label
+                # Optimize section masking
+                if current_label != 0:
+                    # Pre-compute the section IDs
+                    prev_children = self.prev_children[self.head_id]
+                    graph_current = self.graph[current_label]
+                    section_ids = [current_label] + [x for x in graph_current if x not in prev_children]
+                    
+                    # Create mask using vectorized operations
+                    section_mask = torch.zeros_like(density_patch, dtype=torch.bool)
+                    for id in section_ids:
+                        section_mask |= (labels_patch == id)
+                    
+                    true_patch_masked = density_patch * section_mask.float()
+                    
+                    # Update label if needed
+                    if new_label != current_label and new_label in section_ids:
+                        self.path_labels[self.head_id] = new_label
+                        self.prev_children[self.head_id] = graph_current
+                else:
+                    true_patch_masked = density_patch
+                    if new_label != 0:
+                        self.path_labels[self.head_id] = new_label
 
-            true_patch_masked = density_patch # don't mask
+            else:  # don't mask
+                true_patch_masked = density_patch
+
             step_accuracy = -env_utils.density_error_change(true_patch_masked[0], old_patch, new_patch)
             reward = self.get_reward(status, step_accuracy, verbose)
 

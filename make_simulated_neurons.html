@@ -105,8 +105,8 @@
 </pre></div>
 </div>
 </div>
-<div class="nbinput docutils container">
-<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[2]:
+<div class="nbinput nblast docutils container">
+<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[ ]:
 </pre></div>
 </div>
 <div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">glob</span><span class="w"> </span><span class="kn">import</span> <span class="n">glob</span>
@@ -117,42 +117,34 @@
 <span class="kn">import</span><span class="w"> </span><span class="nn">plotly.express</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">px</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">sys</span>
 <span class="kn">import</span><span class="w"> </span><span class="nn">tifffile</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">tf</span>
+<span class="kn">import</span><span class="w"> </span><span class="nn">torch</span>
 
 <span class="n">sys</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">append</span><span class="p">(</span><span class="s1">&#39;../&#39;</span><span class="p">)</span>
 <span class="kn">from</span><span class="w"> </span><span class="nn">data_prep</span><span class="w"> </span><span class="kn">import</span> <span class="n">generate</span><span class="p">,</span> <span class="n">draw</span><span class="p">,</span> <span class="n">load</span>
 </pre></div>
 </div>
 </div>
-<div class="nboutput nblast docutils container">
-<div class="prompt empty docutils container">
-</div>
-<div class="output_area stderr docutils container">
-<div class="highlight"><pre>
-/home/bgray/anaconda3/envs/neurotrack/lib/python3.8/site-packages/tqdm/auto.py:21: TqdmWarning: IProgress not found. Please update jupyter and ipywidgets. See https://ipywidgets.readthedocs.io/en/stable/user_install.html
-  from .autonotebook import tqdm as notebook_tqdm
-</pre></div></div>
-</div>
 <section id="Generate-simulated-SWC-file-data.">
 <h2>Generate simulated SWC file data.<a class="headerlink" href="#Generate-simulated-SWC-file-data." title="Link to this heading"></a></h2>
 <p>This is a list of nodes, each node being a list: [sample_idx, structure_id, x, y, z, radius, parent_id]</p>
 <div class="nbinput nblast docutils container">
-<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[3]:
+<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[36]:
 </pre></div>
 </div>
 <div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">swc_list</span> <span class="o">=</span> <span class="n">generate</span><span class="o">.</span><span class="n">make_swc_list</span><span class="p">((</span><span class="mi">101</span><span class="p">,</span><span class="mi">101</span><span class="p">,</span><span class="mi">101</span><span class="p">),</span>
                         <span class="n">length</span><span class="o">=</span><span class="mi">20</span><span class="p">,</span>
                         <span class="n">step_size</span><span class="o">=</span><span class="mi">3</span><span class="p">,</span>
-                        <span class="n">kappa</span><span class="o">=</span><span class="mf">20.0</span><span class="p">,</span>
+                        <span class="n">kappa</span><span class="o">=</span><span class="mf">100000.0</span><span class="p">,</span>
                         <span class="n">uniform_len</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
                         <span class="n">random_start</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
                         <span class="n">rng</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
-                        <span class="n">num_branches</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span> <span class="c1"># make simulated neuron paths.</span>
+                        <span class="n">num_branches</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span> <span class="c1"># make simulated neuron paths.</span>
 </pre></div>
 </div>
 </div>
 <p>Set random background and foreground (neuron) colors</p>
 <div class="nbinput nblast docutils container">
-<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[4]:
+<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[31]:
 </pre></div>
 </div>
 <div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">random_contrast</span><span class="o">=</span><span class="kc">True</span>
@@ -166,7 +158,7 @@
 </div>
 <p>Draw neurons from SWC format data; one without and one with added noise and artifacts.</p>
 <div class="nbinput nblast docutils container">
-<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[5]:
+<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[37]:
 </pre></div>
 </div>
 <div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">neuron_no_artifacts</span> <span class="o">=</span> <span class="n">draw</span><span class="o">.</span><span class="n">neuron_from_swc</span><span class="p">(</span><span class="n">swc_list</span><span class="p">,</span>
@@ -179,15 +171,15 @@
                                 <span class="n">dropout</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
                                 <span class="n">binary</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
 
-<span class="n">neuron_with_artifacts</span> <span class="o">=</span> <span class="n">draw</span><span class="o">.</span><span class="n">neuron_from_swc</span><span class="p">(</span><span class="n">swc_list</span><span class="p">,</span>
-                                <span class="n">width</span><span class="o">=</span><span class="mi">3</span><span class="p">,</span>
-                                <span class="n">noise</span><span class="o">=</span><span class="mf">0.05</span><span class="p">,</span>
-                                <span class="n">adjust</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
-                                <span class="n">neuron_color</span><span class="o">=</span><span class="n">neuron_color</span><span class="p">,</span>
-                                <span class="n">background_color</span><span class="o">=</span><span class="n">background</span><span class="p">,</span>
-                                <span class="n">random_brightness</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
-                                <span class="n">dropout</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
-                                <span class="n">binary</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+<span class="c1"># neuron_with_artifacts = draw.neuron_from_swc(swc_list,</span>
+<span class="c1">#                                 width=3,</span>
+<span class="c1">#                                 noise=0.05,</span>
+<span class="c1">#                                 adjust=False,</span>
+<span class="c1">#                                 neuron_color=neuron_color,</span>
+<span class="c1">#                                 background_color=background,</span>
+<span class="c1">#                                 random_brightness=True,</span>
+<span class="c1">#                                 dropout=True,</span>
+<span class="c1">#                                 binary=False)</span>
 <br/></pre></div>
 </div>
 </div>
@@ -195,40 +187,12 @@
 <div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[13]:
 </pre></div>
 </div>
-<div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">torch</span>
-</pre></div>
-</div>
-</div>
-<div class="nbinput nblast docutils container">
-<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[15]:
-</pre></div>
-</div>
 <div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">section_labels</span> <span class="o">=</span> <span class="n">neuron_no_artifacts</span><span class="p">[</span><span class="s1">&#39;section_labels&#39;</span><span class="p">]</span>
 </pre></div>
 </div>
 </div>
 <div class="nbinput docutils container">
-<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[ ]:
-</pre></div>
-</div>
-<div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span>
-</pre></div>
-</div>
-</div>
-<div class="nboutput nblast docutils container">
-<div class="prompt empty docutils container">
-</div>
-<div class="output_area docutils container">
-<div class="highlight"><pre>
-<span class="ansi-cyan-fg">  Cell </span><span class="ansi-green-fg">In[27], line 1</span>
-<span class="ansi-red-fg">    *seed</span>
-    ^
-<span class="ansi-red-fg">SyntaxError</span><span class="ansi-red-fg">:</span> can&#39;t use starred expression here
-
-</pre></div></div>
-</div>
-<div class="nbinput docutils container">
-<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[ ]:
+<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[14]:
 </pre></div>
 </div>
 <div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">seed</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">(</span><span class="n">neuron_no_artifacts</span><span class="p">[</span><span class="s1">&#39;seeds&#39;</span><span class="p">][</span><span class="mi">0</span><span class="p">])</span>
@@ -237,7 +201,8 @@
 </div>
 </div>
 <div class="nboutput nblast docutils container">
-<div class="prompt empty docutils container">
+<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[14]:
+</pre></div>
 </div>
 <div class="output_area docutils container">
 <div class="highlight"><pre>
@@ -251,7 +216,7 @@ tensor(1.)
 </pre></div>
 </div>
 <div class="nbinput docutils container">
-<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[6]:
+<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[38]:
 </pre></div>
 </div>
 <div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">img</span> <span class="o">=</span> <span class="n">neuron_no_artifacts</span><span class="p">[</span><span class="s2">&quot;image&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">permute</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">,</span><span class="mi">0</span><span class="p">)</span>
@@ -274,14 +239,14 @@ tensor(1.)
 </div>
 <div class="output_area docutils container">
 <div class="highlight"><pre>
-torch.Size([60, 102, 81, 3])
+torch.Size([68, 60, 60, 3])
 </pre></div></div>
 </div>
 <div class="nboutput nblast docutils container">
 <div class="prompt empty docutils container">
 </div>
 <div class="output_area docutils container">
-<img alt="_images/make_simulated_neurons_14_1.png" src="_images/make_simulated_neurons_14_1.png" />
+<img alt="_images/make_simulated_neurons_12_1.png" src="_images/make_simulated_neurons_12_1.png" />
 </div>
 </div>
 <div class="highlight-none notranslate"><div class="highlight"><pre><span></span>b. With artifacts
@@ -310,7 +275,7 @@ torch.Size([60, 102, 81, 3])
 <div class="prompt empty docutils container">
 </div>
 <div class="output_area docutils container">
-<img alt="_images/make_simulated_neurons_16_0.png" src="_images/make_simulated_neurons_16_0.png" />
+<img alt="_images/make_simulated_neurons_14_0.png" src="_images/make_simulated_neurons_14_0.png" />
 </div>
 </div>
 </section>
@@ -492,7 +457,7 @@ loading file: /home/brysongray/data/gold166/e_checked6_chick_uw/DONE_case1-slide
 <div class="prompt empty docutils container">
 </div>
 <div class="output_area docutils container">
-<img alt="_images/make_simulated_neurons_30_0.png" src="_images/make_simulated_neurons_30_0.png" />
+<img alt="_images/make_simulated_neurons_28_0.png" src="_images/make_simulated_neurons_28_0.png" />
 </div>
 </div>
 <div class="nbinput docutils container">
@@ -1176,7 +1141,7 @@ loading file: /home/brysongray/data/gold166_swc_scaled/140921c12.tif.v3dpbd.swc
 <div class="prompt empty docutils container">
 </div>
 <div class="output_area docutils container">
-<img alt="_images/make_simulated_neurons_36_0.png" src="_images/make_simulated_neurons_36_0.png" />
+<img alt="_images/make_simulated_neurons_34_0.png" src="_images/make_simulated_neurons_34_0.png" />
 </div>
 </div>
 <div class="nbinput docutils container">
@@ -1204,7 +1169,7 @@ loading file: /home/brysongray/data/gold166_swc_scaled/140921c12.tif.v3dpbd.swc
 <div class="prompt empty docutils container">
 </div>
 <div class="output_area docutils container">
-<img alt="_images/make_simulated_neurons_37_1.png" src="_images/make_simulated_neurons_37_1.png" />
+<img alt="_images/make_simulated_neurons_35_1.png" src="_images/make_simulated_neurons_35_1.png" />
 </div>
 </div>
 <div class="nbinput nblast docutils container">

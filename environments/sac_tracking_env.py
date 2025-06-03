@@ -391,34 +391,34 @@ class Environment():
             density_patch, _ = self.true_density.crop(center, patch_radius, interp=False, pad=False)
 
             # mask out competing paths
-            labels_patch, _ = self.section_labels.crop(center, patch_radius, interp=False, pad=False)
-            end_point = [x//2 + v for x,v in zip(labels_patch.shape[1:], segment_vec)]
-            new_label_idx = (0, int(round(end_point[0].item())), int(round(end_point[1].item())), int(round(end_point[2].item())))
-            new_label = int(labels_patch[new_label_idx].item())
-            current_label = self.path_labels[self.head_id]
+            # labels_patch, _ = self.section_labels.crop(center, patch_radius, interp=False, pad=False)
+            # end_point = [x//2 + v for x,v in zip(labels_patch.shape[1:], segment_vec)]
+            # new_label_idx = (0, int(round(end_point[0].item())), int(round(end_point[1].item())), int(round(end_point[2].item())))
+            # new_label = int(labels_patch[new_label_idx].item())
+            # current_label = self.path_labels[self.head_id]
 
-            # Optimize section masking
-            if current_label != 0:
-                # Pre-compute the section IDs
-                prev_children = self.prev_children[self.head_id]
-                graph_current = self.graph[current_label]
-                section_ids = [current_label] + [x for x in graph_current if x not in prev_children]
+            # # Optimize section masking
+            # if current_label != 0:
+            #     # Pre-compute the section IDs
+            #     prev_children = self.prev_children[self.head_id]
+            #     graph_current = self.graph[current_label]
+            #     section_ids = [current_label] + [x for x in graph_current if x not in prev_children]
                 
-                # Create mask using vectorized operations
-                section_mask = torch.zeros_like(density_patch, dtype=torch.bool)
-                for id in section_ids:
-                    section_mask |= (labels_patch == id)
+            #     # Create mask using vectorized operations
+            #     section_mask = torch.zeros_like(density_patch, dtype=torch.bool)
+            #     for id in section_ids:
+            #         section_mask |= (labels_patch == id)
                 
-                true_patch_masked = density_patch * section_mask.float()
+            #     true_patch_masked = density_patch * section_mask.float()
                 
-                # Update label if needed
-                if new_label != current_label and new_label in section_ids:
-                    self.path_labels[self.head_id] = new_label
-                    self.prev_children[self.head_id] = graph_current
-            else:
-                true_patch_masked = density_patch
-                if new_label != 0:
-                    self.path_labels[self.head_id] = new_label
+            #     # Update label if needed
+            #     if new_label != current_label and new_label in section_ids:
+            #         self.path_labels[self.head_id] = new_label
+            #         self.prev_children[self.head_id] = graph_current
+            # else:
+            #     true_patch_masked = density_patch
+            #     if new_label != 0:
+            #         self.path_labels[self.head_id] = new_label
 
             true_patch_masked = density_patch # don't mask
             step_accuracy = -env_utils.density_error_change(true_patch_masked[0], old_patch, new_patch)

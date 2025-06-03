@@ -432,9 +432,14 @@ def train(env,
             if not os.path.exists(paths_dir):
                 os.makedirs(paths_dir)
 
-            to_save = {"labeled_neuron": labeled_neuron, "true_neuron": env.true_density.data[0].detach().clone().cpu(), "coverage": coverage, "return": best_return}
-            torch.save(to_save, os.path.join(paths_dir, f"ep_snapshot_{ep}.pt"))
-
+            # to_save = {"labeled_neuron": labeled_neuron, "true_neuron": env.true_density.data[0].detach().clone().cpu(), "coverage": coverage, "return": best_return}
+            # torch.save(to_save, os.path.join(paths_dir, f"ep_snapshot_{ep}.pt"))
+            np.savez_compressed(os.path.join(paths_dir, f"ep_snapshot_{ep}.npz"),
+                    name=env.img_files[env.img_idx].split('/')[-1],
+                    labeled_neuron=labeled_neuron.numpy(),
+                    coverage=np.float32(coverage),
+                    best_return=best_return)
+                    # paths=np.array(paths_to_save, dtype=object),
         # save model after at least 500 steps 
         if steps_done // 500 > last_save:
             model_dicts = {"policy_state_dict": actor.state_dict(),
@@ -518,7 +523,7 @@ def inference(env, actor, outdir, n_trials=5, show=True):
         paths_to_save = [path.detach().cpu().numpy().tolist() if isinstance(path, torch.Tensor) else path for path in env.paths]
         labeled_neuron_np = labeled_neuron.numpy()
 
-        # Option 1: Using numpy's compressed format
+        # Using numpy's compressed format
         np.savez_compressed(os.path.join(outdir, f"{name}_{date}_inference.npz"),
                             labeled_neuron=labeled_neuron_np,
                             paths=np.array(paths_to_save, dtype=object),

@@ -37,47 +37,47 @@ def main():
     """
     
     help_string = """
-Generate and save simulated neuron images, either from existing neuron swc files or
-by generating new simulated neuron trees based on the provided parameters.
+    Generate and save simulated neuron images, either from existing neuron swc files or
+    by generating new simulated neuron trees based on the provided parameters.
 
-Takes one argument, `--input` which is a JSON file listing the following configuration parameters:  
+    Takes one argument, `--input` which is a JSON file listing the following configuration parameters:  
 
-JSON Configuration Parameters
------------------------------
-labels_dir : str, optional
-    Directory containing SWC files of existing neuron trees. If not provided, neuron trees will be simulated.
-out : str
-    Output directory to save the generated neuron images.
-width : int
-    Width of the generated neuron images in voxels.
-random_contrast : bool
-    Whether to apply random contrast to the neuron images.
-dropout : float
-    Density of intensity dropout points for the neuron images.
-random_brightness : bool
-    Whether to apply random signal to noise ratio to the neuron images.
-noise : float
-    Amount of noise to add to the neuron images.
-binary : bool
-    Whether to draw the neuron images as a binary mask.
-seed : int
-    Seed for the random number generator.
-count : int, optional
-    Number of neuron trees to simulate. Required if `labels_dir` is not provided.
-size : int, optional
-    Size of the simulated neuron trees. Required if `labels_dir` is not provided.
-length : int, optional
-    Length of the simulated neuron trees. Required if `labels_dir` is not provided.
-stepsize : float, optional
-    Step size for the simulated neuron trees. Required if `labels_dir` is not provided.
-uniform_len : bool, optional
-    Whether to use uniform length for the simulated neuron trees. Required if `labels_dir` is not provided.
-kappa : float, optional
-    Kappa parameter for the simulated neuron trees. Required if `labels_dir` is not provided.
-random_start : bool, optional
-    Whether to use random starting points for the simulated neuron trees. Required if `labels_dir` is not provided.
-branches : int, optional
-    Number of branches for the simulated neuron trees. Required if `labels_dir` is not provided.
+    JSON Configuration Parameters
+    -----------------------------
+    labels_dir : str, optional
+        Directory containing SWC files of existing neuron trees. If not provided, neuron trees will be simulated.
+    out : str
+        Output directory to save the generated neuron images.
+    width : int
+        Width of the generated neuron images in voxels.
+    random_contrast : bool
+        Whether to apply random contrast to the neuron images.
+    dropout : float
+        Density of intensity dropout points for the neuron images.
+    random_brightness : bool
+        Whether to apply random signal to noise ratio to the neuron images.
+    noise : float
+        Amount of noise to add to the neuron images.
+    binary : bool
+        Whether to draw the neuron images as a binary mask.
+    seed : int
+        Seed for the random number generator.
+    count : int, optional
+        Number of neuron trees to simulate. Required if `labels_dir` is not provided.
+    size : int, optional
+        Size of the simulated neuron trees. Required if `labels_dir` is not provided.
+    length : int, optional
+        Length of the simulated neuron trees. Required if `labels_dir` is not provided.
+    stepsize : float, optional
+        Step size for the simulated neuron trees. Required if `labels_dir` is not provided.
+    uniform_len : bool, optional
+        Whether to use uniform length for the simulated neuron trees. Required if `labels_dir` is not provided.
+    kappa : float, optional
+        Kappa parameter for the simulated neuron trees. Required if `labels_dir` is not provided.
+    random_start : bool, optional
+        Whether to use random starting points for the simulated neuron trees. Required if `labels_dir` is not provided.
+    branches : int, optional
+        Number of branches for the simulated neuron trees. Required if `labels_dir` is not provided.
     """
     parser = argparse.ArgumentParser(formatter_class=RawTextHelpFormatter)
     parser.add_argument('-i', '--input', type=argparse.FileType('r'), help=help_string)

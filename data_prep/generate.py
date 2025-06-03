@@ -178,7 +178,6 @@ def get_path(start,
     # first step
     if random_start:
         step = rng.normal(0.0, 1.0, 3)
-        step[0] = 0.0
         step = step / sum(step**2)**0.5
     else:
         step = np.array([0.0,0.0,1.0])

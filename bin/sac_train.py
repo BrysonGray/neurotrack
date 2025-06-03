@@ -96,6 +96,8 @@ def main():
     n_episodes = params["n_episodes"] if "n_episodes" in params else 100
     init_temperature = params["init_temperature"] if "init_temperature" in params else 0.005
     target_entropy = params["target_entropy"] if "target_entropy" in params else 0.0
+    repeat_starts = params["repeat_starts"] if "repeat_starts" in params else True
+    section_masking = params["section_masking"] if "section_masking" in params else False
     patch_radius = 17
 
     if "classifier_weights" in params:
@@ -116,6 +118,8 @@ def main():
                     alpha=alpha,
                     beta=beta,
                     friction=friction,
+                    repeat_starts=repeat_starts,
+                    section_masking=section_masking,
                     classifier=classifier)
     
     in_channels = 4

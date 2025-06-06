@@ -54,7 +54,7 @@ def sample_from_output(out, random=False):
     meannorm_ = torch.tanh(meannorm)*10 # maximum of 10
     mean = mean * meannorm_/(meannorm + torch.finfo(torch.float).eps)
     logvar = torch.tanh(logvar)*3 + 1 # no very low variance (std is order of 1 pixel) 
-    direction_dist = torch.distributions.MultivariateNormal(mean[:,:3], torch.exp(logvar)[:,None]*torch.eye(3)[None])
+    direction_dist = torch.distributions.MultivariateNormal(mean[:,:3], torch.exp(logvar)[:,None]*torch.eye(3, device=out.device)[None])
 
     return direction_dist
 
@@ -181,7 +181,8 @@ def update_actor(obs, actor, actor_optimizer, Q1, Q2, log_alpha, log_alpha_optim
     """
 
     actor_out = actor(obs)
-    direction_dist = sample_from_output(actor_out.detach().cpu(), random=False)
+    # direction_dist = sample_from_output(actor_out.detach().cpu(), random=False)
+    direction_dist = sample_from_output(actor_out, random=False)
     directions = direction_dist.rsample()
     logprobs = direction_dist.log_prob(directions)
     directions = directions.to(DEVICE)
@@ -358,13 +359,13 @@ def train(env,
                         actor.train()
                         for j in range(updates_per_step):
                             if isinstance(memory, ReplayBuffer):
-                                obs, actions, next_obs, rewards, dones = memory.sample(batch_size)
+                                obs, actions, next_obs, rewards, dones = memory.sample(batch_size, transform=True)
                                 td_error = update_Q(actor, Q1, Q1_target, Q2, Q2_target,
                                                     obs, actions, rewards, next_obs, dones,
                                                     Q1_optimizer, Q2_optimizer, gamma,
                                                     log_alpha, weights=None)
                             elif isinstance(memory, PrioritizedReplayBuffer):
-                                obs, actions, next_obs, rewards, dones, weights, tree_idxs = memory.sample(batch_size)
+                                obs, actions, next_obs, rewards, dones, weights, tree_idxs = memory.sample(batch_size, transform=True)
                                 td_error = update_Q(actor, Q1, Q1_target, Q2, Q2_target,
                                                     obs, actions, rewards, next_obs, dones,
                                                     Q1_optimizer, Q2_optimizer, gamma,
@@ -452,7 +453,7 @@ def train(env,
     return
 
 
-def inference(env, actor, outdir, n_trials=5, show=True):
+def inference(env, actor, outdir, n_trials=5, show=True, save=True):
     """
     Perform inference using the given actor in the specified environment.
     
@@ -524,10 +525,11 @@ def inference(env, actor, outdir, n_trials=5, show=True):
         labeled_neuron_np = labeled_neuron.numpy()
 
         # Using numpy's compressed format
-        np.savez_compressed(os.path.join(outdir, f"{name}_{date}_inference.npz"),
-                            labeled_neuron=labeled_neuron_np,
-                            paths=np.array(paths_to_save, dtype=object),
-                            coverage=np.float32(coverage))
+        if save:
+            np.savez_compressed(os.path.join(outdir, f"{name}_{date}_inference.npz"),
+                                labeled_neuron=labeled_neuron_np,
+                                paths=np.array(paths_to_save, dtype=object),
+                                coverage=np.float32(coverage))
 
         env.reset()
 

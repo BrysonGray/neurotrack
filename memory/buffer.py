@@ -62,7 +62,7 @@ class ReplayBuffer():
         self.idx = (self.idx + 1) % self.capacity
         self.full = self.idx == 0 or self.full
     
-    def sample(self, batch_size, replacement=False):
+    def sample(self, batch_size, replacement=False, transform=False):
         sample_range = self.capacity if self.full else self.idx
         if replacement:
             idxs = torch.randint(sample_range, size=(batch_size,))
@@ -75,6 +75,25 @@ class ReplayBuffer():
         next_obs = self.next_obs[idxs].to(device=DEVICE)
         rewards = self.rewards[idxs].to(device=DEVICE)
         dones = self.dones[idxs].to(device=DEVICE)
+
+        if transform:
+            perm = torch.randperm(3) + 2
+            obs = obs.permute([0, 1, *perm])
+            next_obs = next_obs.permute([0, 1, *perm])
+            i,j,k = [x.item() - 2 for x in perm]
+            actions = torch.stack((actions[:,i], actions[:,j], actions[:,k]), dim=1)
+            if torch.rand(1)>0.5:
+                obs = obs.flip(-1)
+                next_obs = next_obs.flip(-1)
+                actions[:,-1] = -1*actions[:,-1]
+            if torch.rand(1)>0.5:
+                obs = obs.flip(-2)
+                next_obs = next_obs.flip(-2)
+                actions[:,-2] = -1*actions[:,-2]
+            if torch.rand(1)>0.5:
+                obs = obs.flip(-3)
+                next_obs = next_obs.flip(-3)
+                actions[:,-3] = -1*actions[:,-3]
 
         return obs, actions, next_obs, rewards, dones
     
@@ -178,7 +197,7 @@ class PrioritizedReplayBuffer:
         self.full = self.idx == 0 or self.full
         
 
-    def sample(self, batch_size):
+    def sample(self, batch_size, transform: bool=False):
         """
         Samples a batch of transitions from the buffer.
         
@@ -186,6 +205,8 @@ class PrioritizedReplayBuffer:
         ----------
         batch_size : int
             The number of transitions to sample.
+        transform : bool
+            Whether to randomly flip and permute images and actions. Default is False.
             
         Returns
         -------
@@ -239,6 +260,25 @@ class PrioritizedReplayBuffer:
         next_obs = self.next_obs[sample_idxs].to(DEVICE)
         rewards = self.rewards[sample_idxs].to(DEVICE)
         dones = self.dones[sample_idxs].to(DEVICE)
+
+        if transform:
+                perm = torch.randperm(3) + 2
+                obs = obs.permute([0, 1, *perm])
+                next_obs = next_obs.permute([0, 1, *perm])
+                i,j,k = [x.item() - 2 for x in perm]
+                actions = torch.stack((actions[:,i], actions[:,j], actions[:,k]), dim=1)
+                if torch.rand(1)>0.5:
+                    obs = obs.flip(-1)
+                    next_obs = next_obs.flip(-1)
+                    actions[:,-1] = -1*actions[:,-1]
+                if torch.rand(1)>0.5:
+                    obs = obs.flip(-2)
+                    next_obs = next_obs.flip(-2)
+                    actions[:,-2] = -1*actions[:,-2]
+                if torch.rand(1)>0.5:
+                    obs = obs.flip(-3)
+                    next_obs = next_obs.flip(-3)
+                    actions[:,-3] = -1*actions[:,-3]
 
         return obs, actions, next_obs, rewards, dones, weights, tree_idxs
     

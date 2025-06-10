@@ -292,8 +292,8 @@ updating the Q-networks and actor, performing target network updates, and traini
 <dt class="field-odd">Parameters<span class="colon">:</span></dt>
 <dd class="field-odd"><ul class="simple">
 <li><p><strong>out</strong> (<em>torch.Tensor</em>) – The input tensor containing the mean and log variance components.
-The first three columns represent the mean, and the remaining columns
-represent the log variance.</p></li>
+The first three components represent the mean, and the third component
+represents the log variance.</p></li>
 <li><p><strong>random</strong> (<em>bool</em><em>, </em><em>optional</em>) – If True, samples randomly from the distribution. Default is False.</p></li>
 </ul>
 </dd>

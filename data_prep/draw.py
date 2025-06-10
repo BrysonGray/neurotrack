@@ -281,18 +281,19 @@ def neuron_from_swc(swc_list, width=3, noise=0.05, dropout=True, adjust=False, b
         img.data = img.data - dropout_img
         img.data = torch.where(img.data < 0, 0.0, img.data)
 
-    branch_mask = Image(torch.zeros_like(mask))
-    for point in branches:
-        branch_mask.draw_point(point[:3], radius=width/2, binary=True, value=1, channel=0)
-    # set branch_mask.data to zero where mask is zero
-    branch_mask.data = branch_mask.data * mask.data
+    # branch_mask = Image(torch.zeros_like(mask))
+    # for point in branches:
+    #     branch_mask.draw_point(point[:3], radius=width/2, binary=True, value=1, channel=0)
+    # # set branch_mask.data to zero where mask is zero
+    # branch_mask.data = branch_mask.data * mask.data
     root_key = min(sections.keys())
     seed = sections[root_key][0,0,:3].round().astype(np.uint16).tolist() # type: ignore
 
     swc_data = {"image": img.data,
                 "neuron_density": density.data,
                 "section_labels": section_labels.data,
-                "branch_mask": branch_mask.data,
+                # "branch_mask": branch_mask.data,
+                "branches": branches,
                 "seeds": [seed],
                 "scale": scale,
                 "graph": graph}

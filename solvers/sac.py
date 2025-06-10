@@ -35,8 +35,8 @@ def sample_from_output(out, random=False):
     ----------
     out : torch.Tensor
         The input tensor containing the mean and log variance components.
-        The first three columns represent the mean, and the remaining columns
-        represent the log variance.
+        The first three components represent the mean, and the third component
+        represents the log variance.
     random : bool, optional
         If True, samples randomly from the distribution. Default is False.
         
@@ -48,13 +48,18 @@ def sample_from_output(out, random=False):
     """
     
     mean = out[:,:3] # component 0, 1 and 2
-    logvar = out[:,3:] # logvar component 3
+    logvar = out[:,3] # logvar component 3
+
+    # Check for NaNs in mean or logvar
+    # if torch.isnan(mean).any() or torch.isnan(logvar).any():
+    #     raise ValueError("NaN detected in mean or logvar in sample_from_output")
 
     meannorm = torch.linalg.norm(mean, dim=-1, keepdim=True)
     meannorm_ = torch.tanh(meannorm)*10 # maximum of 10
     mean = mean * meannorm_/(meannorm + torch.finfo(torch.float).eps)
-    logvar = torch.tanh(logvar)*3 + 1 # no very low variance (std is order of 1 pixel) 
-    direction_dist = torch.distributions.MultivariateNormal(mean[:,:3], torch.exp(logvar)[:,None]*torch.eye(3, device=out.device)[None])
+    logvar = torch.tanh(logvar)*3 + 1 # no very low variance (std is order of 1 pixel)
+    
+    direction_dist = torch.distributions.MultivariateNormal(mean, torch.exp(logvar)[:,None, None]*torch.eye(3, device=out.device)[None])
 
     return direction_dist
 
@@ -109,15 +114,19 @@ def update_Q(actor, Q1, Q1_target, Q2, Q2_target,
     with torch.no_grad():
         # sample next actions from the current policy
         actor_out = actor(next_obs) # set steps_done to start_steps so that this samples from the current policy
+        branch_vals = actor_out[:,4:]
+        branch_vals = torch.sigmoid(branch_vals)
+        # branch_vals = torch.nn.functional.relu(branch_vals)
         direction_dist = sample_from_output(actor_out.detach().cpu())
         next_directions = direction_dist.rsample()
         logprobs = direction_dist.log_prob(next_directions)
         next_directions = next_directions.to(DEVICE)
         logprobs = logprobs.to(DEVICE)
+        next_actions = torch.cat((next_directions, branch_vals), dim=1)
         # next_directions = torch.cat((torch.zeros(next_directions.shape[0],1, device=DEVICE), next_directions), dim=1) # for paths constrained to a 2d slice
         # get target q-values
         next_states = torch.cat((next_obs, torch.ones((next_obs.shape[0], 1, next_obs.shape[2], next_obs.shape[3], next_obs.shape[4]), 
-                                            device=DEVICE)*next_directions[:,:,None,None,None]), dim=1)
+                                            device=DEVICE)*next_actions[:,:,None,None,None]), dim=1)
         Q1_target_vals = Q1_target(next_states) # vector of q-values for each choice
         Q2_target_vals = Q2_target(next_states)
         targets = rewards + gamma * torch.logical_not(dones) * (torch.minimum(Q1_target_vals, Q2_target_vals) - log_alpha.exp() * logprobs[:,None])
@@ -181,14 +190,18 @@ def update_actor(obs, actor, actor_optimizer, Q1, Q2, log_alpha, log_alpha_optim
     """
 
     actor_out = actor(obs)
+    branch_vals = actor_out[:,4:]
+    branch_vals = torch.sigmoid(branch_vals)
+    # branch_vals = torch.nn.functional.relu(branch_vals)
     # direction_dist = sample_from_output(actor_out.detach().cpu(), random=False)
     direction_dist = sample_from_output(actor_out, random=False)
     directions = direction_dist.rsample()
     logprobs = direction_dist.log_prob(directions)
     directions = directions.to(DEVICE)
     logprobs = logprobs.to(DEVICE)
+    actions = torch.cat((directions, branch_vals), dim=1)
     # get expected Q-vals
-    current_state = torch.cat((obs, torch.ones((obs.shape[0], 1, obs.shape[2], obs.shape[3], obs.shape[4]),device=DEVICE)*directions[:,:,None,None,None]), dim=1)
+    current_state = torch.cat((obs, torch.ones((obs.shape[0], 1, obs.shape[2], obs.shape[3], obs.shape[4]),device=DEVICE)*actions[:,:,None,None,None]), dim=1)
     Q1_vals = Q1(current_state)[:,0]
     Q2_vals = Q2(current_state)[:,0]
     # entropy regularized Q values
@@ -315,11 +328,12 @@ def train(env,
     steps_done = 0
     last_save = 0
     ep_returns = []
+    accuracies = []
 
     if not os.path.isdir(outdir):
         os.makedirs(outdir, exist_ok=True)
     if show_states:
-        fig, ax = plt.subplots(3,3)
+        fig, ax = plt.subplots(2,4, figsize=(16, 8))
         plt.ion()
 
     # Train the Network
@@ -334,21 +348,35 @@ def train(env,
             obs = env.get_state()
             ep_return = 0
             ep_rewards = []
+            detections = {"TP": 0, "FN": 0, "TN": 0, "FP": 0} # detection status
             for t in count():
                 actor.eval()
                 if steps_done < update_after:
                     action = torch.randn(3)*3
+                    p = torch.rand(1)
+                    if p > 0.90: # randomly branch about 1/10 steps
+                        branch_val = torch.rand(1)*0.5 + 0.5
+                    else:
+                        branch_val = torch.rand(1)*0.5
+                    # branch_val = torch.rand(1)*25.0
+                    action = torch.cat((action, branch_val))
                 else:
                     actor_out = actor(obs.to(DEVICE))
+                    branch_val = actor_out[0,4].detach().cpu()
+                    branch_val = torch.sigmoid(branch_val)
+                    # branch_val = torch.nn.functional.relu(branch_val)
                     direction_dist = sample_from_output(actor_out.detach().cpu())
                     action = direction_dist.rsample()[0]
+                    action = torch.cat((action, branch_val[None]), dim=0)
                     
                 steps_done += 1
                 # take step, get observation and reward, and move index to next streamline
-                next_obs, reward, terminated = env.step(action)
+                next_obs, reward, terminated, detection_status = env.step(action)
 
                 ep_return += reward.cpu().item()
                 ep_rewards.append(reward.cpu().item())
+                if detection_status is not None:
+                    detections[detection_status] += 1
 
                 # Store the transition in memory
                 memory.push(obs.cpu(), action.cpu(), next_obs.cpu(), reward.cpu(), terminated)
@@ -393,6 +421,8 @@ def train(env,
                         trial_returns.append(ep_return)
                     
                     ep_returns.append(ep_return)
+                    accuracy = (detections["TP"] + detections["TN"]) / (detections["TP"] + detections["TN"] + detections["FP"] + detections["FN"])
+                    accuracies.append(accuracy)
                     if len(policy_loss) > 0:
                         episode_avg_loss = sum(policy_loss)/len(policy_loss) 
                     else:
@@ -401,8 +431,8 @@ def train(env,
                         try:
                             shell = get_ipython().__class__.__name__ # type: ignore
                             if shell:
-                                show_state(env, fig, returns=ep_returns, rewards=ep_rewards, policy_loss=policy_loss)
-                                print(f"num branches: {len(env.finished_paths)}")
+                                show_state(env, fig, returns=ep_returns, rewards=ep_rewards, policy_loss=policy_loss, accuracies=accuracies, detections=detections)
+                                print(f"num branches: {len(env.roots)}")
                         except NameError:
                             csv_file_path = os.path.join(outdir, f"{name}_{date}_log.csv")
                             file_exists = os.path.isfile(csv_file_path)
@@ -491,7 +521,7 @@ def inference(env, actor, outdir, n_trials=5, show=True, save=True):
                     direction_dist = sample_from_output(actor_out.detach().cpu())
                     action = direction_dist.sample()[0]
 
-                next_obs, reward, terminated = env.step(action)
+                next_obs, reward, terminated, detection_status = env.step(action)
 
                 if terminated:
                     labeled_neuron = env.img.data[3].detach().cpu() > 0.3 

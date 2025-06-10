@@ -81,19 +81,19 @@ class ReplayBuffer():
             obs = obs.permute([0, 1, *perm])
             next_obs = next_obs.permute([0, 1, *perm])
             i,j,k = [x.item() - 2 for x in perm]
-            actions = torch.stack((actions[:,i], actions[:,j], actions[:,k]), dim=1)
+            actions = torch.stack((actions[:,i], actions[:,j], actions[:,k], actions[:,3]), dim=1)
             if torch.rand(1)>0.5:
-                obs = obs.flip(-1)
-                next_obs = next_obs.flip(-1)
-                actions[:,-1] = -1*actions[:,-1]
+                obs = obs.flip(2)
+                next_obs = next_obs.flip(2)
+                actions[:,0] = -1*actions[:,0]
             if torch.rand(1)>0.5:
-                obs = obs.flip(-2)
-                next_obs = next_obs.flip(-2)
-                actions[:,-2] = -1*actions[:,-2]
+                obs = obs.flip(3)
+                next_obs = next_obs.flip(3)
+                actions[:,1] = -1*actions[:,1]
             if torch.rand(1)>0.5:
-                obs = obs.flip(-3)
-                next_obs = next_obs.flip(-3)
-                actions[:,-3] = -1*actions[:,-3]
+                obs = obs.flip(4)
+                next_obs = next_obs.flip(4)
+                actions[:,2] = -1*actions[:,2]
 
         return obs, actions, next_obs, rewards, dones
     
@@ -262,23 +262,23 @@ class PrioritizedReplayBuffer:
         dones = self.dones[sample_idxs].to(DEVICE)
 
         if transform:
-                perm = torch.randperm(3) + 2
-                obs = obs.permute([0, 1, *perm])
-                next_obs = next_obs.permute([0, 1, *perm])
-                i,j,k = [x.item() - 2 for x in perm]
-                actions = torch.stack((actions[:,i], actions[:,j], actions[:,k]), dim=1)
-                if torch.rand(1)>0.5:
-                    obs = obs.flip(-1)
-                    next_obs = next_obs.flip(-1)
-                    actions[:,-1] = -1*actions[:,-1]
-                if torch.rand(1)>0.5:
-                    obs = obs.flip(-2)
-                    next_obs = next_obs.flip(-2)
-                    actions[:,-2] = -1*actions[:,-2]
-                if torch.rand(1)>0.5:
-                    obs = obs.flip(-3)
-                    next_obs = next_obs.flip(-3)
-                    actions[:,-3] = -1*actions[:,-3]
+            perm = torch.randperm(3) + 2
+            obs = obs.permute([0, 1, *perm])
+            next_obs = next_obs.permute([0, 1, *perm])
+            i,j,k = [x.item() - 2 for x in perm]
+            actions = torch.stack((actions[:,i], actions[:,j], actions[:,k], actions[:,3]), dim=1)
+            if torch.rand(1)>0.5:
+                obs = obs.flip(2)
+                next_obs = next_obs.flip(2)
+                actions[:,0] = -1*actions[:,0]
+            if torch.rand(1)>0.5:
+                obs = obs.flip(3)
+                next_obs = next_obs.flip(3)
+                actions[:,1] = -1*actions[:,1]
+            if torch.rand(1)>0.5:
+                obs = obs.flip(4)
+                next_obs = next_obs.flip(4)
+                actions[:,2] = -1*actions[:,2]
 
         return obs, actions, next_obs, rewards, dones, weights, tree_idxs
     

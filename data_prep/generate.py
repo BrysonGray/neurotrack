@@ -119,8 +119,8 @@ def get_next_point(q0: np.ndarray, q1: np.ndarray, kappa: float, step_size: floa
     # step = vmf.rvs(1, random_state=rng)[0]
     step = rvmf(1, last_step, kappa, rng)[0]
     # step[0] = 0.0 # for paths constrained to a 2d slice
-    step = step/(np.linalg.norm(step) + np.finfo(float).eps)
-    next_point = q1 + step * step_size
+    step = step/(np.linalg.norm(step) + np.finfo(np.float16).eps)
+    next_point = q1 + step.astype(np.float16) * step_size
 
     return next_point
 
@@ -177,7 +177,7 @@ def get_path(start,
 
     # first step
     if random_start:
-        step = rng.normal(0.0, 1.0, 3)
+        step = rng.normal(0.0, 1.0, 3).astype(np.float16)
         step = step / sum(step**2)**0.5
     else:
         step = np.array([0.0,0.0,1.0])
@@ -244,19 +244,18 @@ def make_swc_list(size: Tuple[int,...],
     paths = [path]
     branch_points = []
     for i in range(num_branches):
-        start_idx = rng.integers(0, len(path)-1)
+        start_idx = rng.integers(0, len(path)-1, dtype=int)
         branch_start = paths[0][start_idx]
         branch_points.append(branch_start)
-        branch_start = tuple(int(np.round(t)) for t in branch_start)
-        new_path = get_path(branch_start, boundary=boundary, kappa=kappa, rng=rng, length=length, step_size=step_size, uniform_len=uniform_len,
-                    random_start=True)
+        new_path = get_path(branch_start, boundary=boundary, kappa=kappa, rng=rng, length=length+1, step_size=step_size, uniform_len=uniform_len,
+                    random_start=True)[1:]
         graph.append([graph[-1][0]+1, start_idx+1])
         for i in np.arange(graph[-1][0], graph[-1][0] + len(new_path)-1):
-            graph.append([i+1, i])
+            graph.append([i.item()+1, i.item()])
         paths.append(new_path)
     paths = np.concatenate(paths)
 
-    swc_list = [[graph[i][0], 0]+list(paths[i])+[3.0, graph[i][1]] for i in range(len(graph))]
+    swc_list = [[graph[i][0], 0]+[x.item() for x in paths[i]]+[3.0, graph[i][1]] for i in range(len(graph))]
     
     return swc_list
 

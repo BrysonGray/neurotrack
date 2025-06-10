@@ -42,9 +42,8 @@ class Environment():
             alpha: float = 1.0,
             beta: float = 1e-3,
             friction: float = 1e-4,
-            repeat_starts: bool = True,
-            section_masking: bool = False,
-            classifier=None):
+            branching: bool = False,
+            section_masking: bool = False):
         """
         Initialize the SAC tracking environment.
         
@@ -68,12 +67,10 @@ class Environment():
             Beta parameter for tracking, by default 1e-3.
         friction : float, optional
             Friction parameter for tracking, by default 1e-4.
-        repeat_starts : bool, optional
-            Whether to repeatedly restart at the beginning of a completed path, by default True.
         section_masking : bool, optional
             Whether to mask out all sections except the current section and its descendants, by default False.  
-        classifier : optional
-            Branch classifier for tracking, by default None.
+        branching : bool, optional
+            Mark branches and trace paths starting at each branch point, by default False.
             
         Attributes
         ----------
@@ -103,10 +100,8 @@ class Environment():
             Maximum length of the path.
         max_paths : int
             Maximum number of paths allowed
-        classifier : optional
-            Classifier for tracking.
-        repeat_starts : bool, optional
-            Whether to repeatedly restart at the beginning of a completed path.
+        branching : bool, optional
+            Whether to trace branches.
         section_masking : bool, optional
             Whether to mask out all sections except the current section and its descendants.  
         seed_idx : int
@@ -159,9 +154,8 @@ class Environment():
         self.step_width = step_width
         self.max_len = max_len
         self.max_paths = max_paths
-        self.repeat_starts = repeat_starts
         self.section_masking = section_masking
-        self.classifier = classifier
+        self.branching = branching
 
         self.seed_idx = 0
         seed = torch.Tensor(self.seeds[self.seed_idx])
@@ -231,6 +225,9 @@ class Environment():
     
 
     def __load_data(self, path):
+        # TODO: check file exists for all files
+        if not os.path.isdir(path):
+            raise FileNotFoundError(f"Directory not found: {path}")
         img_file = glob(os.path.join(path, "*image.tif"))[0]
         img = tf.imread(img_file)
         self.img = Image(torch.from_numpy(img))
@@ -240,9 +237,15 @@ class Environment():
         section_labels_file = glob(os.path.join(path, "*sections.tif"))[0]
         section_labels = tf.imread(section_labels_file)
         self.section_labels = Image(torch.from_numpy(section_labels))
+        branches_files = glob(os.path.join(path, "*branches.txt"))
+        if not branches_files:
+            raise FileNotFoundError(f"No file ending with 'branches.txt' found in {path}")
+        branches = glob(os.path.join(path, "*branches.txt"))[0]
+        with open(branches, 'r') as f:
+            self.branches = torch.tensor([[float(x) for x in line.strip().split(' ')] for line in f if line.strip()])
         seeds = glob(os.path.join(path, "*seeds.txt"))[0]
         with open(seeds, 'r') as f:
-            self.seeds = [[int(x) for x in line.strip().split(' ')] for line in f if line.strip()]
+            self.seeds = [[float(x) for x in line.strip().split(' ')] for line in f if line.strip()]
         graph_file = glob(os.path.join(path, '*section_graph.json'))[0]
         with open(graph_file, 'r') as f:
             graph = json.load(f)
@@ -274,7 +277,8 @@ class Environment():
 
 
     def get_reward(self, category: Literal["step", "out_of_image", "out_of_mask", "too_long", "choose_stop", "bifurcate"],
-                   step_accuracy: float = 0.0,
+                   x: float = 0.0,
+                   y: float = None,
                    verbose: bool = False) -> torch.Tensor:
         """
         Calculate the reward based on the given category and step accuracy.
@@ -320,13 +324,19 @@ class Environment():
                 print('choose_stop \n',
                       f'reward: {reward}\n')
         elif category == "bifurcate":
-            reward = 0.0
+            # sigma = 5
+            # reward = np.exp(-0.5 * (x / sigma)**2 - 0.5) * alpha
+            # reward = (np.exp(-0.5*x**2/sigma) - 0.25) * alpha
+            alpha = 30.0
+            w1 = 0.1
+            w0 = 0.9
+            reward = (w0 * y * np.log(x) + w1 * (1 - y) * np.log(1 - x) - np.log(0.5)) * alpha 
             if verbose:
                 print('bifurcate \n',
                       f'reward: {reward}\n')
         elif category == "step":
             prior = self.__step_prior()
-            reward = self.alpha * step_accuracy + self.beta * prior
+            reward = self.alpha * x + self.beta * prior
 
         else:
             raise NameError(f"category: {category} was not recognized.")
@@ -360,7 +370,27 @@ class Environment():
         terminate_path = False
         terminated = False
 
-        direction = action
+        direction = action[:3]
+        # dist_to_branc = action[3]
+        detection_status = None
+        if self.branching:
+            branch_val = action[3]
+            # branch = branch > 0.5
+            distances = torch.linalg.norm(self.branches - self.paths[self.head_id][-1], dim=1)
+            target = float(distances.min() <= 4.0)
+            branch_reward = self.get_reward("bifurcate", branch_val, target, verbose)
+            if target == 1.0:
+                if branch_val > 0.5:
+                    detection_status = 'TP' # True positive
+                else:
+                    detection_status = 'FN' # False negative
+            elif target == 0.0:
+                if branch_val < 0.5:
+                    detection_status = 'TN' # True negative
+                else:
+                    detection_status = 'FP' # False positive
+                
+            # branch_reward = self.get_reward("bifurcate", distances.amin(), verbose)
             
         new_position = self.paths[self.head_id][-1] + direction
 
@@ -379,19 +409,32 @@ class Environment():
             elif len(self.paths) == 0:
                 terminated = True
             # otherwise, move to the next path
+            # else:
+            #     if self.repeat_starts:
+            #         # if the path took more than one step, then add a new path at the same root.
+            #         if len(self.finished_paths[-1]) > 2:
+            #             self.paths.append(self.roots[self.head_id][None])
+            #             self.roots.append(self.roots[self.head_id])
+            #             # i,j,k = [int(round(x.item())) for x in self.roots[self.head_id]]
+            #             # self.path_labels.append(int(self.section_labels.data[0, i, j, k].item()))
+            #             self.path_labels.append(0)
+
+            #     self.head_id = (self.head_id + 1)%len(self.paths)
             else:
-                if self.repeat_starts:
-                    # if the path took more than one step, then add a new path at the same root.
-                    if len(self.finished_paths[-1]) > 2:
-                        self.paths.append(self.roots[self.head_id][None])
-                        self.roots.append(self.roots[self.head_id])
-                        # i,j,k = [int(round(x.item())) for x in self.roots[self.head_id]]
-                        # self.path_labels.append(int(self.section_labels.data[0, i, j, k].item()))
-                        self.path_labels.append(0)
-
                 self.head_id = (self.head_id + 1)%len(self.paths)
+        else: # otherwise take the action
+            if self.branching and branch_val > 0.5:
+                # distances = torch.linalg.norm(self.branches - self.paths[self.head_id][-1], dim=1)
+                # branch_reward = self.get_reward("bifurcate", distances.amin(), verbose)
+                # diff = torch.abs(distances.amin() - dist_to_branc)
+                # branch_reward = self.get_reward("bifurcate", diff, verbose)
+                # if dist_to_branc < 4.0: # branch
+                # self.img.draw_point(self.paths[self.head_id][-1], radius=4.0, channel=3, mode='gaussian')
+                # self.paths.append(self.paths[self.head_id][-1][None])
+                # self.path_labels.append(0)
+                # self.prev_children.append(self.prev_children[self.head_id])
+                self.roots.append(self.paths[self.head_id][-1])
 
-        else: # otherwise take a step
             # add new position to path
             self.paths[self.head_id] = torch.cat((self.paths[self.head_id], new_position[None]))
             # draw the segment on the state input image
@@ -442,23 +485,27 @@ class Environment():
             step_accuracy = -env_utils.density_error_change(true_patch_masked[0], old_patch, new_patch)
             reward = self.get_reward(status, step_accuracy, verbose)
 
+            # if self.branching and branch:
+            if self.branching:
+                reward += branch_reward
+
             observation = self.get_state() 
 
             # self.head_id = (self.head_id + 1)%len(self.paths) # only move to the next path if the current path is terminated.
 
             # decide if path branches
-            if self.classifier is not None:
-                out = self.classifier(observation[:,:3, 10:25, 10:25, 10:25].to(DEVICE))
-                out = torch.sigmoid(out.squeeze())
-                if out > 0.5: # create branch
-                    distances = torch.linalg.norm(torch.stack(self.roots) - new_position, dim=1)
-                    if not torch.any(distances < 3.0):
-                        self.paths.append(new_position[None])
-                        self.path_labels.append(0)
-                        self.prev_children.append(self.prev_children[self.head_id])
-                        self.roots.append(new_position)
+            # if self.classifier is not None:
+            #     out = self.classifier(observation[:,:3, 10:25, 10:25, 10:25].to(DEVICE))
+            #     out = torch.sigmoid(out.squeeze())
+            #     if out > 0.5: # create branch
+            #         distances = torch.linalg.norm(torch.stack(self.roots) - new_position, dim=1)
+            #         if not torch.any(distances < 3.0):
+            #             self.paths.append(new_position[None])
+            #             self.path_labels.append(0)
+            #             self.prev_children.append(self.prev_children[self.head_id])
+            #             self.roots.append(new_position)
 
-        return observation, reward, terminated
+        return observation, reward, terminated, detection_status
 
 
     def reset(self, move_to_next=True):

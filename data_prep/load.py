@@ -252,7 +252,7 @@ def parse_swc(swc_list, transpose=True):
                     # repeat with a new list of terminals until the edge list only contains one final node
                     break
     
-    # make directed sections graph
+    # make undirected sections graph
     sections_graph = {}
     for section in section_ends:
         sections_graph[section] = []

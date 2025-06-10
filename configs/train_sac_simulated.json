@@ -1,8 +1,8 @@
 {
-    "img_path": "/home/brysongray/data/neurotrack_data/simulated_neurons/de-novo/curves_with_artifacts",
-    "outdir": "/home/brysongray/data/neurotrack_data/model_weights/sac_weights/curves_with_artifacts_training_outputs",
-    "name": "curves_with_artifacts",
-    "sac_weights": "/home/brysongray/data/neurotrack_data/model_weights/sac_weights/straight_no_artifacts_sac_training_output/model_state_dicts_straight_no_artifacts_2_06-04-25.pt",
+    "img_path": "/home/brysongray/data/neurotrack_data/simulated_neurons/de-novo/curves_no_artifacts_b-2",
+    "outdir": "/home/brysongray/data/neurotrack_data/model_weights/sac_weights/curves_no_artifacts_b-2_training_outputs",
+    "name": "curves_no_artifacts_b-2_branch_training",
+    "sac_weights": "/home/brysongray/data/neurotrack_data/model_weights/sac_weights/curves_no_artifacts_b-2_training_outputs/model_state_dicts_curves_no_artifacts_b-2_pretraining_06-07-25.pt",
     "n_seeds": 1,
     "step_size": 2.0,
     "step_width": 3.0,
@@ -14,8 +14,8 @@
     "beta": 0.2,
     "friction": 0.0,
     "n_episodes": 2000,
-    "init_temperature": 0.005,
-    "target_entropy": 0.0,
-    "repeat_starts": 0,
+    "init_temperature": 1.0,
+    "target_entropy": 0.3,
+    "branching": 1,
     "section_masking": 0
 }

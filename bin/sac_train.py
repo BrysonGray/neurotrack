@@ -67,8 +67,6 @@ def main():
         Initial temperature for SAC entropy (default is 0.005).
     target_entropy : float, optional
         Target entropy for SAC (default is 0.0).
-    classifier_weights : str, optional
-        Path to pre-trained classifier weights.
     sac_weights : str, optional
         Path to pre-trained SAC model weights.
     """
@@ -96,19 +94,10 @@ def main():
     n_episodes = params["n_episodes"] if "n_episodes" in params else 100
     init_temperature = params["init_temperature"] if "init_temperature" in params else 0.005
     target_entropy = params["target_entropy"] if "target_entropy" in params else 0.0
-    repeat_starts = params["repeat_starts"] if "repeat_starts" in params else True
+    branching = params["branching"] if "branching" in params else True
     section_masking = params["section_masking"] if "section_masking" in params else False
     patch_radius = 17
 
-    if "classifier_weights" in params:
-        classifier_path = params["classifier_weights"]
-        classifier_state_dict = torch.load(classifier_path)#, weights_only=True)
-        classifier = ResNet3D(ResidualBlock3D, [3, 4, 6, 3], num_classes=1)
-        classifier = classifier.to(device=DEVICE, dtype=dtype)
-        classifier.load_state_dict(classifier_state_dict)
-        classifier.eval()
-    else:
-        classifier = None
 
     env = Environment(img_path,
                     radius=patch_radius,
@@ -118,23 +107,22 @@ def main():
                     alpha=alpha,
                     beta=beta,
                     friction=friction,
-                    repeat_starts=repeat_starts,
-                    section_masking=section_masking,
-                    classifier=classifier)
+                    branching=branching,
+                    section_masking=section_masking)
     
     in_channels = 4
     input_size = 2*patch_radius+1
     init_temperature = 0.005
-    actor = ConvNet(chin=in_channels, chout=4)
+    actor = ConvNet(chin=in_channels, chout=5)
     actor = actor.to(device=DEVICE,dtype=dtype)
 
-    Q1 = ConvNet(chin=in_channels+3,chout=1)
+    Q1 = ConvNet(chin=in_channels+4,chout=1)
     Q1 = Q1.to(device=DEVICE,dtype=dtype)
-    Q2 = ConvNet(chin=in_channels+3,chout=1)
+    Q2 = ConvNet(chin=in_channels+4,chout=1)
     Q2 = Q2.to(device=DEVICE,dtype=dtype)
-    Q1_target = ConvNet(chin=7,chout=1)
+    Q1_target = ConvNet(chin=8,chout=1)
     Q1_target = Q1_target.to(device=DEVICE,dtype=dtype)
-    Q2_target = ConvNet(chin=7,chout=1)
+    Q2_target = ConvNet(chin=8,chout=1)
     Q2_target = Q2_target.to(device=DEVICE,dtype=dtype)
 
     if "sac_weights" in params:
@@ -154,7 +142,7 @@ def main():
     actor_optimizer = AdamW(actor.parameters(), lr=lr)
     log_alpha_optimizer = Adam([log_alpha], lr=lr)
 
-    memory = PrioritizedReplayBuffer(100000, obs_shape=(in_channels,input_size,input_size,input_size), action_shape=(3,), alpha=0.8)
+    memory = PrioritizedReplayBuffer(100000, obs_shape=(in_channels,input_size,input_size,input_size), action_shape=(4,), alpha=0.8)
 
     sac.train(env, actor, Q1, Q2, Q1_target, Q2_target, log_alpha,
           actor_optimizer, Q1_optimizer, Q2_optimizer, log_alpha_optimizer,

@@ -328,8 +328,8 @@ class Environment():
             # reward = np.exp(-0.5 * (x / sigma)**2 - 0.5) * alpha
             # reward = (np.exp(-0.5*x**2/sigma) - 0.25) * alpha
             alpha = 30.0
-            w1 = 0.1
-            w0 = 0.9
+            w1 = 0.05
+            w0 = 0.95
             reward = (w0 * y * np.log(x) + w1 * (1 - y) * np.log(1 - x) - np.log(0.5)) * alpha 
             if verbose:
                 print('bifurcate \n',
@@ -377,7 +377,7 @@ class Environment():
             branch_val = action[3]
             # branch = branch > 0.5
             distances = torch.linalg.norm(self.branches - self.paths[self.head_id][-1], dim=1)
-            target = float(distances.min() <= 4.0)
+            target = float(distances.min() <= 8.0)
             branch_reward = self.get_reward("bifurcate", branch_val, target, verbose)
             if target == 1.0:
                 if branch_val > 0.5:

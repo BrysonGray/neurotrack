@@ -1,0 +1,9 @@
+{
+    "img_path": "/home/brysongray/data/neurotrack_data/simulated_neurons/de-novo/curves_no_artifacts_b-2",
+    "outdir": "/home/brysongray/data/neurotrack_data/inference_outputs/curves_no_artifacts_b-2_inference_output/",
+    "name": "curves_no_artifacts_b-2",
+    "sac_weights": "/home/brysongray/data/neurotrack_data/model_weights/sac_weights/curves_no_artifacts_b-2_training_outputs/model_state_dicts_curves_no_artifacts_b-2_branch_training_06-09-25.pt",
+    "step_size": 2.0,
+    "step_width": 3.0,
+    "branching": 1
+}

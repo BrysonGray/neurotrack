@@ -109,7 +109,7 @@ def main():
                     friction=friction,
                     branching=branching,
                     section_masking=section_masking)
-    
+
     in_channels = 4
     input_size = 2*patch_radius+1
     init_temperature = 0.005
@@ -143,7 +143,6 @@ def main():
     log_alpha_optimizer = Adam([log_alpha], lr=lr)
 
     memory = PrioritizedReplayBuffer(100000, obs_shape=(in_channels,input_size,input_size,input_size), action_shape=(4,), alpha=0.8)
-
     sac.train(env, actor, Q1, Q2, Q1_target, Q2_target, log_alpha,
           actor_optimizer, Q1_optimizer, Q2_optimizer, log_alpha_optimizer,
           memory, target_entropy, batch_size, gamma, tau, outdir, name,

@@ -14,6 +14,7 @@ from pathlib import Path
 import sys
 import torch
 from tqdm import tqdm
+import warnings
 
 script_path = Path(os.path.abspath(__file__))
 parent_dir = script_path.parent.parent
@@ -46,18 +47,18 @@ def sample_from_output(out, random=False):
         A multivariate normal distribution parameterized by the processed mean
         and log variance.
     """
-    
+    if out.isnan().any(): # TODO: Fix the NaN issue
+        warnings.warn("NaN detected in output tensor in sample_from_output")
+        out = out.nan_to_num(nan=1.0, posinf=1.0, neginf=1.0) # replace NaNs with 0s
+
     mean = out[:,:3] # component 0, 1 and 2
     logvar = out[:,3] # logvar component 3
-
-    # Check for NaNs in mean or logvar
-    # if torch.isnan(mean).any() or torch.isnan(logvar).any():
-    #     raise ValueError("NaN detected in mean or logvar in sample_from_output")
 
     meannorm = torch.linalg.norm(mean, dim=-1, keepdim=True)
     meannorm_ = torch.tanh(meannorm)*10 # maximum of 10
     mean = mean * meannorm_/(meannorm + torch.finfo(torch.float).eps)
     logvar = torch.tanh(logvar)*3 + 1 # no very low variance (std is order of 1 pixel)
+    
     
     direction_dist = torch.distributions.MultivariateNormal(mean, torch.exp(logvar)[:,None, None]*torch.eye(3, device=out.device)[None])
 
@@ -439,13 +440,14 @@ def train(env,
                             with open(csv_file_path, "a", newline='') as f:
                                 writer = csv.writer(f)
                                 if not file_exists:
-                                    writer.writerow(['episode', 'image_file', 'num_branches', 'episode_return', 'episode_avg_policy_loss'])
+                                    writer.writerow(['episode', 'image_file', 'num_branches', 'episode_return', 'episode_avg_policy_loss', 'branch_accuracy'])
                                 writer.writerow([
                                     ep,
                                     env.img_files[env.img_idx].split('/')[-1],
                                     len(env.finished_paths),
                                     ep_return,
-                                    episode_avg_loss
+                                    episode_avg_loss,
+                                    accuracy
                                 ])
                     env.reset(move_to_next=False)
                     break
@@ -483,7 +485,7 @@ def train(env,
     return
 
 
-def inference(env, actor, outdir, n_trials=5, show=True, save=True):
+def inference(env, actor, outdir, n_trials=5, show=True, save=True, manual=False):
     """
     Perform inference using the given actor in the specified environment.
     
@@ -506,13 +508,30 @@ def inference(env, actor, outdir, n_trials=5, show=True, save=True):
     """
 
     if show:
-        fig, ax = plt.subplots(2, 3)
+        fig, ax = plt.subplots(2, 4, figsize=(16, 8))
         plt.ion()
+    
+    ep_returns = []
+    accuracies = []
     actor.eval()
     for i in tqdm(range(len(env.img_files))):
+        policy_loss = []
+        coverages = []
+        trial_returns = []
+        labeled_neurons = []
         for trial in range(n_trials):
+            if manual:
+                user_input = input(f"Press Enter to process image {i+1}/{len(env.img_files)}: {env.img_files[i].split('/')[-1]} (or 'q' to quit): ")
+                if user_input.lower() == 'q':
+                    print("Exiting inference.")
+                    break
+                else:
+                    print(f"Processing image {i+1}/{len(env.img_files)}: {env.img_files[i].split('/')[-1]}")
             coverages = []
             labeled_neurons = []
+            ep_return = 0
+            ep_rewards = []
+            detections = {"TP": 0, "FN": 0, "TN": 0, "FP": 0} # detection status
             obs = env.get_state()
 
             for t in count():
@@ -521,7 +540,19 @@ def inference(env, actor, outdir, n_trials=5, show=True, save=True):
                     direction_dist = sample_from_output(actor_out.detach().cpu())
                     action = direction_dist.sample()[0]
 
+                    actor_out = actor(obs.to(DEVICE))
+                    branch_val = actor_out[0,4].detach().cpu()
+                    branch_val = torch.sigmoid(branch_val)
+                    # branch_val = torch.nn.functional.relu(branch_val)
+                    direction_dist = sample_from_output(actor_out.detach().cpu())
+                    action = direction_dist.rsample()[0]
+                    action = torch.cat((action, branch_val[None]), dim=0)
+
                 next_obs, reward, terminated, detection_status = env.step(action)
+                ep_return += reward.cpu().item()
+                ep_rewards.append(reward.cpu().item())
+                if detection_status is not None:
+                    detections[detection_status] += 1
 
                 if terminated:
                     labeled_neuron = env.img.data[3].detach().cpu() > 0.3 
@@ -530,12 +561,15 @@ def inference(env, actor, outdir, n_trials=5, show=True, save=True):
                     tot = torch.sum(true_neuron)
                     coverages.append(TP/tot)
                     labeled_neurons.append(env.img.data[3].detach().clone().cpu())
+                    ep_returns.append(ep_return)
+                    accuracy = (detections["TP"] + detections["TN"]) / (detections["TP"] + detections["TN"] + detections["FP"] + detections["FN"])
+                    accuracies.append(accuracy)
                     if show:
                         try:
                             shell = get_ipython().__class__.__name__ # type: ignore
                             if shell:
-                                show_state(env, fig)
-                                print(f"num branches: {len(env.finished_paths)}")
+                                show_state(env, fig, returns=ep_returns, rewards=ep_rewards, accuracies=accuracies, detections=detections)
+                                print(f"num branches: {len(env.roots)}")
                         except NameError:
                             pass
                     env.reset(move_to_next=False)

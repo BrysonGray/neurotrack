@@ -89,8 +89,8 @@
              
   <section id="Tracking-Inference">
 <h1>Tracking Inference<a class="headerlink" href="#Tracking-Inference" title="Link to this heading"></a></h1>
-<div class="nbinput nblast docutils container">
-<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[1]:
+<div class="nbinput docutils container">
+<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[11]:
 </pre></div>
 </div>
 <div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="o">%</span><span class="k">load_ext</span> autoreload
@@ -99,8 +99,17 @@
 </pre></div>
 </div>
 </div>
+<div class="nboutput nblast docutils container">
+<div class="prompt empty docutils container">
+</div>
+<div class="output_area docutils container">
+<div class="highlight"><pre>
+The autoreload extension is already loaded. To reload it, use:
+  %reload_ext autoreload
+</pre></div></div>
+</div>
 <div class="nbinput nblast docutils container">
-<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[2]:
+<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[16]:
 </pre></div>
 </div>
 <div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span><span class="w"> </span><span class="nn">json</span>
@@ -120,10 +129,10 @@
 <section id="Instantiate-environment">
 <h2>Instantiate environment<a class="headerlink" href="#Instantiate-environment" title="Link to this heading"></a></h2>
 <div class="nbinput nblast docutils container">
-<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[8]:
+<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[41]:
 </pre></div>
 </div>
-<div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">config_file</span> <span class="o">=</span> <span class="s2">&quot;../configs/sac_inference_curves_with_artifacts.json&quot;</span>
+<div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">config_file</span> <span class="o">=</span> <span class="s2">&quot;../configs/sac_inference_curves_no_artifacts_b-2.json&quot;</span>
 <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="n">config_file</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
     <span class="n">params</span> <span class="o">=</span> <span class="n">json</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">f</span><span class="p">)</span>
 
@@ -132,30 +141,31 @@
 <span class="n">name</span> <span class="o">=</span> <span class="n">params</span><span class="p">[</span><span class="s2">&quot;name&quot;</span><span class="p">]</span>
 <span class="n">step_size</span> <span class="o">=</span> <span class="n">params</span><span class="p">[</span><span class="s2">&quot;step_size&quot;</span><span class="p">]</span> <span class="k">if</span> <span class="s2">&quot;step_size&quot;</span> <span class="ow">in</span> <span class="n">params</span> <span class="k">else</span> <span class="mf">1.0</span>
 <span class="n">step_width</span> <span class="o">=</span> <span class="n">params</span><span class="p">[</span><span class="s2">&quot;step_width&quot;</span><span class="p">]</span> <span class="k">if</span> <span class="s2">&quot;step_width&quot;</span> <span class="ow">in</span> <span class="n">params</span> <span class="k">else</span> <span class="mf">1.0</span>
+<span class="n">batch_size</span> <span class="o">=</span> <span class="n">params</span><span class="p">[</span><span class="s2">&quot;batchsize&quot;</span><span class="p">]</span> <span class="k">if</span> <span class="s2">&quot;batchsize&quot;</span> <span class="ow">in</span> <span class="n">params</span> <span class="k">else</span> <span class="mi">256</span>
+<span class="n">tau</span> <span class="o">=</span> <span class="n">params</span><span class="p">[</span><span class="s2">&quot;tau&quot;</span><span class="p">]</span> <span class="k">if</span> <span class="s2">&quot;tau&quot;</span> <span class="ow">in</span> <span class="n">params</span> <span class="k">else</span> <span class="mf">0.005</span>
+<span class="n">gamma</span> <span class="o">=</span> <span class="n">params</span><span class="p">[</span><span class="s2">&quot;gamma&quot;</span><span class="p">]</span> <span class="k">if</span> <span class="s2">&quot;gamma&quot;</span> <span class="ow">in</span> <span class="n">params</span> <span class="k">else</span> <span class="mf">0.99</span>
+<span class="n">lr</span> <span class="o">=</span> <span class="n">params</span><span class="p">[</span><span class="s2">&quot;lr&quot;</span><span class="p">]</span> <span class="k">if</span> <span class="s2">&quot;lr&quot;</span> <span class="ow">in</span> <span class="n">params</span> <span class="k">else</span> <span class="mf">0.001</span>
 <span class="n">alpha</span> <span class="o">=</span> <span class="n">params</span><span class="p">[</span><span class="s2">&quot;alpha&quot;</span><span class="p">]</span> <span class="k">if</span> <span class="s2">&quot;alpha&quot;</span> <span class="ow">in</span> <span class="n">params</span> <span class="k">else</span> <span class="mf">1.0</span>
 <span class="n">beta</span> <span class="o">=</span> <span class="n">params</span><span class="p">[</span><span class="s2">&quot;beta&quot;</span><span class="p">]</span> <span class="k">if</span> <span class="s2">&quot;beta&quot;</span> <span class="ow">in</span> <span class="n">params</span> <span class="k">else</span> <span class="mf">1e-3</span>
 <span class="n">friction</span> <span class="o">=</span> <span class="n">params</span><span class="p">[</span><span class="s2">&quot;friction&quot;</span><span class="p">]</span> <span class="k">if</span> <span class="s2">&quot;friction&quot;</span> <span class="ow">in</span> <span class="n">params</span> <span class="k">else</span> <span class="mf">1e-4</span>
+<span class="n">n_episodes</span> <span class="o">=</span> <span class="n">params</span><span class="p">[</span><span class="s2">&quot;n_episodes&quot;</span><span class="p">]</span> <span class="k">if</span> <span class="s2">&quot;n_episodes&quot;</span> <span class="ow">in</span> <span class="n">params</span> <span class="k">else</span> <span class="mi">100</span>
+<span class="n">init_temperature</span> <span class="o">=</span> <span class="n">params</span><span class="p">[</span><span class="s2">&quot;init_temperature&quot;</span><span class="p">]</span> <span class="k">if</span> <span class="s2">&quot;init_temperature&quot;</span> <span class="ow">in</span> <span class="n">params</span> <span class="k">else</span> <span class="mf">0.005</span>
+<span class="n">target_entropy</span> <span class="o">=</span> <span class="n">params</span><span class="p">[</span><span class="s2">&quot;target_entropy&quot;</span><span class="p">]</span> <span class="k">if</span> <span class="s2">&quot;target_entropy&quot;</span> <span class="ow">in</span> <span class="n">params</span> <span class="k">else</span> <span class="mf">0.0</span>
+<span class="n">branching</span> <span class="o">=</span> <span class="n">params</span><span class="p">[</span><span class="s2">&quot;branching&quot;</span><span class="p">]</span> <span class="k">if</span> <span class="s2">&quot;branching&quot;</span> <span class="ow">in</span> <span class="n">params</span> <span class="k">else</span> <span class="kc">True</span>
+<span class="n">section_masking</span> <span class="o">=</span> <span class="n">params</span><span class="p">[</span><span class="s2">&quot;section_masking&quot;</span><span class="p">]</span> <span class="k">if</span> <span class="s2">&quot;section_masking&quot;</span> <span class="ow">in</span> <span class="n">params</span> <span class="k">else</span> <span class="kc">False</span>
 <span class="n">patch_radius</span> <span class="o">=</span> <span class="mi">17</span>
 
-<span class="k">if</span> <span class="s2">&quot;classifier_weights&quot;</span> <span class="ow">in</span> <span class="n">params</span><span class="p">:</span>
-    <span class="n">classifier_path</span> <span class="o">=</span> <span class="n">params</span><span class="p">[</span><span class="s2">&quot;classifier_weights&quot;</span><span class="p">]</span>
-    <span class="n">classifier_state_dict</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">classifier_path</span><span class="p">)</span><span class="c1">#, weights_only=True)</span>
-    <span class="n">classifier</span> <span class="o">=</span> <span class="n">ResNet3D</span><span class="p">(</span><span class="n">ResidualBlock3D</span><span class="p">,</span> <span class="p">[</span><span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">6</span><span class="p">,</span> <span class="mi">3</span><span class="p">],</span> <span class="n">num_classes</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
-    <span class="n">classifier</span> <span class="o">=</span> <span class="n">classifier</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">device</span><span class="o">=</span><span class="n">DEVICE</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">dtype</span><span class="p">)</span>
-    <span class="n">classifier</span><span class="o">.</span><span class="n">load_state_dict</span><span class="p">(</span><span class="n">classifier_state_dict</span><span class="p">)</span>
-    <span class="n">classifier</span><span class="o">.</span><span class="n">eval</span><span class="p">()</span>
-<span class="k">else</span><span class="p">:</span>
-    <span class="n">classifier</span> <span class="o">=</span> <span class="kc">None</span>
 
 <span class="n">env</span> <span class="o">=</span> <span class="n">Environment</span><span class="p">(</span><span class="n">img_path</span><span class="p">,</span>
                 <span class="n">radius</span><span class="o">=</span><span class="n">patch_radius</span><span class="p">,</span>
                 <span class="n">step_size</span><span class="o">=</span><span class="n">step_size</span><span class="p">,</span>
                 <span class="n">step_width</span><span class="o">=</span><span class="n">step_width</span><span class="p">,</span>
-                <span class="n">max_len</span><span class="o">=</span><span class="mi">10000</span><span class="p">,</span>
+                <span class="n">max_len</span><span class="o">=</span><span class="mi">1000</span><span class="p">,</span>
                 <span class="n">alpha</span><span class="o">=</span><span class="n">alpha</span><span class="p">,</span>
                 <span class="n">beta</span><span class="o">=</span><span class="n">beta</span><span class="p">,</span>
                 <span class="n">friction</span><span class="o">=</span><span class="n">friction</span><span class="p">,</span>
-                <span class="n">classifier</span><span class="o">=</span><span class="n">classifier</span><span class="p">)</span>
+                <span class="n">branching</span><span class="o">=</span><span class="n">branching</span><span class="p">,</span>
+                <span class="n">section_masking</span><span class="o">=</span><span class="n">section_masking</span><span class="p">)</span>
 </pre></div>
 </div>
 </div>
@@ -163,11 +173,11 @@
 <section id="Instantiate-actor-network">
 <h2>Instantiate actor network<a class="headerlink" href="#Instantiate-actor-network" title="Link to this heading"></a></h2>
 <div class="nbinput nblast docutils container">
-<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[9]:
+<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[42]:
 </pre></div>
 </div>
 <div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">in_channels</span> <span class="o">=</span> <span class="mi">4</span>
-<span class="n">actor</span> <span class="o">=</span> <span class="n">ConvNet</span><span class="p">(</span><span class="n">chin</span><span class="o">=</span><span class="n">in_channels</span><span class="p">,</span> <span class="n">chout</span><span class="o">=</span><span class="mi">4</span><span class="p">)</span>
+<span class="n">actor</span> <span class="o">=</span> <span class="n">ConvNet</span><span class="p">(</span><span class="n">chin</span><span class="o">=</span><span class="n">in_channels</span><span class="p">,</span> <span class="n">chout</span><span class="o">=</span><span class="mi">5</span><span class="p">)</span>
 <span class="n">actor</span> <span class="o">=</span> <span class="n">actor</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">device</span><span class="o">=</span><span class="n">DEVICE</span><span class="p">,</span><span class="n">dtype</span><span class="o">=</span><span class="n">dtype</span><span class="p">)</span>
 <span class="k">if</span> <span class="s2">&quot;sac_weights&quot;</span> <span class="ow">in</span> <span class="n">params</span><span class="p">:</span>
     <span class="n">sac_path</span> <span class="o">=</span> <span class="n">params</span><span class="p">[</span><span class="s2">&quot;sac_weights&quot;</span><span class="p">]</span>
@@ -180,19 +190,74 @@
 <section id="Perform-tracking">
 <h2>Perform tracking<a class="headerlink" href="#Perform-tracking" title="Link to this heading"></a></h2>
 <div class="nbinput docutils container">
-<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[10]:
+<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[43]:
 </pre></div>
 </div>
-<div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">sac</span><span class="o">.</span><span class="n">inference</span><span class="p">(</span><span class="n">env</span><span class="p">,</span> <span class="n">actor</span><span class="p">,</span> <span class="n">outdir</span><span class="p">,</span> <span class="n">save</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+<div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">sac</span><span class="o">.</span><span class="n">inference</span><span class="p">(</span><span class="n">env</span><span class="p">,</span> <span class="n">actor</span><span class="p">,</span> <span class="n">outdir</span><span class="p">,</span> <span class="n">save</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">manual</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span>
 </pre></div>
 </div>
 </div>
 <div class="nboutput docutils container">
 <div class="prompt empty docutils container">
 </div>
+<div class="output_area docutils container">
+<div class="highlight"><pre>
+TP: 1, FP: 1, FN: 2, TN: 63
+</pre></div></div>
+</div>
+<div class="nboutput docutils container">
+<div class="prompt empty docutils container">
+</div>
+<div class="output_area docutils container">
+<img alt="_images/sac_tracking_inference_8_1.png" src="_images/sac_tracking_inference_8_1.png" />
+</div>
+</div>
+<div class="nboutput docutils container">
+<div class="prompt empty docutils container">
+</div>
+<div class="output_area docutils container">
+<div class="highlight"><pre>
+num branches: 3
+</pre></div></div>
+</div>
+<div class="nboutput docutils container">
+<div class="prompt empty docutils container">
+</div>
 <div class="output_area stderr docutils container">
 <div class="highlight"><pre>
- 11%|█         | 107/1000 [02:06&lt;17:37,  1.18s/it]
+  0%|          | 5/1000 [01:43&lt;5:46:08, 20.87s/it]
+</pre></div></div>
+</div>
+<div class="nboutput docutils container">
+<div class="prompt empty docutils container">
+</div>
+<div class="output_area docutils container">
+<div class="highlight"><pre>
+Exiting inference.
+</pre></div></div>
+</div>
+<div class="nboutput docutils container">
+<div class="prompt empty docutils container">
+</div>
+<div class="output_area stderr docutils container">
+<div class="highlight"><pre>
+  0%|          | 5/1000 [01:56&lt;6:24:47, 23.20s/it]
+</pre></div></div>
+</div>
+<div class="nboutput docutils container">
+<div class="prompt empty docutils container">
+</div>
+<div class="output_area docutils container">
+<div class="highlight"><pre>
+Exiting inference.
+</pre></div></div>
+</div>
+<div class="nboutput docutils container">
+<div class="prompt empty docutils container">
+</div>
+<div class="output_area stderr docutils container">
+<div class="highlight"><pre>
+
 </pre></div></div>
 </div>
 <div class="nboutput docutils container">
@@ -201,169 +266,25 @@
 <div class="output_area docutils container">
 <div class="highlight"><pre>
 <span class="ansi-red-fg">---------------------------------------------------------------------------</span>
-<span class="ansi-red-fg">AttributeError</span>                            Traceback (most recent call last)
-File <span class="ansi-green-fg">~/anaconda3/envs/tractography/lib/python3.12/site-packages/PIL/ImageFile.py:554</span>, in <span class="ansi-cyan-fg">_save</span><span class="ansi-blue-fg">(im, fp, tile, bufsize)</span>
-<span class="ansi-green-intense-fg ansi-bold">    553</span> <span class="ansi-bold" style="color: rgb(0,135,0)">try</span>:
-<span class="ansi-green-fg">--&gt; 554</span>     fh <span style="color: rgb(98,98,98)">=</span> <span class="ansi-yellow-bg">fp</span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">.</span><span class="ansi-yellow-bg">fileno</span>()
-<span class="ansi-green-intense-fg ansi-bold">    555</span>     fp<span style="color: rgb(98,98,98)">.</span>flush()
+<span class="ansi-red-fg">RuntimeError</span>                              Traceback (most recent call last)
+Cell <span class="ansi-green-fg">In[43], line 1</span>
+<span class="ansi-green-fg">----&gt; 1</span> <span class="ansi-yellow-bg">sac</span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">.</span><span class="ansi-yellow-bg">inference</span><span class="ansi-yellow-bg">(</span><span class="ansi-yellow-bg">env</span><span class="ansi-yellow-bg">,</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg">actor</span><span class="ansi-yellow-bg">,</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg">outdir</span><span class="ansi-yellow-bg">,</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg">save</span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">=</span><span class="ansi-yellow-bg ansi-bold" style="color: rgb(0,135,0)">False</span><span class="ansi-yellow-bg">,</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg">manual</span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">=</span><span class="ansi-yellow-bg ansi-bold" style="color: rgb(0,135,0)">True</span><span class="ansi-yellow-bg">)</span>
 
-<span class="ansi-red-fg">AttributeError</span>: &#39;_idat&#39; object has no attribute &#39;fileno&#39;
+File <span class="ansi-green-fg">~/neurotrack/notebooks/../solvers/sac.py:579</span>, in <span class="ansi-cyan-fg">inference</span><span class="ansi-blue-fg">(env, actor, outdir, n_trials, show, save, manual)</span>
+<span class="ansi-green-intense-fg ansi-bold">    575</span>             <span class="ansi-bold" style="color: rgb(0,135,0)">break</span>
+<span class="ansi-green-intense-fg ansi-bold">    577</span>         obs <span style="color: rgb(98,98,98)">=</span> env<span style="color: rgb(98,98,98)">.</span>get_state()
+<span class="ansi-green-fg">--&gt; 579</span> value, index <span style="color: rgb(98,98,98)">=</span> torch<span style="color: rgb(98,98,98)">.</span>max(<span class="ansi-yellow-bg">torch</span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">.</span><span class="ansi-yellow-bg">stack</span><span class="ansi-yellow-bg">(</span><span class="ansi-yellow-bg">coverages</span><span class="ansi-yellow-bg">)</span>, dim<span style="color: rgb(98,98,98)">=</span><span style="color: rgb(98,98,98)">0</span>)
+<span class="ansi-green-intense-fg ansi-bold">    580</span> coverage <span style="color: rgb(98,98,98)">=</span> value<span style="color: rgb(98,98,98)">.</span>item()
+<span class="ansi-green-intense-fg ansi-bold">    581</span> index <span style="color: rgb(98,98,98)">=</span> <span style="color: rgb(0,135,0)">int</span>(index)
 
-During handling of the above exception, another exception occurred:
-
-<span class="ansi-red-fg">KeyboardInterrupt</span>                         Traceback (most recent call last)
-Cell <span class="ansi-green-fg">In[10], line 1</span>
-<span class="ansi-green-fg">----&gt; 1</span> <span class="ansi-yellow-bg">sac</span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">.</span><span class="ansi-yellow-bg">inference</span><span class="ansi-yellow-bg">(</span><span class="ansi-yellow-bg">env</span><span class="ansi-yellow-bg">,</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg">actor</span><span class="ansi-yellow-bg">,</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg">outdir</span><span class="ansi-yellow-bg">,</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg">save</span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">=</span><span class="ansi-yellow-bg ansi-bold" style="color: rgb(0,135,0)">False</span><span class="ansi-yellow-bg">)</span>
-
-File <span class="ansi-green-fg">~/neurotrack/notebooks/../solvers/sac.py:507</span>, in <span class="ansi-cyan-fg">inference</span><span class="ansi-blue-fg">(env, actor, outdir, n_trials, show, save)</span>
-<span class="ansi-green-intense-fg ansi-bold">    505</span>     shell <span style="color: rgb(98,98,98)">=</span> get_ipython()<span style="color: rgb(98,98,98)">.</span><span style="color: rgb(0,0,135)">__class__</span><span style="color: rgb(98,98,98)">.</span><span style="color: rgb(0,0,135)">__name__</span> <span style="color: rgb(95,135,135)"># type: ignore</span>
-<span class="ansi-green-intense-fg ansi-bold">    506</span>     <span class="ansi-bold" style="color: rgb(0,135,0)">if</span> shell:
-<span class="ansi-green-fg">--&gt; 507</span>         <span class="ansi-yellow-bg">show_state</span><span class="ansi-yellow-bg">(</span><span class="ansi-yellow-bg">env</span><span class="ansi-yellow-bg">,</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg">fig</span><span class="ansi-yellow-bg">)</span>
-<span class="ansi-green-intense-fg ansi-bold">    508</span>         <span style="color: rgb(0,135,0)">print</span>(<span style="color: rgb(175,0,0)">f</span><span style="color: rgb(175,0,0)">&#34;</span><span style="color: rgb(175,0,0)">num branches: </span><span class="ansi-bold" style="color: rgb(175,95,135)">{</span><span style="color: rgb(0,135,0)">len</span>(env<span style="color: rgb(98,98,98)">.</span>finished_paths)<span class="ansi-bold" style="color: rgb(175,95,135)">}</span><span style="color: rgb(175,0,0)">&#34;</span>)
-<span class="ansi-green-intense-fg ansi-bold">    509</span> <span class="ansi-bold" style="color: rgb(0,135,0)">except</span> <span class="ansi-bold" style="color: rgb(215,95,95)">NameError</span>:
-
-File <span class="ansi-green-fg">~/neurotrack/notebooks/../plot/show_state.py:32</span>, in <span class="ansi-cyan-fg">show_state</span><span class="ansi-blue-fg">(env, fig, returns, rewards, policy_loss)</span>
-<span class="ansi-green-intense-fg ansi-bold">     29</span>     ax[<span style="color: rgb(98,98,98)">8</span>]<span style="color: rgb(98,98,98)">.</span>plot(policy_loss)
-<span class="ansi-green-intense-fg ansi-bold">     30</span>     ax[<span style="color: rgb(98,98,98)">8</span>]<span style="color: rgb(98,98,98)">.</span>set_title(<span style="color: rgb(175,0,0)">&#34;</span><span style="color: rgb(175,0,0)">policy loss</span><span style="color: rgb(175,0,0)">&#34;</span>)
-<span class="ansi-green-fg">---&gt; 32</span> <span class="ansi-yellow-bg">display</span><span class="ansi-yellow-bg">(</span><span class="ansi-yellow-bg">fig</span><span class="ansi-yellow-bg">)</span>
-<span class="ansi-green-intense-fg ansi-bold">     35</span> <span class="ansi-bold" style="color: rgb(0,135,0)">return</span>
-
-File <span class="ansi-green-fg">~/anaconda3/envs/tractography/lib/python3.12/site-packages/IPython/core/display_functions.py:298</span>, in <span class="ansi-cyan-fg">display</span><span class="ansi-blue-fg">(include, exclude, metadata, transient, display_id, raw, clear, *objs, **kwargs)</span>
-<span class="ansi-green-intense-fg ansi-bold">    296</span>     publish_display_data(data<span style="color: rgb(98,98,98)">=</span>obj, metadata<span style="color: rgb(98,98,98)">=</span>metadata, <span style="color: rgb(98,98,98)">*</span><span style="color: rgb(98,98,98)">*</span>kwargs)
-<span class="ansi-green-intense-fg ansi-bold">    297</span> <span class="ansi-bold" style="color: rgb(0,135,0)">else</span>:
-<span class="ansi-green-fg">--&gt; 298</span>     format_dict, md_dict <span style="color: rgb(98,98,98)">=</span> <span class="ansi-yellow-bg" style="color: rgb(0,135,0)">format</span><span class="ansi-yellow-bg">(</span><span class="ansi-yellow-bg">obj</span><span class="ansi-yellow-bg">,</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg">include</span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">=</span><span class="ansi-yellow-bg">include</span><span class="ansi-yellow-bg">,</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg">exclude</span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">=</span><span class="ansi-yellow-bg">exclude</span><span class="ansi-yellow-bg">)</span>
-<span class="ansi-green-intense-fg ansi-bold">    299</span>     <span class="ansi-bold" style="color: rgb(0,135,0)">if</span> <span class="ansi-bold" style="color: rgb(175,0,255)">not</span> format_dict:
-<span class="ansi-green-intense-fg ansi-bold">    300</span>         <span style="color: rgb(95,135,135)"># nothing to display (e.g. _ipython_display_ took over)</span>
-<span class="ansi-green-intense-fg ansi-bold">    301</span>         <span class="ansi-bold" style="color: rgb(0,135,0)">continue</span>
-
-File <span class="ansi-green-fg">~/anaconda3/envs/tractography/lib/python3.12/site-packages/IPython/core/formatters.py:182</span>, in <span class="ansi-cyan-fg">DisplayFormatter.format</span><span class="ansi-blue-fg">(self, obj, include, exclude)</span>
-<span class="ansi-green-intense-fg ansi-bold">    180</span> md <span style="color: rgb(98,98,98)">=</span> <span class="ansi-bold" style="color: rgb(0,135,0)">None</span>
-<span class="ansi-green-intense-fg ansi-bold">    181</span> <span class="ansi-bold" style="color: rgb(0,135,0)">try</span>:
-<span class="ansi-green-fg">--&gt; 182</span>     data <span style="color: rgb(98,98,98)">=</span> <span class="ansi-yellow-bg">formatter</span><span class="ansi-yellow-bg">(</span><span class="ansi-yellow-bg">obj</span><span class="ansi-yellow-bg">)</span>
-<span class="ansi-green-intense-fg ansi-bold">    183</span> <span class="ansi-bold" style="color: rgb(0,135,0)">except</span>:
-<span class="ansi-green-intense-fg ansi-bold">    184</span>     <span style="color: rgb(95,135,135)"># FIXME: log the exception</span>
-<span class="ansi-green-intense-fg ansi-bold">    185</span>     <span class="ansi-bold" style="color: rgb(0,135,0)">raise</span>
-
-File <span class="ansi-green-fg">~/anaconda3/envs/tractography/lib/python3.12/site-packages/decorator.py:232</span>, in <span class="ansi-cyan-fg">decorate.&lt;locals&gt;.fun</span><span class="ansi-blue-fg">(*args, **kw)</span>
-<span class="ansi-green-intense-fg ansi-bold">    230</span> <span class="ansi-bold" style="color: rgb(0,135,0)">if</span> <span class="ansi-bold" style="color: rgb(175,0,255)">not</span> kwsyntax:
-<span class="ansi-green-intense-fg ansi-bold">    231</span>     args, kw <span style="color: rgb(98,98,98)">=</span> fix(args, kw, sig)
-<span class="ansi-green-fg">--&gt; 232</span> <span class="ansi-bold" style="color: rgb(0,135,0)">return</span> <span class="ansi-yellow-bg">caller</span><span class="ansi-yellow-bg">(</span><span class="ansi-yellow-bg">func</span><span class="ansi-yellow-bg">,</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">*</span><span class="ansi-yellow-bg">(</span><span class="ansi-yellow-bg">extras</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">+</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg">args</span><span class="ansi-yellow-bg">)</span><span class="ansi-yellow-bg">,</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">*</span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">*</span><span class="ansi-yellow-bg">kw</span><span class="ansi-yellow-bg">)</span>
-
-File <span class="ansi-green-fg">~/anaconda3/envs/tractography/lib/python3.12/site-packages/IPython/core/formatters.py:226</span>, in <span class="ansi-cyan-fg">catch_format_error</span><span class="ansi-blue-fg">(method, self, *args, **kwargs)</span>
-<span class="ansi-green-intense-fg ansi-bold">    224</span> <span style="color: rgb(175,0,0)">&#34;&#34;&#34;show traceback on failed format call&#34;&#34;&#34;</span>
-<span class="ansi-green-intense-fg ansi-bold">    225</span> <span class="ansi-bold" style="color: rgb(0,135,0)">try</span>:
-<span class="ansi-green-fg">--&gt; 226</span>     r <span style="color: rgb(98,98,98)">=</span> <span class="ansi-yellow-bg">method</span><span class="ansi-yellow-bg">(</span><span class="ansi-yellow-bg" style="color: rgb(0,135,0)">self</span><span class="ansi-yellow-bg">,</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">*</span><span class="ansi-yellow-bg">args</span><span class="ansi-yellow-bg">,</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">*</span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">*</span><span class="ansi-yellow-bg">kwargs</span><span class="ansi-yellow-bg">)</span>
-<span class="ansi-green-intense-fg ansi-bold">    227</span> <span class="ansi-bold" style="color: rgb(0,135,0)">except</span> <span class="ansi-bold" style="color: rgb(215,95,95)">NotImplementedError</span>:
-<span class="ansi-green-intense-fg ansi-bold">    228</span>     <span style="color: rgb(95,135,135)"># don&#39;t warn on NotImplementedErrors</span>
-<span class="ansi-green-intense-fg ansi-bold">    229</span>     <span class="ansi-bold" style="color: rgb(0,135,0)">return</span> <span style="color: rgb(0,135,0)">self</span><span style="color: rgb(98,98,98)">.</span>_check_return(<span class="ansi-bold" style="color: rgb(0,135,0)">None</span>, args[<span style="color: rgb(98,98,98)">0</span>])
-
-File <span class="ansi-green-fg">~/anaconda3/envs/tractography/lib/python3.12/site-packages/IPython/core/formatters.py:343</span>, in <span class="ansi-cyan-fg">BaseFormatter.__call__</span><span class="ansi-blue-fg">(self, obj)</span>
-<span class="ansi-green-intense-fg ansi-bold">    341</span>     <span class="ansi-bold" style="color: rgb(0,135,0)">pass</span>
-<span class="ansi-green-intense-fg ansi-bold">    342</span> <span class="ansi-bold" style="color: rgb(0,135,0)">else</span>:
-<span class="ansi-green-fg">--&gt; 343</span>     <span class="ansi-bold" style="color: rgb(0,135,0)">return</span> <span class="ansi-yellow-bg">printer</span><span class="ansi-yellow-bg">(</span><span class="ansi-yellow-bg">obj</span><span class="ansi-yellow-bg">)</span>
-<span class="ansi-green-intense-fg ansi-bold">    344</span> <span style="color: rgb(95,135,135)"># Finally look for special method names</span>
-<span class="ansi-green-intense-fg ansi-bold">    345</span> method <span style="color: rgb(98,98,98)">=</span> get_real_method(obj, <span style="color: rgb(0,135,0)">self</span><span style="color: rgb(98,98,98)">.</span>print_method)
-
-File <span class="ansi-green-fg">~/anaconda3/envs/tractography/lib/python3.12/site-packages/IPython/core/pylabtools.py:170</span>, in <span class="ansi-cyan-fg">print_figure</span><span class="ansi-blue-fg">(fig, fmt, bbox_inches, base64, **kwargs)</span>
-<span class="ansi-green-intense-fg ansi-bold">    167</span>     <span class="ansi-bold" style="color: rgb(0,135,0)">from</span> <span class="ansi-bold" style="color: rgb(0,0,255)">matplotlib</span><span class="ansi-bold" style="color: rgb(0,0,255)">.</span><span class="ansi-bold" style="color: rgb(0,0,255)">backend_bases</span> <span class="ansi-bold" style="color: rgb(0,135,0)">import</span> FigureCanvasBase
-<span class="ansi-green-intense-fg ansi-bold">    168</span>     FigureCanvasBase(fig)
-<span class="ansi-green-fg">--&gt; 170</span> <span class="ansi-yellow-bg">fig</span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">.</span><span class="ansi-yellow-bg">canvas</span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">.</span><span class="ansi-yellow-bg">print_figure</span><span class="ansi-yellow-bg">(</span><span class="ansi-yellow-bg">bytes_io</span><span class="ansi-yellow-bg">,</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">*</span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">*</span><span class="ansi-yellow-bg">kw</span><span class="ansi-yellow-bg">)</span>
-<span class="ansi-green-intense-fg ansi-bold">    171</span> data <span style="color: rgb(98,98,98)">=</span> bytes_io<span style="color: rgb(98,98,98)">.</span>getvalue()
-<span class="ansi-green-intense-fg ansi-bold">    172</span> <span class="ansi-bold" style="color: rgb(0,135,0)">if</span> fmt <span style="color: rgb(98,98,98)">==</span> <span style="color: rgb(175,0,0)">&#39;</span><span style="color: rgb(175,0,0)">svg</span><span style="color: rgb(175,0,0)">&#39;</span>:
-
-File <span class="ansi-green-fg">~/anaconda3/envs/tractography/lib/python3.12/site-packages/matplotlib/backend_bases.py:2204</span>, in <span class="ansi-cyan-fg">FigureCanvasBase.print_figure</span><span class="ansi-blue-fg">(self, filename, dpi, facecolor, edgecolor, orientation, format, bbox_inches, pad_inches, bbox_extra_artists, backend, **kwargs)</span>
-<span class="ansi-green-intense-fg ansi-bold">   2200</span> <span class="ansi-bold" style="color: rgb(0,135,0)">try</span>:
-<span class="ansi-green-intense-fg ansi-bold">   2201</span>     <span style="color: rgb(95,135,135)"># _get_renderer may change the figure dpi (as vector formats</span>
-<span class="ansi-green-intense-fg ansi-bold">   2202</span>     <span style="color: rgb(95,135,135)"># force the figure dpi to 72), so we need to set it again here.</span>
-<span class="ansi-green-intense-fg ansi-bold">   2203</span>     <span class="ansi-bold" style="color: rgb(0,135,0)">with</span> cbook<span style="color: rgb(98,98,98)">.</span>_setattr_cm(<span style="color: rgb(0,135,0)">self</span><span style="color: rgb(98,98,98)">.</span>figure, dpi<span style="color: rgb(98,98,98)">=</span>dpi):
-<span class="ansi-green-fg">-&gt; 2204</span>         result <span style="color: rgb(98,98,98)">=</span> <span class="ansi-yellow-bg">print_method</span><span class="ansi-yellow-bg">(</span>
-<span class="ansi-green-intense-fg ansi-bold">   2205</span> <span class="ansi-yellow-bg">            </span><span class="ansi-yellow-bg">filename</span><span class="ansi-yellow-bg">,</span>
-<span class="ansi-green-intense-fg ansi-bold">   2206</span> <span class="ansi-yellow-bg">            </span><span class="ansi-yellow-bg">facecolor</span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">=</span><span class="ansi-yellow-bg">facecolor</span><span class="ansi-yellow-bg">,</span>
-<span class="ansi-green-intense-fg ansi-bold">   2207</span> <span class="ansi-yellow-bg">            </span><span class="ansi-yellow-bg">edgecolor</span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">=</span><span class="ansi-yellow-bg">edgecolor</span><span class="ansi-yellow-bg">,</span>
-<span class="ansi-green-intense-fg ansi-bold">   2208</span> <span class="ansi-yellow-bg">            </span><span class="ansi-yellow-bg">orientation</span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">=</span><span class="ansi-yellow-bg">orientation</span><span class="ansi-yellow-bg">,</span>
-<span class="ansi-green-intense-fg ansi-bold">   2209</span> <span class="ansi-yellow-bg">            </span><span class="ansi-yellow-bg">bbox_inches_restore</span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">=</span><span class="ansi-yellow-bg">_bbox_inches_restore</span><span class="ansi-yellow-bg">,</span>
-<span class="ansi-green-intense-fg ansi-bold">   2210</span> <span class="ansi-yellow-bg">            </span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">*</span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">*</span><span class="ansi-yellow-bg">kwargs</span><span class="ansi-yellow-bg">)</span>
-<span class="ansi-green-intense-fg ansi-bold">   2211</span> <span class="ansi-bold" style="color: rgb(0,135,0)">finally</span>:
-<span class="ansi-green-intense-fg ansi-bold">   2212</span>     <span class="ansi-bold" style="color: rgb(0,135,0)">if</span> bbox_inches <span class="ansi-bold" style="color: rgb(175,0,255)">and</span> restore_bbox:
-
-File <span class="ansi-green-fg">~/anaconda3/envs/tractography/lib/python3.12/site-packages/matplotlib/backend_bases.py:2054</span>, in <span class="ansi-cyan-fg">FigureCanvasBase._switch_canvas_and_return_print_method.&lt;locals&gt;.&lt;lambda&gt;</span><span class="ansi-blue-fg">(*args, **kwargs)</span>
-<span class="ansi-green-intense-fg ansi-bold">   2050</span>     optional_kws <span style="color: rgb(98,98,98)">=</span> {  <span style="color: rgb(95,135,135)"># Passed by print_figure for other renderers.</span>
-<span class="ansi-green-intense-fg ansi-bold">   2051</span>         <span style="color: rgb(175,0,0)">&#34;</span><span style="color: rgb(175,0,0)">dpi</span><span style="color: rgb(175,0,0)">&#34;</span>, <span style="color: rgb(175,0,0)">&#34;</span><span style="color: rgb(175,0,0)">facecolor</span><span style="color: rgb(175,0,0)">&#34;</span>, <span style="color: rgb(175,0,0)">&#34;</span><span style="color: rgb(175,0,0)">edgecolor</span><span style="color: rgb(175,0,0)">&#34;</span>, <span style="color: rgb(175,0,0)">&#34;</span><span style="color: rgb(175,0,0)">orientation</span><span style="color: rgb(175,0,0)">&#34;</span>,
-<span class="ansi-green-intense-fg ansi-bold">   2052</span>         <span style="color: rgb(175,0,0)">&#34;</span><span style="color: rgb(175,0,0)">bbox_inches_restore</span><span style="color: rgb(175,0,0)">&#34;</span>}
-<span class="ansi-green-intense-fg ansi-bold">   2053</span>     skip <span style="color: rgb(98,98,98)">=</span> optional_kws <span style="color: rgb(98,98,98)">-</span> {<span style="color: rgb(98,98,98)">*</span>inspect<span style="color: rgb(98,98,98)">.</span>signature(meth)<span style="color: rgb(98,98,98)">.</span>parameters}
-<span class="ansi-green-fg">-&gt; 2054</span>     print_method <span style="color: rgb(98,98,98)">=</span> functools<span style="color: rgb(98,98,98)">.</span>wraps(meth)(<span class="ansi-bold" style="color: rgb(0,135,0)">lambda</span> <span style="color: rgb(98,98,98)">*</span>args, <span style="color: rgb(98,98,98)">*</span><span style="color: rgb(98,98,98)">*</span>kwargs: <span class="ansi-yellow-bg">meth</span><span class="ansi-yellow-bg">(</span>
-<span class="ansi-green-intense-fg ansi-bold">   2055</span> <span class="ansi-yellow-bg">        </span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">*</span><span class="ansi-yellow-bg">args</span><span class="ansi-yellow-bg">,</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">*</span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">*</span><span class="ansi-yellow-bg">{</span><span class="ansi-yellow-bg">k</span><span class="ansi-yellow-bg">:</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg">v</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg ansi-bold" style="color: rgb(0,135,0)">for</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg">k</span><span class="ansi-yellow-bg">,</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg">v</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg ansi-bold" style="color: rgb(175,0,255)">in</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg">kwargs</span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">.</span><span class="ansi-yellow-bg">items</span><span class="ansi-yellow-bg">(</span><span class="ansi-yellow-bg">)</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg ansi-bold" style="color: rgb(0,135,0)">if</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg">k</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg ansi-bold" style="color: rgb(175,0,255)">not</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg ansi-bold" style="color: rgb(175,0,255)">in</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg">skip</span><span class="ansi-yellow-bg">}</span><span class="ansi-yellow-bg">)</span>)
-<span class="ansi-green-intense-fg ansi-bold">   2056</span> <span class="ansi-bold" style="color: rgb(0,135,0)">else</span>:  <span style="color: rgb(95,135,135)"># Let third-parties do as they see fit.</span>
-<span class="ansi-green-intense-fg ansi-bold">   2057</span>     print_method <span style="color: rgb(98,98,98)">=</span> meth
-
-File <span class="ansi-green-fg">~/anaconda3/envs/tractography/lib/python3.12/site-packages/matplotlib/backends/backend_agg.py:496</span>, in <span class="ansi-cyan-fg">FigureCanvasAgg.print_png</span><span class="ansi-blue-fg">(self, filename_or_obj, metadata, pil_kwargs)</span>
-<span class="ansi-green-intense-fg ansi-bold">    449</span> <span class="ansi-bold" style="color: rgb(0,135,0)">def</span> <span style="color: rgb(0,0,255)">print_png</span>(<span style="color: rgb(0,135,0)">self</span>, filename_or_obj, <span style="color: rgb(98,98,98)">*</span>, metadata<span style="color: rgb(98,98,98)">=</span><span class="ansi-bold" style="color: rgb(0,135,0)">None</span>, pil_kwargs<span style="color: rgb(98,98,98)">=</span><span class="ansi-bold" style="color: rgb(0,135,0)">None</span>):
-<span class="ansi-green-intense-fg ansi-bold">    450</span> <span style="color: rgb(188,188,188)">    </span><span style="color: rgb(175,0,0)">&#34;&#34;&#34;</span>
-<span class="ansi-green-intense-fg ansi-bold">    451</span> <span style="color: rgb(175,0,0)">    Write the figure to a PNG file.</span>
-<span class="ansi-green-intense-fg ansi-bold">    452</span>
-<span class="ansi-green-fg">   (...)</span>
-<span class="ansi-green-intense-fg ansi-bold">    494</span> <span style="color: rgb(175,0,0)">        *metadata*, including the default &#39;Software&#39; key.</span>
-<span class="ansi-green-intense-fg ansi-bold">    495</span> <span style="color: rgb(175,0,0)">    &#34;&#34;&#34;</span>
-<span class="ansi-green-fg">--&gt; 496</span>     <span class="ansi-yellow-bg" style="color: rgb(0,135,0)">self</span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">.</span><span class="ansi-yellow-bg">_print_pil</span><span class="ansi-yellow-bg">(</span><span class="ansi-yellow-bg">filename_or_obj</span><span class="ansi-yellow-bg">,</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg" style="color: rgb(175,0,0)">&#34;</span><span class="ansi-yellow-bg" style="color: rgb(175,0,0)">png</span><span class="ansi-yellow-bg" style="color: rgb(175,0,0)">&#34;</span><span class="ansi-yellow-bg">,</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg">pil_kwargs</span><span class="ansi-yellow-bg">,</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg">metadata</span><span class="ansi-yellow-bg">)</span>
-
-File <span class="ansi-green-fg">~/anaconda3/envs/tractography/lib/python3.12/site-packages/matplotlib/backends/backend_agg.py:445</span>, in <span class="ansi-cyan-fg">FigureCanvasAgg._print_pil</span><span class="ansi-blue-fg">(self, filename_or_obj, fmt, pil_kwargs, metadata)</span>
-<span class="ansi-green-intense-fg ansi-bold">    440</span> <span style="color: rgb(175,0,0)">&#34;&#34;&#34;</span>
-<span class="ansi-green-intense-fg ansi-bold">    441</span> <span style="color: rgb(175,0,0)">Draw the canvas, then save it using `.image.imsave` (to which</span>
-<span class="ansi-green-intense-fg ansi-bold">    442</span> <span style="color: rgb(175,0,0)">*pil_kwargs* and *metadata* are forwarded).</span>
-<span class="ansi-green-intense-fg ansi-bold">    443</span> <span style="color: rgb(175,0,0)">&#34;&#34;&#34;</span>
-<span class="ansi-green-intense-fg ansi-bold">    444</span> FigureCanvasAgg<span style="color: rgb(98,98,98)">.</span>draw(<span style="color: rgb(0,135,0)">self</span>)
-<span class="ansi-green-fg">--&gt; 445</span> <span class="ansi-yellow-bg">mpl</span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">.</span><span class="ansi-yellow-bg">image</span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">.</span><span class="ansi-yellow-bg">imsave</span><span class="ansi-yellow-bg">(</span>
-<span class="ansi-green-intense-fg ansi-bold">    446</span> <span class="ansi-yellow-bg">    </span><span class="ansi-yellow-bg">filename_or_obj</span><span class="ansi-yellow-bg">,</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg" style="color: rgb(0,135,0)">self</span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">.</span><span class="ansi-yellow-bg">buffer_rgba</span><span class="ansi-yellow-bg">(</span><span class="ansi-yellow-bg">)</span><span class="ansi-yellow-bg">,</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg" style="color: rgb(0,135,0)">format</span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">=</span><span class="ansi-yellow-bg">fmt</span><span class="ansi-yellow-bg">,</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg">origin</span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">=</span><span class="ansi-yellow-bg" style="color: rgb(175,0,0)">&#34;</span><span class="ansi-yellow-bg" style="color: rgb(175,0,0)">upper</span><span class="ansi-yellow-bg" style="color: rgb(175,0,0)">&#34;</span><span class="ansi-yellow-bg">,</span>
-<span class="ansi-green-intense-fg ansi-bold">    447</span> <span class="ansi-yellow-bg">    </span><span class="ansi-yellow-bg">dpi</span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">=</span><span class="ansi-yellow-bg" style="color: rgb(0,135,0)">self</span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">.</span><span class="ansi-yellow-bg">figure</span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">.</span><span class="ansi-yellow-bg">dpi</span><span class="ansi-yellow-bg">,</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg">metadata</span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">=</span><span class="ansi-yellow-bg">metadata</span><span class="ansi-yellow-bg">,</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg">pil_kwargs</span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">=</span><span class="ansi-yellow-bg">pil_kwargs</span><span class="ansi-yellow-bg">)</span>
-
-File <span class="ansi-green-fg">~/anaconda3/envs/tractography/lib/python3.12/site-packages/matplotlib/image.py:1676</span>, in <span class="ansi-cyan-fg">imsave</span><span class="ansi-blue-fg">(fname, arr, vmin, vmax, cmap, format, origin, dpi, metadata, pil_kwargs)</span>
-<span class="ansi-green-intense-fg ansi-bold">   1674</span> pil_kwargs<span style="color: rgb(98,98,98)">.</span>setdefault(<span style="color: rgb(175,0,0)">&#34;</span><span style="color: rgb(175,0,0)">format</span><span style="color: rgb(175,0,0)">&#34;</span>, <span style="color: rgb(0,135,0)">format</span>)
-<span class="ansi-green-intense-fg ansi-bold">   1675</span> pil_kwargs<span style="color: rgb(98,98,98)">.</span>setdefault(<span style="color: rgb(175,0,0)">&#34;</span><span style="color: rgb(175,0,0)">dpi</span><span style="color: rgb(175,0,0)">&#34;</span>, (dpi, dpi))
-<span class="ansi-green-fg">-&gt; 1676</span> <span class="ansi-yellow-bg">image</span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">.</span><span class="ansi-yellow-bg">save</span><span class="ansi-yellow-bg">(</span><span class="ansi-yellow-bg">fname</span><span class="ansi-yellow-bg">,</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">*</span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">*</span><span class="ansi-yellow-bg">pil_kwargs</span><span class="ansi-yellow-bg">)</span>
-
-File <span class="ansi-green-fg">~/anaconda3/envs/tractography/lib/python3.12/site-packages/PIL/Image.py:2605</span>, in <span class="ansi-cyan-fg">Image.save</span><span class="ansi-blue-fg">(self, fp, format, **params)</span>
-<span class="ansi-green-intense-fg ansi-bold">   2602</span>     fp <span style="color: rgb(98,98,98)">=</span> cast(IO[<span style="color: rgb(0,135,0)">bytes</span>], fp)
-<span class="ansi-green-intense-fg ansi-bold">   2604</span> <span class="ansi-bold" style="color: rgb(0,135,0)">try</span>:
-<span class="ansi-green-fg">-&gt; 2605</span>     <span class="ansi-yellow-bg">save_handler</span><span class="ansi-yellow-bg">(</span><span class="ansi-yellow-bg" style="color: rgb(0,135,0)">self</span><span class="ansi-yellow-bg">,</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg">fp</span><span class="ansi-yellow-bg">,</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg">filename</span><span class="ansi-yellow-bg">)</span>
-<span class="ansi-green-intense-fg ansi-bold">   2606</span> <span class="ansi-bold" style="color: rgb(0,135,0)">except</span> <span class="ansi-bold" style="color: rgb(215,95,95)">Exception</span>:
-<span class="ansi-green-intense-fg ansi-bold">   2607</span>     <span class="ansi-bold" style="color: rgb(0,135,0)">if</span> open_fp:
-
-File <span class="ansi-green-fg">~/anaconda3/envs/tractography/lib/python3.12/site-packages/PIL/PngImagePlugin.py:1488</span>, in <span class="ansi-cyan-fg">_save</span><span class="ansi-blue-fg">(im, fp, filename, chunk, save_all)</span>
-<span class="ansi-green-intense-fg ansi-bold">   1484</span>     single_im <span style="color: rgb(98,98,98)">=</span> _write_multiple_frames(
-<span class="ansi-green-intense-fg ansi-bold">   1485</span>         im, fp, chunk, mode, rawmode, default_image, append_images
-<span class="ansi-green-intense-fg ansi-bold">   1486</span>     )
-<span class="ansi-green-intense-fg ansi-bold">   1487</span> <span class="ansi-bold" style="color: rgb(0,135,0)">if</span> single_im:
-<span class="ansi-green-fg">-&gt; 1488</span>     <span class="ansi-yellow-bg">ImageFile</span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">.</span><span class="ansi-yellow-bg">_save</span><span class="ansi-yellow-bg">(</span>
-<span class="ansi-green-intense-fg ansi-bold">   1489</span> <span class="ansi-yellow-bg">        </span><span class="ansi-yellow-bg">single_im</span><span class="ansi-yellow-bg">,</span>
-<span class="ansi-green-intense-fg ansi-bold">   1490</span> <span class="ansi-yellow-bg">        </span><span class="ansi-yellow-bg">cast</span><span class="ansi-yellow-bg">(</span><span class="ansi-yellow-bg">IO</span><span class="ansi-yellow-bg">[</span><span class="ansi-yellow-bg" style="color: rgb(0,135,0)">bytes</span><span class="ansi-yellow-bg">]</span><span class="ansi-yellow-bg">,</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg">_idat</span><span class="ansi-yellow-bg">(</span><span class="ansi-yellow-bg">fp</span><span class="ansi-yellow-bg">,</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg">chunk</span><span class="ansi-yellow-bg">)</span><span class="ansi-yellow-bg">)</span><span class="ansi-yellow-bg">,</span>
-<span class="ansi-green-intense-fg ansi-bold">   1491</span> <span class="ansi-yellow-bg">        </span><span class="ansi-yellow-bg">[</span><span class="ansi-yellow-bg">ImageFile</span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">.</span><span class="ansi-yellow-bg">_Tile</span><span class="ansi-yellow-bg">(</span><span class="ansi-yellow-bg" style="color: rgb(175,0,0)">&#34;</span><span class="ansi-yellow-bg" style="color: rgb(175,0,0)">zip</span><span class="ansi-yellow-bg" style="color: rgb(175,0,0)">&#34;</span><span class="ansi-yellow-bg">,</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg">(</span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">0</span><span class="ansi-yellow-bg">,</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">0</span><span class="ansi-yellow-bg">)</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">+</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg">single_im</span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">.</span><span class="ansi-yellow-bg">size</span><span class="ansi-yellow-bg">,</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">0</span><span class="ansi-yellow-bg">,</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg">rawmode</span><span class="ansi-yellow-bg">)</span><span class="ansi-yellow-bg">]</span><span class="ansi-yellow-bg">,</span>
-<span class="ansi-green-intense-fg ansi-bold">   1492</span> <span class="ansi-yellow-bg">    </span><span class="ansi-yellow-bg">)</span>
-<span class="ansi-green-intense-fg ansi-bold">   1494</span> <span class="ansi-bold" style="color: rgb(0,135,0)">if</span> info:
-<span class="ansi-green-intense-fg ansi-bold">   1495</span>     <span class="ansi-bold" style="color: rgb(0,135,0)">for</span> info_chunk <span class="ansi-bold" style="color: rgb(175,0,255)">in</span> info<span style="color: rgb(98,98,98)">.</span>chunks:
-
-File <span class="ansi-green-fg">~/anaconda3/envs/tractography/lib/python3.12/site-packages/PIL/ImageFile.py:558</span>, in <span class="ansi-cyan-fg">_save</span><span class="ansi-blue-fg">(im, fp, tile, bufsize)</span>
-<span class="ansi-green-intense-fg ansi-bold">    556</span>     _encode_tile(im, fp, tile, bufsize, fh)
-<span class="ansi-green-intense-fg ansi-bold">    557</span> <span class="ansi-bold" style="color: rgb(0,135,0)">except</span> (<span class="ansi-bold" style="color: rgb(215,95,95)">AttributeError</span>, io<span style="color: rgb(98,98,98)">.</span>UnsupportedOperation) <span class="ansi-bold" style="color: rgb(0,135,0)">as</span> exc:
-<span class="ansi-green-fg">--&gt; 558</span>     <span class="ansi-yellow-bg">_encode_tile</span><span class="ansi-yellow-bg">(</span><span class="ansi-yellow-bg">im</span><span class="ansi-yellow-bg">,</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg">fp</span><span class="ansi-yellow-bg">,</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg">tile</span><span class="ansi-yellow-bg">,</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg">bufsize</span><span class="ansi-yellow-bg">,</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg ansi-bold" style="color: rgb(0,135,0)">None</span><span class="ansi-yellow-bg">,</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg">exc</span><span class="ansi-yellow-bg">)</span>
-<span class="ansi-green-intense-fg ansi-bold">    559</span> <span class="ansi-bold" style="color: rgb(0,135,0)">if</span> <span style="color: rgb(0,135,0)">hasattr</span>(fp, <span style="color: rgb(175,0,0)">&#34;</span><span style="color: rgb(175,0,0)">flush</span><span style="color: rgb(175,0,0)">&#34;</span>):
-<span class="ansi-green-intense-fg ansi-bold">    560</span>     fp<span style="color: rgb(98,98,98)">.</span>flush()
-
-File <span class="ansi-green-fg">~/anaconda3/envs/tractography/lib/python3.12/site-packages/PIL/ImageFile.py:584</span>, in <span class="ansi-cyan-fg">_encode_tile</span><span class="ansi-blue-fg">(im, fp, tile, bufsize, fh, exc)</span>
-<span class="ansi-green-intense-fg ansi-bold">    581</span> <span class="ansi-bold" style="color: rgb(0,135,0)">if</span> exc:
-<span class="ansi-green-intense-fg ansi-bold">    582</span>     <span style="color: rgb(95,135,135)"># compress to Python file-compatible object</span>
-<span class="ansi-green-intense-fg ansi-bold">    583</span>     <span class="ansi-bold" style="color: rgb(0,135,0)">while</span> <span class="ansi-bold" style="color: rgb(0,135,0)">True</span>:
-<span class="ansi-green-fg">--&gt; 584</span>         errcode, data <span style="color: rgb(98,98,98)">=</span> <span class="ansi-yellow-bg">encoder</span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">.</span><span class="ansi-yellow-bg">encode</span><span class="ansi-yellow-bg">(</span><span class="ansi-yellow-bg">bufsize</span><span class="ansi-yellow-bg">)</span>[<span style="color: rgb(98,98,98)">1</span>:]
-<span class="ansi-green-intense-fg ansi-bold">    585</span>         fp<span style="color: rgb(98,98,98)">.</span>write(data)
-<span class="ansi-green-intense-fg ansi-bold">    586</span>         <span class="ansi-bold" style="color: rgb(0,135,0)">if</span> errcode:
-
-<span class="ansi-red-fg">KeyboardInterrupt</span>:
+<span class="ansi-red-fg">RuntimeError</span>: stack expects a non-empty TensorList
 </pre></div></div>
 </div>
 <div class="nboutput nblast docutils container">
 <div class="prompt empty docutils container">
 </div>
 <div class="output_area docutils container">
-<img alt="_images/sac_tracking_inference_8_2.png" src="_images/sac_tracking_inference_8_2.png" />
+<img alt="_images/sac_tracking_inference_8_9.png" src="_images/sac_tracking_inference_8_9.png" />
 </div>
 </div>
 <div class="nbinput nblast docutils container">

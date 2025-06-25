@@ -1,0 +1,22 @@
+{
+    "img_path": "/home/brysongray/data/neurotrack_data/simulated_neurons/de-novo/curves_with_artifacts_b-1",
+    "outdir": "/home/brysongray/data/neurotrack_data/model_weights/sac_weights/curves_with_artifacts_b-1_training_outputs",
+    "name": "curves_with_artifacts_b-1",
+    "sac_weights": "/home/brysongray/data/neurotrack_data/model_weights/sac_weights/curves_with_artifacts_training_outputs/model_state_dicts_curves_with_artifacts_06-04-25.pt",
+    "classifier_weights": "/home/brysongray/data/neurotrack_data/model_weights/classifier_weights/neurom_with_artifacts_classifier/resnet_classifier_01-24-25_checkpoint-16.pt",
+    "n_seeds": 1,
+    "step_size": 2.0,
+    "step_width": 3.0,
+    "batch_size": 256,
+    "tau": 0.005,
+    "gamma": 0.1,
+    "lr": 0.001,
+    "alpha": 1.0,
+    "beta": 0.2,
+    "friction": 0.0,
+    "n_episodes": 2000,
+    "init_temperature": 0.005,
+    "target_entropy": 0.0,
+    "repeat_starts": 1,
+    "section_masking": 0
+}

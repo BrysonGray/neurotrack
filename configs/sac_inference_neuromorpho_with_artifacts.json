@@ -1,0 +1,9 @@
+{
+    "img_path": "/home/brysongray/data/neurotrack_data/simulated_neurons/neuromorpho/neuromorpho_with_artifacts_test_set",
+    "outdir": "/home/brysongray/data/neurotrack_data/inference_outputs/neuromorpho_with_artifacts_inference_output/",
+    "name": "neuromorpho_with_artifacts_test_set",
+    "sac_weights": "/home/brysongray/data/neurotrack_data/model_weights/sac_weights/neuromorpho_with_artifacts_training_outputs/model_state_dicts_neuromorpho_with_artifacts_06_17_25.pt",
+    "classifier_weights": "/home/brysongray/data/neurotrack_data/model_weights/classifier_weights/neuromorpho_branch_classifier_with_artifacts_06-16-25/resnet_classifier_06-16-25_checkpoint-90.pt",
+    "step_size": 2.0,
+    "step_width": 3.0
+}

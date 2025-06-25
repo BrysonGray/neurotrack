@@ -267,7 +267,8 @@ class Environment():
         if terminate:
             patch = torch.zeros((self.img.data.shape[0],)+(2*self.radius + 1,)*3)
         else:
-            patch, _ = self.img.crop(self.paths[self.head_id][-1], self.radius, pad=True, value=0.0)
+            center = self.paths[self.head_id][-1]
+            patch, _ = self.img.crop(center, self.radius, pad=True, value=0.0)
             patch = patch.clone()
 
         return patch[None]
@@ -334,7 +335,7 @@ class Environment():
         return torch.tensor([reward], dtype=torch.float32)
 
 
-    def step(self, action, verbose=False):
+    def step(self, action, verbose=False, training=True):
         """
         Perform a single step in the environment.
         
@@ -376,19 +377,22 @@ class Environment():
             # check for max branches
             if len(self.finished_paths) > self.max_paths:
                 terminated = True
+            # elif len(self.paths) == 0:
+            #     terminated = True
+            # otherwise, move to the next path
+
+            elif training and self.repeat_starts and len(self.finished_paths[-1]) > 4:
+                # if the path took more than three steps, then add a new path at the same root.
+                self.paths.append(self.roots[self.head_id][None])
+                self.roots.append(self.roots[self.head_id])
+                # i,j,k = [int(round(x.item())) for x in self.roots[self.head_id]]
+                # self.path_labels.append(int(self.section_labels.data[0, i, j, k].item()))
+                self.path_labels.append(0)
+
             elif len(self.paths) == 0:
                 terminated = True
-            # otherwise, move to the next path
-            else:
-                if self.repeat_starts:
-                    # if the path took more than one step, then add a new path at the same root.
-                    if len(self.finished_paths[-1]) > 2:
-                        self.paths.append(self.roots[self.head_id][None])
-                        self.roots.append(self.roots[self.head_id])
-                        # i,j,k = [int(round(x.item())) for x in self.roots[self.head_id]]
-                        # self.path_labels.append(int(self.section_labels.data[0, i, j, k].item()))
-                        self.path_labels.append(0)
 
+            if not terminated:
                 self.head_id = (self.head_id + 1)%len(self.paths)
 
         else: # otherwise take a step
@@ -447,7 +451,7 @@ class Environment():
             # self.head_id = (self.head_id + 1)%len(self.paths) # only move to the next path if the current path is terminated.
 
             # decide if path branches
-            if self.classifier is not None:
+            if self.classifier is not None and training:
                 out = self.classifier(observation[:,:3, 10:25, 10:25, 10:25].to(DEVICE))
                 out = torch.sigmoid(out.squeeze())
                 if out > 0.5: # create branch

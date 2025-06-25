@@ -11,6 +11,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import os
 from pathlib import Path
+import re
 import sys
 import torch
 from tqdm import tqdm
@@ -47,6 +48,9 @@ def sample_from_output(out, random=False):
         and log variance.
     """
     
+    if out.isnan().any(): # TODO: solve this properly
+        out = torch.nan_to_num(out, nan=1.0, posinf=1.0, neginf=1.0)
+
     mean = out[:,:3] # component 0, 1 and 2
     logvar = out[:,3:] # logvar component 3
 
@@ -334,18 +338,20 @@ def train(env,
             obs = env.get_state()
             ep_return = 0
             ep_rewards = []
+            training = False
             for t in count():
                 actor.eval()
                 if steps_done < update_after:
                     action = torch.randn(3)*3
                 else:
+                    training = True
                     actor_out = actor(obs.to(DEVICE))
                     direction_dist = sample_from_output(actor_out.detach().cpu())
                     action = direction_dist.rsample()[0]
                     
                 steps_done += 1
                 # take step, get observation and reward, and move index to next streamline
-                next_obs, reward, terminated = env.step(action)
+                next_obs, reward, terminated = env.step(action, training=training)
 
                 ep_return += reward.cpu().item()
                 ep_rewards.append(reward.cpu().item())
@@ -453,7 +459,7 @@ def train(env,
     return
 
 
-def inference(env, actor, outdir, n_trials=5, show=True, save=True):
+def inference(env, actor, outdir, n_trials=5, show=True, save=True, sync=False):
     """
     Perform inference using the given actor in the specified environment.
     
@@ -479,10 +485,20 @@ def inference(env, actor, outdir, n_trials=5, show=True, save=True):
         fig, ax = plt.subplots(2, 3)
         plt.ion()
     actor.eval()
-    for i in tqdm(range(len(env.img_files))):
+    if sync:
+        # find image indices that are not yet processed
+        # get a list of image names that are already processed
+        processed_image_names = [re.split(r'_\d\d-\d\d-\d\d_inference.npz', f)[0] for f in os.listdir(outdir) if f.endswith('.npz')]
+        img_indices = [i for i, f in enumerate(env.img_files) if f.split('/')[-1] not in processed_image_names]
+    else:
+        img_indices = [i for i in range(len(env.img_files))]
+    for i in tqdm(range(len(img_indices))):
+        env.img_idx = (img_indices[i] - 1) % len(env.img_files) # -1 because the index is incremented when the environment resets
+        env.reset()
+        coverages = []
+        labeled_neurons = []
+        trial_paths = []
         for trial in range(n_trials):
-            coverages = []
-            labeled_neurons = []
             obs = env.get_state()
 
             for t in count():
@@ -500,6 +516,7 @@ def inference(env, actor, outdir, n_trials=5, show=True, save=True):
                     tot = torch.sum(true_neuron)
                     coverages.append(TP/tot)
                     labeled_neurons.append(env.img.data[3].detach().clone().cpu())
+                    trial_paths.append([path.detach().cpu().numpy().tolist() if isinstance(path, torch.Tensor) and len(path) > 3 else path for path in env.finished_paths])
                     if show:
                         try:
                             shell = get_ipython().__class__.__name__ # type: ignore
@@ -521,7 +538,7 @@ def inference(env, actor, outdir, n_trials=5, show=True, save=True):
         if not os.path.exists(outdir):
             os.makedirs(outdir)
         # Convert paths to a serializable format
-        paths_to_save = [path.detach().cpu().numpy().tolist() if isinstance(path, torch.Tensor) else path for path in env.paths]
+        paths_to_save = trial_paths[index]
         labeled_neuron_np = labeled_neuron.numpy()
 
         # Using numpy's compressed format
@@ -530,8 +547,6 @@ def inference(env, actor, outdir, n_trials=5, show=True, save=True):
                                 labeled_neuron=labeled_neuron_np,
                                 paths=np.array(paths_to_save, dtype=object),
                                 coverage=np.float32(coverage))
-
-        env.reset()
 
     return
 

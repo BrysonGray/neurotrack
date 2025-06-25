@@ -62,6 +62,8 @@ def main():
         Whether to draw the neuron images as a binary mask.
     seed : int
         Seed for the random number generator.
+    sync : bool, optional
+        Whether to process only the neuron trees that are not already in the output directory.
     count : int, optional
         Number of neuron trees to simulate. Required if `labels_dir` is not provided.
     size : int, optional
@@ -96,6 +98,7 @@ def main():
     noise = parameters["noise"]
     binary = parameters["binary"]
     seed = parameters["seed"]
+    sync = parameters["sync"] if "sync" in parameters else False
     rng = np.random.default_rng(seed)
     adjust=False
 
@@ -104,6 +107,9 @@ def main():
         print(f"Loading existing neuron trees as swc files...\n"
               f"    labels_dir: {labels_dir}")
         files = [f for x in os.walk(labels_dir) for f in glob(os.path.join(x[0], "*.swc"))]
+        if sync:
+            files = [f for f in files if not os.path.exists(os.path.join(out, f.split('/')[-1].split('.')[0]))]
+        print(f"    Found {len(files)} neuron trees to process.")
         swc_lists = []
         fnames = []
         for f in files:
@@ -142,7 +148,12 @@ def main():
                                     rng=rng,
                                     num_branches=branches) # make simulated neuron paths.
             swc_lists.append(swc_list)
-            fnames.append(f"img_{i}")
+            if sync:
+                num_existing = len([f for f in os.listdir(out) if f.startswith(f"img_")])
+                n = num_existing + i
+            else:
+                n = i
+            fnames.append(f"img_{n}")
         print("done\n")
 
     print(

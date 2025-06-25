@@ -1,5 +1,5 @@
 {   
-    "out": "/home/brysongray/data/neurotrack_data/simulated_neurons/de-novo/curves_with_artifacts/",
+    "out": "/home/brysongray/data/neurotrack_data/simulated_neurons/de-novo/curves_with_artifacts_b-1/",
     "count": 1000,
     "size": 101,
     "length": 20,
@@ -10,7 +10,7 @@
     "kappa": 15.0,
     "random_start": 1,
     "binary": 0,
-    "branches": 0,
+    "branches": 1,
     "random_contrast": 1,
     "dropout": 1,
     "random_brightness": 1,

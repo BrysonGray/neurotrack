@@ -38,17 +38,57 @@ class StateData(Dataset):
     
     def __getitem__(self,idx):
         img_path = os.path.join(self.img_dir, self.img_labels.iloc[idx, 0]) # type: ignore
-        large_image = tf.imread(img_path) # image with shape (3,21,21,21)
+        image = torch.load(img_path)
+        # image = tf.imread(img_path)
         # image = torch.from_numpy(image[None])
-        large_image = torch.from_numpy(large_image)
-        shift = self.rng.integers(low=-3, high=4, size=(3,))
-        image = large_image[:, 3+shift[0]:18+shift[0], 3+shift[1]:18+shift[1], 3+shift[2]:18+shift[2]]
+        # large_image = tf.imread(img_path) # image with shape (3,21,21,21)
+        # large_image = torch.from_numpy(large_image)
+        # shift = self.rng.integers(low=-3, high=4, size=(3,))
+        # image = large_image[:, 3+shift[0]:18+shift[0], 3+shift[1]:18+shift[1], 3+shift[2]:18+shift[2]]
         label = self.img_labels.iloc[idx, 1]
         if self.transform:
             image = self.transform(image)
         if self.target_transform:
             label = self.target_transform(label)
         return image, label
+
+# # TODO: Change to online data sampling from swc and image files
+# class StateData(Dataset):
+#     """
+#         A custom Dataset class for loading and transforming image data and labels.
+        
+#         Attributes
+#         ----------
+#         img_labels : pd.DataFrame
+#             DataFrame containing image file names and corresponding labels.
+#         img_dir : str
+#             Directory where image files are stored.
+#         transform : callable, optional
+#             A function/transform to apply to the images.
+#         target_transform : callable, optional
+#             A function/transform to apply to the labels.
+#     """
+    
+#     def __init__(self, swc_files, img_files, transform=None, target_transform=None, seed=0):
+#         self.transform = transform
+#         self.target_transform = target_transform
+#         self.rng = np.random.default_rng(seed)
+#     def __len__(self):
+#         return len(self.img_labels)
+    
+#     def __getitem__(self,idx):
+#         img_path = os.path.join(self.img_dir, self.img_labels.iloc[idx, 0]) # type: ignore
+#         large_image = tf.imread(img_path) # image with shape (3,21,21,21)
+#         # image = torch.from_numpy(image[None])
+#         large_image = torch.from_numpy(large_image)
+#         shift = self.rng.integers(low=-3, high=4, size=(3,))
+#         image = large_image[:, 3+shift[0]:18+shift[0], 3+shift[1]:18+shift[1], 3+shift[2]:18+shift[2]]
+#         label = self.img_labels.iloc[idx, 1]
+#         if self.transform:
+#             image = self.transform(image)
+#         if self.target_transform:
+#             label = self.target_transform(label)
+#         return image, label
 
 
 def transform(image):
@@ -173,8 +213,8 @@ def test_loop(dataloader, model, loss_fn, logger=None):
     """
 
     size = len(dataloader.dataset)
-    # positive_count = len(np.where(dataloader.dataset.img_labels.iloc[:,1] > 0.0)[0])
-    # negative_count = size - positive_count
+    positive_count = len(np.where(dataloader.dataset.img_labels.iloc[:,1] > 0.0)[0])
+    negative_count = size - positive_count
     model.eval()
     num_batches = len(dataloader)
     test_loss, TP, TN, FP, FN = 0,0,0,0,0
@@ -184,9 +224,9 @@ def test_loop(dataloader, model, loss_fn, logger=None):
             out = model(X.to(device=DEVICE,dtype=torch.float32))
             out = torch.sigmoid(out.squeeze())
             y = y.to(dtype=torch.float, device=DEVICE)
-            # weights = torch.where(y > 0.0, positive_count/size, negative_count/size)
+            weights = torch.where(y > 0.0, positive_count/size, negative_count/size)
             loss = loss_fn(out,y)
-            # loss = torch.mean(loss * weights)
+            loss = torch.mean(loss * weights)
             test_loss += loss.item()
             threshold = 0.5
             TP_ = ((out > threshold) & (y > 0.0)).type(torch.float).sum().item()
@@ -299,3 +339,60 @@ def train(train_dataloader, test_dataloader, out_dir, lr, epochs, classifier, st
     logger("Done!")
     
     return
+
+
+# TODO: Change to online data sampling from swc and image files
+# def train(swc_files, img_files, out_dir, lr, epochs, classifier, transform=None):
+#     """
+#     Train a classifier model using the provided dataloaders and parameters.
+    
+#     Parameters
+#     ----------
+#     train_dataloader : DataLoader
+#         DataLoader for the training dataset.
+#     test_dataloader : DataLoader
+#         DataLoader for the testing dataset.
+#     out_dir : str
+#         Directory where the model checkpoints will be saved.
+#     lr : float
+#         Learning rate for the optimizer.
+#     epochs : int
+#         Number of epochs to train the model.
+#     classifier : torch.nn.Module
+#         The classifier model to be trained.
+#     state_dict : dict, optional
+#         State dictionary to load a previously trained model (default is None).
+        
+#     Returns
+#     -------
+#     None
+#     """
+    
+#     if not os.path.exists(out_dir):
+#         os.makedirs(out_dir, exist_ok=True)
+#     # Create a training log file to track progress
+#     log_file_path = os.path.join(out_dir, "training_logs.txt")
+#     logger = log_training(log_file_path, mode='a')
+#     logger(f"Training started at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+#     logger(f"Learning rate: {lr}")
+#     logger(f"Total epochs: {epochs}\n")
+
+#     training_data = branch_classifier.StateData(labels_file=training_labels_file,
+#                                                 img_dir=img_dir,transform=transform)
+#     test_data = branch_classifier.StateData(labels_file=test_labels_file,
+#                                             img_dir=img_dir)
+
+#     training_dataloader = branch_classifier.init_dataloader(training_data)
+#     test_dataloader = branch_classifier.init_dataloader(test_data)
+
+#     classifier.train()
+#     classifier_optimizer = optim.AdamW(classifier.parameters(), lr=lr)
+#     binary_loss = torch.nn.BCELoss()
+
+#     for i,t in enumerate(range(epochs)):
+#         logger(f"Epoch {t+1}\n-------------------------------")
+#         train_loop(train_dataloader, classifier, binary_loss, classifier_optimizer, logger=logger)
+#         test_loop(test_dataloader, classifier, binary_loss, logger=logger)
+#         if i%10==0:
+#             torch.save(classifier.state_dict(), os.path.join(out_dir, f"resnet_classifier_{DATE}_checkpoint-{i}.pt"))
+    logger("Done!")

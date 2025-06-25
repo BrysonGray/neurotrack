@@ -1,4 +1,5 @@
 from datetime import datetime
+from glob import glob
 import numpy as np
 import os
 import pandas as pd
@@ -45,15 +46,20 @@ def swc_random_points(samples_per_file, swc_lists, file_names, adjust=False, rng
         rng = np.random.default_rng()
     sample_points = {}
     for fname, swc_list in zip(file_names,swc_lists):
-        sections, section_graph, branches, terminals, scale = load.parse_swc_list(swc_list, adjust=adjust)
+        sections, _ = load.parse_swc(swc_list)
+        if adjust:
+            branches, terminals = load.get_critical_points(swc_list, sections)
+            sections, branches, terminals, scale = load.adjust_neuron_coords(sections, branches, terminals)
         rand_sections = rng.choice(list(sections.keys()), size=samples_per_file)
         points = []
         for j in rand_sections:
-            section_flat = sections[j].flatten(0,1) # type: ignore # 
+            section_flat = sections[j].reshape((-1,4)) # type: ignore # 
             random_point = rng.choice(np.arange(len(section_flat)))
             random_point = section_flat[random_point]
             # random translation vector from normal distribution about random_point
-            translation = rng.uniform(low=0.0, high=1.0, size=(3,))*8.0 - 4.0
+            # translation = rng.uniform(low=0.0, high=1.0, size=(3,))*8.0 - 4.0
+            translation = rng.standard_normal(size=(3,))*2.0
+            translation = np.concatenate((translation, [0.0]))
             random_point += translation
             points.append(random_point)
         points = np.array(points)
@@ -383,22 +389,27 @@ def collect_data(sample_points, image_dir, out_dir, name, rng=None):
     if rng is None:
         rng = np.random.default_rng()
 
-    os.makedirs(os.path.join(out_dir,"observations"), exist_ok=True)
+    os.makedirs(os.path.join(out_dir,"observations_{DATE}"), exist_ok=True)
     image_files = os.listdir(image_dir)
     annotations = {}
     obs_id = 0
     for f in image_files:
         points = sample_points[f.split('.')[0]]
-        data = torch.load(os.path.join(image_dir, f), weights_only=True)
-        img = data["image"]
+        # data = torch.load(os.path.join(image_dir, f), weights_only=True)
+        # img = data["image"]
+        img_file = glob(os.path.join(os.path.join(image_dir,f), "*image.tif"))[0]
+        img = tf.imread(img_file)
         img = Image(img)
-        branch_mask = data["branch_mask"]
+        branches = glob(os.path.join(os.path.join(image_dir,f), "*branches.txt"))[0]
+
+        with open(branches, 'r') as f:
+            branches = torch.tensor([[float(x) for x in line.strip().split(' ')] for line in f if line.strip()])
         for point in points:
-            patch, _ = img.crop(torch.tensor(point), 7, pad=True, value=0.0)
-            i,j,k = [int(np.round(x)) for x in point]
-            label = branch_mask[0, i, j, k].item()
+            patch, _ = img.crop(torch.tensor(point[:3]), 7, pad=True, value=0.0)
+            distances = torch.linalg.norm(branches - point[None, :3], dim=1)
+            label = float((distances.min() <= 7.0).item())
             fname = f"obs_{obs_id}.pt"
-            torch.save(patch, os.path.join(os.path.join(out_dir, "observations"), fname))
+            torch.save(patch, os.path.join(os.path.join(out_dir, f"observations_{DATE}"), fname))
             annotations[fname] = label
             obs_id += 1
 

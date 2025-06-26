@@ -388,15 +388,14 @@ def collect_data(sample_points, image_dir, out_dir, name, rng=None):
 
     if rng is None:
         rng = np.random.default_rng()
-
-    os.makedirs(os.path.join(out_dir,"observations_{DATE}"), exist_ok=True)
+    
+    obs_out = os.path.join(out_dir,f"observations_{DATE}")
+    os.makedirs(obs_out, exist_ok=True)
     image_files = os.listdir(image_dir)
     annotations = {}
     obs_id = 0
     for f in image_files:
         points = sample_points[f.split('.')[0]]
-        # data = torch.load(os.path.join(image_dir, f), weights_only=True)
-        # img = data["image"]
         img_file = glob(os.path.join(os.path.join(image_dir,f), "*image.tif"))[0]
         img = tf.imread(img_file)
         img = Image(img)
@@ -409,7 +408,7 @@ def collect_data(sample_points, image_dir, out_dir, name, rng=None):
             distances = torch.linalg.norm(branches - point[None, :3], dim=1)
             label = float((distances.min() <= 7.0).item())
             fname = f"obs_{obs_id}.pt"
-            torch.save(patch, os.path.join(os.path.join(out_dir, f"observations_{DATE}"), fname))
+            torch.save(patch, os.path.join(obs_out, fname))
             annotations[fname] = label
             obs_id += 1
 

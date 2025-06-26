@@ -6,6 +6,7 @@ import tifffile as tf
 import torch
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader, WeightedRandomSampler
+from tqdm import trange
 
 DEVICE = "cuda:0" if torch.cuda.is_available() else "cpu"
 DATE = datetime.now().strftime("%m-%d-%y")
@@ -330,7 +331,7 @@ def train(train_dataloader, test_dataloader, out_dir, lr, epochs, classifier, st
     classifier_optimizer = optim.AdamW(classifier.parameters(), lr=lr)
     binary_loss = torch.nn.BCELoss()
 
-    for i,t in enumerate(range(epochs)):
+    for i, t in enumerate(trange(epochs, desc="Training epochs")):
         logger(f"Epoch {t+1}\n-------------------------------")
         train_loop(train_dataloader, classifier, binary_loss, classifier_optimizer, logger=logger)
         test_loop(test_dataloader, classifier, binary_loss, logger=logger)

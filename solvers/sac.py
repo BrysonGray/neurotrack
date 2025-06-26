@@ -459,7 +459,7 @@ def train(env,
     return
 
 
-def inference(env, actor, outdir, n_trials=5, show=True, save=True, sync=False):
+def inference(env, actor, outdir, n_trials=1, show=True, save=True, sync=False):
     """
     Perform inference using the given actor in the specified environment.
     
@@ -498,6 +498,7 @@ def inference(env, actor, outdir, n_trials=5, show=True, save=True, sync=False):
         coverages = []
         labeled_neurons = []
         trial_paths = []
+
         for trial in range(n_trials):
             obs = env.get_state()
 

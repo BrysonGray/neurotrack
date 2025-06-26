@@ -8,18 +8,22 @@ updating the Q-networks and actor, performing target network updates, and traini
 from datetime import datetime
 from itertools import count
 import matplotlib.pyplot as plt
+import numpy as np
 import os
 from pathlib import Path
+import re
 import sys
 import torch
 from tqdm import tqdm
 
-sys.path.append(str(Path(__file__).parents[1]))
+script_path = Path(os.path.abspath(__file__))
+parent_dir = script_path.parent.parent
+sys.path.append(str(parent_dir))
 from memory.buffer import ReplayBuffer, PrioritizedReplayBuffer
 from plot.show_state import show_state
+import csv
 
-
-DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+DEVICE = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 dtype = torch.float32
 date = datetime.now().strftime("%m-%d-%y")
 
@@ -44,6 +48,9 @@ def sample_from_output(out, random=False):
         and log variance.
     """
     
+    if out.isnan().any(): # TODO: solve this properly
+        out = torch.nan_to_num(out, nan=1.0, posinf=1.0, neginf=1.0)
+
     mean = out[:,:3] # component 0, 1 and 2
     logvar = out[:,3:] # logvar component 3
 
@@ -51,7 +58,7 @@ def sample_from_output(out, random=False):
     meannorm_ = torch.tanh(meannorm)*10 # maximum of 10
     mean = mean * meannorm_/(meannorm + torch.finfo(torch.float).eps)
     logvar = torch.tanh(logvar)*3 + 1 # no very low variance (std is order of 1 pixel) 
-    direction_dist = torch.distributions.MultivariateNormal(mean[:,:3], torch.exp(logvar)[:,None]*torch.eye(3, device=DEVICE)[None])
+    direction_dist = torch.distributions.MultivariateNormal(mean[:,:3], torch.exp(logvar)[:,None]*torch.eye(3, device=out.device)[None])
 
     return direction_dist
 
@@ -106,18 +113,20 @@ def update_Q(actor, Q1, Q1_target, Q2, Q2_target,
     with torch.no_grad():
         # sample next actions from the current policy
         actor_out = actor(next_obs) # set steps_done to start_steps so that this samples from the current policy
-        direction_dist = sample_from_output(actor_out)
+        direction_dist = sample_from_output(actor_out.detach().cpu())
         next_directions = direction_dist.rsample()
         logprobs = direction_dist.log_prob(next_directions)
-        # next_directions = torch.concatenate((torch.zeros(next_directions.shape[0],1, device=DEVICE), next_directions), dim=1) # for paths constrained to a 2d slice
+        next_directions = next_directions.to(DEVICE)
+        logprobs = logprobs.to(DEVICE)
+        # next_directions = torch.cat((torch.zeros(next_directions.shape[0],1, device=DEVICE), next_directions), dim=1) # for paths constrained to a 2d slice
         # get target q-values
-        next_states = torch.concatenate((next_obs, torch.ones((next_obs.shape[0], 1, next_obs.shape[2], next_obs.shape[3], next_obs.shape[4]), 
+        next_states = torch.cat((next_obs, torch.ones((next_obs.shape[0], 1, next_obs.shape[2], next_obs.shape[3], next_obs.shape[4]), 
                                             device=DEVICE)*next_directions[:,:,None,None,None]), dim=1)
         Q1_target_vals = Q1_target(next_states) # vector of q-values for each choice
         Q2_target_vals = Q2_target(next_states)
         targets = rewards + gamma * torch.logical_not(dones) * (torch.minimum(Q1_target_vals, Q2_target_vals) - log_alpha.exp() * logprobs[:,None])
     # compute q-values to compare against targets
-    current_state = torch.concatenate((obs, 
+    current_state = torch.cat((obs, 
                         torch.ones((obs.shape[0], 1, obs.shape[2], obs.shape[3], obs.shape[4]), 
                                     device=DEVICE)*actions[:,:,None,None,None]), dim=1)
     
@@ -176,11 +185,14 @@ def update_actor(obs, actor, actor_optimizer, Q1, Q2, log_alpha, log_alpha_optim
     """
 
     actor_out = actor(obs)
+    # direction_dist = sample_from_output(actor_out.detach().cpu(), random=False)
     direction_dist = sample_from_output(actor_out, random=False)
     directions = direction_dist.rsample()
     logprobs = direction_dist.log_prob(directions)
+    directions = directions.to(DEVICE)
+    logprobs = logprobs.to(DEVICE)
     # get expected Q-vals
-    current_state = torch.concatenate((obs, torch.ones((obs.shape[0], 1, obs.shape[2], obs.shape[3], obs.shape[4]),device=DEVICE)*directions[:,:,None,None,None]), dim=1)
+    current_state = torch.cat((obs, torch.ones((obs.shape[0], 1, obs.shape[2], obs.shape[3], obs.shape[4]),device=DEVICE)*directions[:,:,None,None,None]), dim=1)
     Q1_vals = Q1(current_state)[:,0]
     Q2_vals = Q2(current_state)[:,0]
     # entropy regularized Q values
@@ -311,7 +323,7 @@ def train(env,
     if not os.path.isdir(outdir):
         os.makedirs(outdir, exist_ok=True)
     if show_states:
-        fig, ax = plt.subplots(3,3, figure=plt.figure(num=1))
+        fig, ax = plt.subplots(3,3)
         plt.ion()
 
     # Train the Network
@@ -326,18 +338,20 @@ def train(env,
             obs = env.get_state()
             ep_return = 0
             ep_rewards = []
+            training = False
             for t in count():
                 actor.eval()
                 if steps_done < update_after:
-                    action = torch.randn(3).to(DEVICE)*3
+                    action = torch.randn(3)*3
                 else:
-                    actor_out = actor(obs).detach()
-                    direction_dist = sample_from_output(actor_out)
+                    training = True
+                    actor_out = actor(obs.to(DEVICE))
+                    direction_dist = sample_from_output(actor_out.detach().cpu())
                     action = direction_dist.rsample()[0]
                     
                 steps_done += 1
                 # take step, get observation and reward, and move index to next streamline
-                next_obs, reward, terminated = env.step(action)
+                next_obs, reward, terminated = env.step(action, training=training)
 
                 ep_return += reward.cpu().item()
                 ep_rewards.append(reward.cpu().item())
@@ -351,13 +365,13 @@ def train(env,
                         actor.train()
                         for j in range(updates_per_step):
                             if isinstance(memory, ReplayBuffer):
-                                obs, actions, next_obs, rewards, dones = memory.sample(batch_size)
+                                obs, actions, next_obs, rewards, dones = memory.sample(batch_size, transform=True)
                                 td_error = update_Q(actor, Q1, Q1_target, Q2, Q2_target,
                                                     obs, actions, rewards, next_obs, dones,
                                                     Q1_optimizer, Q2_optimizer, gamma,
                                                     log_alpha, weights=None)
                             elif isinstance(memory, PrioritizedReplayBuffer):
-                                obs, actions, next_obs, rewards, dones, weights, tree_idxs = memory.sample(batch_size)
+                                obs, actions, next_obs, rewards, dones, weights, tree_idxs = memory.sample(batch_size, transform=True)
                                 td_error = update_Q(actor, Q1, Q1_target, Q2, Q2_target,
                                                     obs, actions, rewards, next_obs, dones,
                                                     Q1_optimizer, Q2_optimizer, gamma,
@@ -393,15 +407,22 @@ def train(env,
                         try:
                             shell = get_ipython().__class__.__name__ # type: ignore
                             if shell:
-                                show_state(env, ep_returns, ep_rewards, policy_loss, fig)
+                                show_state(env, fig, returns=ep_returns, rewards=ep_rewards, policy_loss=policy_loss)
                                 print(f"num branches: {len(env.finished_paths)}")
                         except NameError:
-                            with open(os.path.join(outdir, f"{name}_{date}_log.txt"), "a") as f:
-                                f.write(f"episode: {ep},\n")
-                                f.write(f"image file: {env.img_files[env.img_idx].split('/')[-1]}\n")
-                                f.write(f"num branches: {len(env.finished_paths)},\n")
-                                f.write(f"episode return: {ep_return},\n")
-                                f.write(f"episode avg. policy loss: {episode_avg_loss}\n\n")
+                            csv_file_path = os.path.join(outdir, f"{name}_{date}_log.csv")
+                            file_exists = os.path.isfile(csv_file_path)
+                            with open(csv_file_path, "a", newline='') as f:
+                                writer = csv.writer(f)
+                                if not file_exists:
+                                    writer.writerow(['episode', 'image_file', 'num_branches', 'episode_return', 'episode_avg_policy_loss'])
+                                writer.writerow([
+                                    ep,
+                                    env.img_files[env.img_idx].split('/')[-1],
+                                    len(env.finished_paths),
+                                    ep_return,
+                                    episode_avg_loss
+                                ])
                     env.reset(move_to_next=False)
                     break
             
@@ -418,10 +439,15 @@ def train(env,
             if not os.path.exists(paths_dir):
                 os.makedirs(paths_dir)
 
-            to_save = {"labeled_neuron": labeled_neuron, "true_neuron": env.true_density.data[0].detach().clone().cpu(), "coverage": coverage, "return": best_return}
-            torch.save(to_save, os.path.join(paths_dir, f"ep_snapshot_{ep}.pt"))
-
-        # save model every 500 steps
+            # to_save = {"labeled_neuron": labeled_neuron, "true_neuron": env.true_density.data[0].detach().clone().cpu(), "coverage": coverage, "return": best_return}
+            # torch.save(to_save, os.path.join(paths_dir, f"ep_snapshot_{ep}.pt"))
+            np.savez_compressed(os.path.join(paths_dir, f"ep_snapshot_{ep}.npz"),
+                    name=env.img_files[env.img_idx].split('/')[-1],
+                    labeled_neuron=labeled_neuron.numpy(),
+                    coverage=np.float32(coverage),
+                    best_return=best_return)
+                    # paths=np.array(paths_to_save, dtype=object),
+        # save model after at least 500 steps 
         if steps_done // 500 > last_save:
             model_dicts = {"policy_state_dict": actor.state_dict(),
                         "Q1_state_dict": Q1_target.state_dict(),
@@ -433,7 +459,7 @@ def train(env,
     return
 
 
-def inference(env, actor, outdir, n_trials=5, show=True):
+def inference(env, actor, outdir, n_trials=1, show=True, save=True, sync=False):
     """
     Perform inference using the given actor in the specified environment.
     
@@ -456,19 +482,30 @@ def inference(env, actor, outdir, n_trials=5, show=True):
     """
 
     if show:
-        fig, ax = plt.subplots(2,3, figure=plt.figure(num=1))
+        fig, ax = plt.subplots(2, 3)
         plt.ion()
     actor.eval()
-    for i in tqdm(range(len(env.img_files))):
+    if sync:
+        # find image indices that are not yet processed
+        # get a list of image names that are already processed
+        processed_image_names = [re.split(r'_\d\d-\d\d-\d\d_inference.npz', f)[0] for f in os.listdir(outdir) if f.endswith('.npz')]
+        img_indices = [i for i, f in enumerate(env.img_files) if f.split('/')[-1] not in processed_image_names]
+    else:
+        img_indices = [i for i in range(len(env.img_files))]
+    for i in tqdm(range(len(img_indices))):
+        env.img_idx = (img_indices[i] - 1) % len(env.img_files) # -1 because the index is incremented when the environment resets
+        env.reset()
+        coverages = []
+        labeled_neurons = []
+        trial_paths = []
+
         for trial in range(n_trials):
-            coverages = []
-            labeled_neurons = []
             obs = env.get_state()
 
             for t in count():
                 with torch.no_grad():
-                    actor_out = actor(obs)
-                    direction_dist = sample_from_output(actor_out)
+                    actor_out = actor(obs.to(DEVICE))
+                    direction_dist = sample_from_output(actor_out.detach().cpu())
                     action = direction_dist.sample()[0]
 
                 next_obs, reward, terminated = env.step(action)
@@ -480,6 +517,7 @@ def inference(env, actor, outdir, n_trials=5, show=True):
                     tot = torch.sum(true_neuron)
                     coverages.append(TP/tot)
                     labeled_neurons.append(env.img.data[3].detach().clone().cpu())
+                    trial_paths.append([path.detach().cpu().numpy().tolist() if isinstance(path, torch.Tensor) and len(path) > 3 else path for path in env.finished_paths])
                     if show:
                         try:
                             shell = get_ipython().__class__.__name__ # type: ignore
@@ -500,11 +538,16 @@ def inference(env, actor, outdir, n_trials=5, show=True):
         name = env.img_files[env.img_idx].split('/')[-1].split('.')[0]
         if not os.path.exists(outdir):
             os.makedirs(outdir)
+        # Convert paths to a serializable format
+        paths_to_save = trial_paths[index]
+        labeled_neuron_np = labeled_neuron.numpy()
 
-        to_save = {"labeled_neuron": labeled_neuron, "paths": env.paths, "coverage": coverage}
-        torch.save(to_save, os.path.join(outdir, f"{name}_{date}_inference.pt"))
-
-        env.reset()
+        # Using numpy's compressed format
+        if save:
+            np.savez_compressed(os.path.join(outdir, f"{name}_{date}_inference.npz"),
+                                labeled_neuron=labeled_neuron_np,
+                                paths=np.array(paths_to_save, dtype=object),
+                                coverage=np.float32(coverage))
 
     return
 

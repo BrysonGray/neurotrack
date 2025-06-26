@@ -10,9 +10,12 @@ Author: Bryson Gray
 '''
 import torch
 import numpy as np
+from scipy.ndimage import map_coordinates
 from skimage.draw import line_nd
 from skimage.filters import gaussian
-from skimage.morphology import dilation, footprint_rectangle
+from skimage.morphology import dilation
+from typing import Literal
+import warnings
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -38,11 +41,14 @@ def draw_line_segment(segment, width, binary=False, value=1.0):
     """
     
     segment = segment[1] - segment[0]
-    segment_length = torch.sqrt(torch.sum(segment**2))
+    if isinstance(segment, np.ndarray):
+        segment = torch.from_numpy(segment)
+    # segment_length = torch.sqrt(torch.sum(segment**2))
 
     # the patch should contain both line end points plus some blur
-    L = int(torch.ceil(segment_length)) + 1 # The radius of the patch is the whole line length since the line starts at patch center.
-    overhang = int(2*width) # include space beyond the end of the line
+    # L = int(torch.ceil(segment_length)) + 1 # The radius of the patch is the whole line length since the line starts at patch center.
+    L = int(max(abs(segment).tolist()))
+    overhang = int(np.ceil(2*width)) # include space beyond the end of the line
     patch_radius = L + overhang
 
     patch_size = 2*patch_radius + 1
@@ -57,13 +63,75 @@ def draw_line_segment(segment, width, binary=False, value=1.0):
     # if width is 0, don't blur
     if width > 0:
         if binary:
-            X = torch.tensor(dilation(X, footprint_rectangle((int(width),)*3)))
+            X = torch.tensor(dilation(X, np.ones((int(width),)*3, dtype=np.uint8)))
         else:
             sigma = width/2
             X = torch.tensor(gaussian(X, sigma=sigma))
             X = X / torch.amax(X) * value
     
     return X.to(device=segment.device)
+
+
+def extract_spherical_patch(volume, x, y, z, center, radius, order=1, permutation=None, normalize=False):
+    """
+    Extract a spherical patch from a 3D image volume and project it onto a 2D surface.
+    
+    Parameters:
+    -----------
+    volume : 3D numpy array
+        The 3D image volume
+    x : numpy array
+        x components of sample points as a meshgrid.
+    y : numpy array
+        y components of sample points as a meshgrid.
+    z : numpy array
+        z components of sample points as a meshgrid.
+    center : tuple of 3 ints
+        The (z, y, x) coordinates of the center of the sphere
+    radius : float
+        The radius of the sphere
+    resolution : tuple of 2 ints
+        The resolution of the resulting 2D projection (theta_res, phi_res)
+    order : int, optional
+        The order of the spline interpolation (0=nearest, 1=linear, etc.)
+    permutation : list or tuple of ints, optional
+        Permutation to apply to volume and center point axes before patch extraction.
+    normalize : bool, optional
+        Whether to normalize the output to [0, 1]
+        
+    Returns:
+    --------
+    2D numpy array
+        The 2D projection of the spherical surface (equirectangular projection)
+    """
+
+    if permutation is not None:
+        # Apply permutation to volume and center
+        volume = np.transpose(volume, axes=permutation)
+        # Create a new center with the permuted coordinates
+        new_center = []
+        for i in range(3):
+            new_center.append(center[permutation[i]])
+        center = new_center
+    
+    # Scale by radius and translate to center
+    coords = np.array([
+        center[0].item() + radius * z,
+        center[1].item() + radius * y,
+        center[2].item() + radius * x
+    ])
+    
+    # Sample the volume using interpolation
+    values = map_coordinates(volume, coords, order=order, mode='constant', cval=0)
+    
+    # Reshape to 2D projection
+    projection = values.reshape(x.shape[0], x.shape[1])
+    
+    # Normalize if requested
+    if normalize and projection.max() != projection.min():
+        projection = (projection - projection.min()) / (projection.max() - projection.min())
+    
+    return projection
 
 
 class Image:
@@ -121,9 +189,14 @@ class Image:
             padding : ndarray
                 Length that patch overlaps with image boundaries on each end of each dimension.
         """
-        i,j,k = [int(torch.round(x)) for x in center]
+        i,j,k = [int(round(x.item())) for x in center]
         shape = self.data.shape[1:]
-
+        if any([i < 0, j < 0, k < 0, i >= shape[0], j >= shape[1], k >= shape[2]]):
+            warnings.warn(f"Center {center} is out of bounds for image shape {shape}. Translating to the nearest valid index.")
+            i = np.clip(i, 0, shape[0]-1)
+            j = np.clip(j, 0, shape[1]-1)
+            k = np.clip(k, 0, shape[2]-1)
+            
         # get amount of padding for each face
         zpad_top = zpad_btm = ypad_front = ypad_back = xpad_left = xpad_right = 0
 
@@ -192,7 +265,8 @@ class Image:
         X = draw_line_segment(segment, width, binary, value)
 
         # get the patch centered on the new segment start point from the current image.
-        center = torch.round(segment[0]).to(torch.int)
+        # center = torch.round(segment[0]).to(torch.int)
+        center = segment[0]
         patch_radius = int((X.shape[0] - 1)/2)
         patch, padding = self.crop(center, patch_radius, interp=False, pad=False) # patch is a view of self.data (c x h x w x d)
         old_patch = patch[channel].clone()
@@ -210,7 +284,7 @@ class Image:
         return old_patch, new_patch
     
     
-    def draw_point(self, point: torch.Tensor, radius: float = 3.0, channel: int = -1, binary: bool = False, value: int = 1):
+    def draw_point(self, point: torch.Tensor, radius: float = 3.0, channel: int = -1, mode: Literal["mask", "gaussian"] = "mask", binary: bool = False, value: int = 1):
         """
         Draw a point on the image data with a specified radius and value.
         
@@ -222,30 +296,45 @@ class Image:
             The radius of the point to be drawn. Default is 3.0.
         channel : int, optional
             The channel on which to draw the point. Default is -1.
+        mode : str, optional
+            The mode to use for drawing the point. Default is
+            "mask". Options are "mask", which draws the point 
+            as a uniform cube with value determined by the
+            "value" argument, or "gaussian", which draws a
+            gaussian blurred point.
         binary : bool, optional
             If True, the point will be drawn as a binary value. Default is False.
         value : int, optional
             The value to assign to the point. Default is 1.
-            
+
         Returns
         -------
         None
+        
+        Raises
+        ------
+        TypeError
+            If binary is True and self.data.dtype is not a boolean type.
         """
         
+        if binary and self.data.dtype != torch.bool:
+            raise TypeError(f"Binary mode requires boolean image data, but got {self.data.dtype}")
+            
         c = round(radius)
         patch_size = 2*c+1
         if binary:
-            X = torch.ones((patch_size,patch_size,patch_size)) * value
-        else:
+            X = torch.ones((patch_size,patch_size,patch_size), dtype=torch.bool)
+        elif mode == "gaussian":
             X = torch.zeros((patch_size,patch_size,patch_size))
             X[c,c,c] = 1.0
             X = torch.tensor(gaussian(X, sigma=radius))
             X = (X / torch.amax(X)) * value
+        else: # mode == "mask"
+            X = torch.ones((patch_size,patch_size,patch_size))*value
+
         patch, padding = self.crop(point, radius=c, interp=False, pad=False)
         new_patch = X[padding[0]:X.shape[0]-padding[1], padding[2]:X.shape[1]-padding[3], padding[4]:X.shape[2]-padding[5]]
         patch[channel] = torch.maximum(new_patch.to(device=patch.device), patch[channel])
 
         return
     
-if __name__ == "__main__":
-    pass

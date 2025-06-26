@@ -1,11 +1,12 @@
 {   
-    "labels_dir": "/home/brysongray/data/neuromorpho_sub1",
-    "out": "/home/brysongray/data/simulated_neurons/neuromorpho_sub1_with_artifacts",
+    "labels_dir": "/home/brysongray/data/neurotrack_data/simulated_neurons/neuromorpho/swc_trees/neuromorpho_test_set",
+    "out": "/home/brysongray/data/neurotrack_data/simulated_neurons/neuromorpho/neuromorpho_with_artifacts_test_set",
     "width": 3,
     "noise": 0.05,
     "binary": 0,
     "random_contrast": 1,
     "dropout": 1,
     "random_brightness": 1,
-    "seed": 7
+    "seed": 7,
+    "sync": 1
 }

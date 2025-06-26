@@ -1,9 +1,9 @@
 {
-    "img_path": "/home/brysongray/tractography/data_prep/training_data/neuromorpho_with_artifacts",
-    "outdir": "/home/brysongray/tractography/sac_training_output_test",
-    "name": "neurom_dataset",
-    "classifier_weights" : "/home/brysongray/tractography/pretrained_models/neurom_with_artifacts_classifier/resnet_classifier_01-24-25_checkpoint-16.pt",
-    "sac_weights": "/home/brysongray/tractography/outputs_test/model_state_dicts_neurom_with_artifacts_01-25-25.pt",
+    "img_path": "/home/brysongray/data/neurotrack_data/simulated_neurons/neuromorpho/neuromorpho_with_artifacts",
+    "outdir": "/home/brysongray/data/neurotrack_data//model_weights/sac_weights/neuromorpho_with_artifacts_training_outputs",
+    "name": "neuromorpho_repeat_starts",
+    "sac_weights": "/home/brysongray/data/neurotrack_data/model_weights/sac_weights/neuromorpho_with_artifacts_training_outputs/model_state_dicts_neuromorpho_with_artifacts_06_17_25.pt",
+    "classifier_weights": "/home/brysongray/data/neurotrack_data/model_weights/classifier_weights/neuromorpho_branch_classifier_with_artifacts_06-16-25/resnet_classifier_06-16-25_checkpoint-90.pt",
     "n_seeds": 1,
     "step_size": 2.0,
     "step_width": 3.0,
@@ -14,7 +14,9 @@
     "alpha": 1.0,
     "beta": 0.2,
     "friction": 0.0,
-    "n_episodes": 50,
+    "n_episodes": 2000,
     "init_temperature": 0.005,
-    "target_entropy": 0.0
+    "target_entropy": 0.0,
+    "repeat_starts": 1,
+    "section_masking": 0
 }

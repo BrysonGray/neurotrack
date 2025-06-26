@@ -1,8 +1,0 @@
-{
-    "img_path": "/home/brysongray/data/neurotrack_data/simulated_neurons/de-novo/curves_with_artifacts",
-    "outdir": "/home/brysongray/data/neurotrack_data/inference_outputs/curves_with_artifacts_inference_output/",
-    "name": "curves_with_artifacts",
-    "sac_weights": "/home/brysongray/data/neurotrack_data/model_weights/sac_weights/curves_with_artifacts_training_outputs/model_state_dicts_curves_with_artifacts_06-04-25.pt",
-    "step_size": 2.0,
-    "step_width": 3.0
-}

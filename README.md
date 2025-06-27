@@ -33,4 +33,13 @@ No non-standard hardware is required, but this library uses pytorch which can us
 
 Examples for usage are given in Jupyter notebooks in the notebooks folder of the github repository.
 
+## Example neuron tracking results
+
+Gray surface is the true neuron, red surface is the result of automated tracing.
+
+https://media.giphy.com/media/ZEcTAh6nwSrbRMdMDS/giphy.gif
+
+https://media.giphy.com/media/7Vu79HIrW4XROOVX03/giphy.gif
+
+https://media.giphy.com/media/Qlkpz2BHlb1bjyHEmo/giphy.gif
 

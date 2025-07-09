@@ -459,7 +459,7 @@ def train(env,
     return
 
 
-def inference(env, actor, outdir, n_trials=1, show=True, save=True, sync=False):
+def inference(env, actor, outdir, Q_net=None, n_trials=1, show=True, save=True, sync=False):
     """
     Perform inference using the given actor in the specified environment.
     
@@ -492,14 +492,22 @@ def inference(env, actor, outdir, n_trials=1, show=True, save=True, sync=False):
         img_indices = [i for i, f in enumerate(env.img_files) if f.split('/')[-1] not in processed_image_names]
     else:
         img_indices = [i for i in range(len(env.img_files))]
+
+    if n_trials < 1:
+        raise ValueError("n_trials must be at least 1")
+    elif n_trials > 1 and Q_net is None:
+        raise ValueError("Q_net must be provided if n_trials > 1")
+
     for i in tqdm(range(len(img_indices))):
         env.img_idx = (img_indices[i] - 1) % len(env.img_files) # -1 because the index is incremented when the environment resets
         env.reset()
         coverages = []
+        estimated_returns = []
         labeled_neurons = []
         trial_paths = []
 
         for trial in range(n_trials):
+            estimated_return = 0
             obs = env.get_state()
 
             for t in count():
@@ -509,30 +517,41 @@ def inference(env, actor, outdir, n_trials=1, show=True, save=True, sync=False):
                     action = direction_dist.sample()[0]
 
                 next_obs, reward, terminated = env.step(action)
-
+                if Q_net is not None:
+                    current_state = torch.cat((obs.to(DEVICE), torch.ones((obs.shape[0], 1, obs.shape[2], obs.shape[3], obs.shape[4]),device=DEVICE)*action[None,:,None,None,None].to(DEVICE)), dim=1)
+                    q_val = Q_net(current_state)[:,0]
+                    estimated_return += q_val.cpu().item()
+                
                 if terminated:
                     labeled_neuron = env.img.data[3].detach().cpu() > 0.3 
                     true_neuron = torch.linalg.norm(env.true_density.data[:3].detach().cpu(), dim=0) > 0.94
                     TP = torch.sum(torch.logical_and(labeled_neuron, true_neuron))
                     tot = torch.sum(true_neuron)
                     coverages.append(TP/tot)
+                    estimated_returns.append(estimated_return)
                     labeled_neurons.append(env.img.data[3].detach().clone().cpu())
-                    trial_paths.append([path.detach().cpu().numpy().tolist() if isinstance(path, torch.Tensor) and len(path) > 3 else path for path in env.finished_paths])
+                    trial_paths.append([path.detach().cpu().numpy().tolist() for path in env.finished_paths if isinstance(path, torch.Tensor) and len(path) > 3])
                     if show:
                         try:
                             shell = get_ipython().__class__.__name__ # type: ignore
                             if shell:
                                 show_state(env, fig)
                                 print(f"num branches: {len(env.finished_paths)}")
+                                print(f"num long paths: {len(trial_paths[-1])}")
+                                if Q_net is not None:
+                                    print(f"estimated return: {estimated_return:.2f}")
+                                print(f"coverage: {coverages[-1]:.2f}")
                         except NameError:
                             pass
                     env.reset(move_to_next=False)
                     break
 
                 obs = env.get_state()
-        
-        value, index = torch.max(torch.stack(coverages), dim=0)
-        coverage = value.item()
+
+        # value, index = torch.max(torch.stack(estimated_returns), dim=0)
+        value = np.max(estimated_returns)
+        index = np.argmax(estimated_returns)
+        estimated_return = value.item()
         index = int(index)
         labeled_neuron = labeled_neurons[index]
         name = env.img_files[env.img_idx].split('/')[-1].split('.')[0]
@@ -546,8 +565,9 @@ def inference(env, actor, outdir, n_trials=1, show=True, save=True, sync=False):
         if save:
             np.savez_compressed(os.path.join(outdir, f"{name}_{date}_inference.npz"),
                                 labeled_neuron=labeled_neuron_np,
-                                paths=np.array(paths_to_save, dtype=object),
-                                coverage=np.float32(coverage))
+                                coverages=coverages,
+                                estimated_returns=estimated_returns,
+                                paths=np.array(paths_to_save, dtype=object))
 
     return
 

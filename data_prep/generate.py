@@ -114,15 +114,45 @@ def get_next_point(q0: np.ndarray, q1: np.ndarray, kappa: float, step_size: floa
     
     if rng is None:
         rng = np.random.default_rng()
-    last_step = (q1 - q0) / step_size
+    last_step = (q1[:3] - q0[:3]) / step_size
     # vmf = scipy.stats.vonmises_fisher(last_step, kappa)
     # step = vmf.rvs(1, random_state=rng)[0]
     step = rvmf(1, last_step, kappa, rng)[0]
     # step[0] = 0.0 # for paths constrained to a 2d slice
     step = step/(np.linalg.norm(step) + np.finfo(float).eps)
-    next_point = q1 + step * step_size
+    next_point = q1[:3] + step * step_size
 
     return next_point
+
+
+def clipped_normal(mu, sigma, low, high, rng=None):
+    """
+    Generate a random number from a truncated normal distribution.
+    
+    Parameters
+    ----------
+    mu : float
+        Mean of the normal distribution.
+    sigma : float
+        Standard deviation of the normal distribution.
+    low : float
+        Lower bound for truncation.
+    high : float
+        Upper bound for truncation.
+    rng : np.random.Generator, optional
+        Random number generator instance, by default None.
+        
+    Returns
+    -------
+    float
+        A random number from the truncated normal distribution.
+    """
+    
+    if rng is None:
+        rng = np.random.default_rng()
+    x = rng.normal(mu, sigma)
+    x = np.clip(x, low, high)
+    return x
 
 
 # compute neuron segment end points 
@@ -132,7 +162,9 @@ def get_path(start,
              rng=None,
              length=100,
              step_size=1.0,
-             uniform_len=False,
+             width=3.0,
+             random_len=True,
+             random_width=False,
              random_start=True):
     """
     Get the neuron segment endpoints starting at a seed point,
@@ -154,10 +186,10 @@ def get_path(start,
         Default is 100.
     step_size : float, optional
         Length of each path segment in pixels. Default is 1.0
-    uniform_len : bool
-        If false, the path length will be a normally distributed random number
-        with the expected value set by the "length" argument. Otherwise the
-        path length will be equal to "length".
+    random_len : bool
+        If True, the path length will be sampled from a normal distribution with mean given by length, by default True.
+    random_width : bool, optional
+        If True, the width of the path segments will be randomly sampled from a truncated normal distribution
     random_start : bool, optional
         Whether to start the path with a random direction. Default is True.
     
@@ -169,7 +201,7 @@ def get_path(start,
     if rng is None:
         rng = np.random.default_rng()
 
-    if not uniform_len:
+    if random_len:
         sigma = length // 5
         length = length + rng.standard_normal(1)*sigma
         length = int(round(length.item()))
@@ -182,25 +214,39 @@ def get_path(start,
     else:
         step = np.array([0.0,0.0,1.0])
     q1 = start + step * step_size
+    if random_width:
+        w0 = clipped_normal(width, 1.5, 1.0, 10.0, rng=rng)
+        w1 = clipped_normal(w0, 1.5, 1.0, 10.0, rng=rng)
+    else:
+        w0 = width
+        w1 = width
+    start = np.concatenate((start, [w0]))
+    q1 = np.concatenate((q1, [w1]))
     path = [start, q1]
 
     for i in range(length):
         next_point = get_next_point(path[-2], path[-1], kappa=kappa, step_size=step_size, rng=rng)
         if any(next_point > boundary.max(axis=0)) or any(next_point < boundary.min(axis=0)):
             break
+        if random_width:
+            w = clipped_normal(path[-1][3], 1.5, 1.0, 10.0, rng=rng)
+        else:
+            w = width
+        next_point = np.concatenate((next_point, [w]))
         path.append(next_point)
     
     path = np.array(path)
 
     return path
-
+ 
 
 def make_swc_list(size: Tuple[int,...],
                 length: int,
                 step_size: float = 1.0,
                 kappa: float = 20.0,
-                uniform_len: bool = False,
+                random_len: bool = True,
                 random_start: bool = True,
+                random_width: bool = False,
                 rng=None,
                 num_branches: int=0) -> list:
     """
@@ -216,10 +262,12 @@ def make_swc_list(size: Tuple[int,...],
         The step size for each move in the path, by default 1.0.
     kappa : float, optional
         The concentration parameter for the von Mises-Fisher distribution, by default 20.0.
-    uniform_len : bool, optional
-        If True, the path length will be uniform, by default False.
+    random_len : bool, optional
+        If True, the path length will be sampled from a normal distribution with mean given by length, by default True.
     random_start : bool, optional
         If True, the path will start at a random position, by default True.
+    random_width : bool, optional
+        If True, the width of the path segments will be randomly sampled, by default False.
     rng : numpy.random.Generator, optional
         A random number generator instance, by default None.
     num_branches : int, optional
@@ -237,26 +285,26 @@ def make_swc_list(size: Tuple[int,...],
     start = tuple([x//2 for x in size]) # start in the center
     boundary = np.array([[0,0,0],
                          [size[0]-1, size[1]-1, size[2]-1]])
-    path = get_path(start, boundary=boundary, kappa=kappa, rng=rng, length=length, step_size=step_size, uniform_len=uniform_len,
-                    random_start=random_start)
+    path = get_path(start, boundary=boundary, kappa=kappa, rng=rng, length=length, step_size=step_size, random_len=random_len,
+                    random_width=random_width, random_start=random_start)
     graph = [[i+1, i] for i in range(len(path))]
     graph[0][1] = -1
     paths = [path]
     branch_points = []
     for i in range(num_branches):
         start_idx = rng.integers(0, len(path)-1)
-        branch_start = paths[0][start_idx]
+        branch_start = paths[0][start_idx][:3]
         branch_points.append(branch_start)
         branch_start = tuple(int(np.round(t)) for t in branch_start)
-        new_path = get_path(branch_start, boundary=boundary, kappa=kappa, rng=rng, length=length, step_size=step_size, uniform_len=uniform_len,
-                    random_start=True)
+        new_path = get_path(branch_start, boundary=boundary, kappa=kappa, rng=rng, length=length, step_size=step_size, random_len=random_len,
+                    random_width=random_width, random_start=True)
         graph.append([graph[-1][0]+1, start_idx+1])
         for i in np.arange(graph[-1][0], graph[-1][0] + len(new_path)-1):
             graph.append([i+1, i])
         paths.append(new_path)
     paths = np.concatenate(paths)
 
-    swc_list = [[graph[i][0], 0]+list(paths[i])+[3.0, graph[i][1]] for i in range(len(graph))]
+    swc_list = [[graph[i][0], 0]+list(paths[i][:3])+[paths[i][3], graph[i][1]] for i in range(len(graph))]
     
     return swc_list
 

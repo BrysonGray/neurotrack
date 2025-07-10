@@ -187,7 +187,8 @@ def draw_neuron(segments, shape, width, noise, neuron_color=None, background_col
         if random_brightness:
             y0 = 0.5
             value = y0 + (1.0 - y0) * rng.uniform(0.0, 1.0, size=1).item()
-        img.draw_line_segment(s[:,:3], width=width, binary=binary, channel=0, value=value)
+        w = (s[0,3] + s[1,3]) / 2 if s.shape[1] == 4 else width
+        img.draw_line_segment(s[:,:3], width=w, binary=binary, channel=0, value=value)
         if save_gif and idx in gif_steps:
             arr = img.data[3].cpu().numpy()
             mip = arr.max(axis=gif_axis)

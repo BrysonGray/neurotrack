@@ -122,7 +122,8 @@ def main():
         size = (parameters["size"],)*3
         length = parameters["length"]
         stepsize = parameters["stepsize"]
-        uniform_len = parameters["uniform_len"]
+        random_len = parameters["random_len"]
+        random_width = parameters["random_width"]
         kappa = parameters["kappa"]
         random_start = parameters["random_start"]
         branches = parameters["branches"]
@@ -131,7 +132,8 @@ def main():
               f"    size: {size}\n"
               f"    length: {length}\n"
               f"    step size: {stepsize}\n"
-              f"    uniform_len: {uniform_len}\n"
+              f"    random_len: {random_len}\n"
+              f"    random_width: {random_width}\n"
               f"    kappa: {kappa}\n"
               f"    random_start: {random_start}\n"
               f"    branches: {branches}")
@@ -143,7 +145,8 @@ def main():
                                     length=length,
                                     step_size=stepsize,
                                     kappa=kappa,
-                                    uniform_len=uniform_len,
+                                    random_len=random_len,
+                                    random_width=random_width,
                                     random_start=random_start,
                                     rng=rng,
                                     num_branches=branches) # make simulated neuron paths.

@@ -1,6 +1,7 @@
 import numpy as np
 import os
 from pathlib import Path
+from scipy.ndimage import zoom
 import sys
 import tifffile as tf
 import torch
@@ -74,7 +75,6 @@ def tiff(img_dir, pixelsize=[1.0,1.0,1.0], downsample_factor=1.0, inverse=False)
     return stack
 
 
-
 def swc(labels_file, rotate=False, verbose=True):
     """
     Load and parse an SWC file.
@@ -106,7 +106,14 @@ def swc(labels_file, rotate=False, verbose=True):
             lines = f.readlines()
 
     lines = [line.split() for line in lines if not line.startswith('#') and line.strip()]
-    swc_list = [list(map(int, line[:2])) + list(map(float, line[2:6])) + [int(line[6])] for line in lines]
+    # Columns are: index, type, x, y, z, radius, parent_index
+    # Index, type, and parent_index should be integers, while x, y, z, and radius are floats.
+    # Handle cases where all columns are saved as a decimal number.
+    idx_type = 'int' if lines[0][0].isdigit() else 'float'
+    if idx_type == 'int':
+        swc_list = [list(map(int, line[:2])) + list(map(float, line[2:6])) + [int(line[6])] for line in lines]
+    else:
+        swc_list = [list(map(int, map(float, line[:2]))) + list(map(float, line[2:6])) + [int(float(line[6]))] for line in lines]
 
     if rotate:
 
@@ -175,8 +182,9 @@ def undirected_edge_list(swc_list):
     edge_list = {}
     graph = []
     # swc_list -> (id, type, x,y,z, radius, parent)
+    node_ids = [int(i[0]) for i in swc_list]
     for line in swc_list:
-        if line[6] == -1:
+        if line[6] not in node_ids:
             continue
         graph.append([int(line[0]), int(line[6])])
     graph = np.array(graph)
@@ -191,7 +199,7 @@ def undirected_edge_list(swc_list):
     return edge_list
 
 
-def parse_swc(swc_list, transpose=True):
+def parse_swc(swc_list, transpose=True, verbose=False):
     """
     Parse a list of SWC lines and return an directed adjacency list of neuron sections,
     and a dictionary of sections with their corresponding coordinates. Sections are defined
@@ -211,7 +219,7 @@ def parse_swc(swc_list, transpose=True):
     sections_graph : dict
         The directed adjacency list of neuron sections.
     """
-
+    swc_list = np.array(swc_list)
     # Compute undirected edge list
     edge_list = undirected_edge_list(swc_list)
     # Make list of branching nodes
@@ -226,7 +234,9 @@ def parse_swc(swc_list, transpose=True):
         terminals = [i for i in edge_list.keys() if len(edge_list[i]) == 1]
         # check if the list of terminals has changed
         if terminals == terminals_:
-            raise Exception("Could not parse swc list. The list likely has disconnected sections.")
+            if verbose:
+                print(f"Warning: The neuron tree has disconnected sections.")
+            break
         # from each terminal node walk along the tree until you reach a branching node
         # or another terminal node
         for terminal in terminals:
@@ -236,7 +246,7 @@ def parse_swc(swc_list, transpose=True):
             node = terminal
             while True:
                 next_node = edge_list[node][0]
-                section.append([swc_list[node-1][2:6], swc_list[next_node-1][2:6]])
+                section.append([swc_list[swc_list[:, 0] == node][0,2:6], swc_list[swc_list[:, 0] == next_node][0,2:6]])
                 edge_list.pop(node)
                 edge_list[next_node].remove(node)
                 node = next_node
@@ -278,36 +288,36 @@ def get_critical_points(swc_list, sections, transpose=True):
     edge_list = undirected_edge_list(swc_list)
     branches = [i for i in edge_list.keys() if len(edge_list[i]) > 2]
     # for each branch, walk along each section to which it connects,
-    branches_to_remove = []
-    for branch in branches:
-        # check the remaining length of each section starting from the current branch
-        num_long_sections = 0
-        for child in edge_list[branch]:
-            node = child
-            prev = branch
-            l = np.linalg.norm(np.array(swc_list[node-1][2:5]) - np.array(swc_list[prev-1][2:5]))
-            if l >= avg_length:
-                num_long_sections += 1
-            while len(edge_list[node]) >= 2:
-                next_node = [n for n in edge_list[node] if n != prev][0]
-                prev = node
-                node = next_node
-                l += np.linalg.norm(np.array(swc_list[node-1][2:5]) - np.array(swc_list[prev-1][2:5]))
-                if l >= avg_length:
-                    num_long_sections += 1
-                    break
-            # if the length of at least two sections is greater than 2*avg_length, continue
-            if num_long_sections > 2:
-                break
-        # else, mark the branch for removal
-        if num_long_sections <= 2:
-            branches_to_remove.append(branch)
-    # print(f'removing {len(branches_to_remove)} branches')
-    for branch in branches_to_remove:
-        branches.remove(branch)
-
-    branches = [swc_list[i-1][2:6] for i in branches]
-    terminals = [swc_list[i-1][2:6] for i in edge_list.keys() if len(edge_list[i]) == 1]
+    # branches_to_remove = []
+    # for branch in branches:
+    #     # check the remaining length of each section starting from the current branch
+    #     num_long_sections = 0
+    #     for child in edge_list[branch]:
+    #         node = child
+    #         prev = branch
+    #         l = np.linalg.norm(np.array(swc_list[node-1][2:5]) - np.array(swc_list[prev-1][2:5]))
+    #         if l >= avg_length:
+    #             num_long_sections += 1
+    #         while len(edge_list[node]) >= 2:
+    #             next_node = [n for n in edge_list[node] if n != prev][0]
+    #             prev = node
+    #             node = next_node
+    #             l += np.linalg.norm(np.array(swc_list[node-1][2:5]) - np.array(swc_list[prev-1][2:5]))
+    #             if l >= avg_length:
+    #                 num_long_sections += 1
+    #                 break
+    #         # if the length of at least two sections is greater than 2*avg_length, continue
+    #         if num_long_sections > 2:
+    #             break
+    #     # else, mark the branch for removal
+    #     if num_long_sections <= 2:
+    #         branches_to_remove.append(branch)
+    # # print(f'removing {len(branches_to_remove)} branches')
+    # for branch in branches_to_remove:
+    #     branches.remove(branch)
+    swc_list = np.array(swc_list)
+    branches = [swc_list[swc_list[:, 0] == i][0][2:6] for i in branches]
+    terminals = [swc_list[swc_list[:, 0] == i][0][2:6] for i in edge_list.keys() if len(edge_list[i]) == 1]
 
     branches = np.array(branches)
     if transpose and len(branches) > 0:
@@ -315,7 +325,6 @@ def get_critical_points(swc_list, sections, transpose=True):
     terminals = np.array(terminals)
     if transpose:
         terminals = np.concatenate((terminals[:,:3][:,::-1], terminals[:,3,None]), axis=-1)
-
 
     return branches, terminals
 
@@ -339,6 +348,39 @@ def adjust_neuron_coords(sections, branches, terminals):
     terminals[...,:3] = (terminals[...,:3] - min) * scale + np.array([10.0, 10.0, 10.0])
 
     return sections, branches, terminals, scale
+
+
+def crop_and_adjust_coords(image, swc_list):
+    # Get the bounding box from the SWC file
+    swc_list = np.array(swc_list)
+    max_coord = np.max(swc_list[:, 2:5], axis=0)
+    min_coord = np.min(swc_list[:, 2:5], axis=0)
+    # Calculate the crop size
+    crop_max = np.ceil(max_coord + 11).astype(int)  # add 10 pixels margin plus one to include the max coordinate
+    # ensure we don't exceed image dimensions
+    # remember swc coordinates are in x-y-z not slice-row-column order
+    crop_max = np.minimum(crop_max, np.array(image.shape)[::-1])
+    crop_min = np.floor(min_coord - 10).astype(int)  # subtract 10 pixels margin
+    crop_min = crop_min.clip(min=0)  # ensure we don't go below zero
+    # Crop the image
+    cropped_image = image[crop_min[2]:crop_max[2], crop_min[1]:crop_max[1], crop_min[0]:crop_max[0]]
+    # Adjust the coordinates in swc_list
+    adjusted_swc_list = swc_list.copy()
+    adjusted_swc_list[:, 2:5] -= (min_coord - 10).clip(min=0.0)  # adjust coordinates to the new origin
+
+    return cropped_image, adjusted_swc_list.tolist()
+
+
+def scale_and_adjust_coords(image, swc_list, scale, anisotropy_factor=None):
+    swc_list_corrected = np.array(swc_list).copy()
+    img_scaled = image.copy()
+    if anisotropy_factor is not None:
+        img_scaled = zoom(img_scaled, (anisotropy_factor, 1.0, 1.0))
+        swc_list_corrected[:, 4] *= anisotropy_factor
+    img_scaled = zoom(image, scale)
+    swc_list_corrected[:, 2:5] *= scale
+
+    return img_scaled, swc_list_corrected.tolist()
 
 
 if __name__ == "__main__":

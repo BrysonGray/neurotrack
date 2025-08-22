@@ -46,26 +46,34 @@ def swc_random_points(samples_per_file, swc_lists, file_names, adjust=False, rng
         rng = np.random.default_rng()
     sample_points = {}
     for fname, swc_list in zip(file_names,swc_lists):
-        sections, _ = load.parse_swc(swc_list)
-        if adjust:
-            branches, terminals = load.get_critical_points(swc_list, sections)
-            sections, branches, terminals, scale = load.adjust_neuron_coords(sections, branches, terminals)
-        rand_sections = rng.choice(list(sections.keys()), size=samples_per_file)
-        points = []
-        for j in rand_sections:
-            section_flat = sections[j].reshape((-1,4)) # type: ignore # 
-            random_point = rng.choice(np.arange(len(section_flat)))
-            random_point = section_flat[random_point]
-            # random translation vector from normal distribution about random_point
-            # translation = rng.uniform(low=0.0, high=1.0, size=(3,))*8.0 - 4.0
-            translation = rng.standard_normal(size=(3,))*2.0
-            translation = np.concatenate((translation, [0.0]))
-            random_point += translation
-            points.append(random_point)
-        points = np.array(points)
+        if not isinstance(swc_list, np.ndarray):
+            swc_list = np.array(swc_list)
         
-        sample_points[fname] = points
-    
+        # sections, _ = load.parse_swc(swc_list)
+        # rand_sections = rng.choice(list(sections.keys()), size=samples_per_file)
+        # for j in rand_sections:
+        #     section_flat = sections[j].reshape((-1,4)) # type: ignore # 
+        #     random_point = rng.choice(np.arange(len(section_flat)))
+        #     random_point = section_flat[random_point]
+
+        random_points_ = rng.choice(swc_list[:, 2:5], size=samples_per_file, replace=True)
+        translation = rng.standard_normal(size=(samples_per_file, 3)) * 2.0
+        # translation = rng.uniform(low=0.0, high=1.0, size=(3,))*8.0 - 4.0
+        # random translation vector from normal distribution about random_point
+        # translation = rng.standard_normal(size=(3,))*2.0
+        # translation = np.concatenate((translation, [0.0]))
+        random_points = random_points_ + translation # randomly shift the points
+        # some random points may be out of bounds after translation
+        max_coords = np.max(swc_list[:, 2:5], axis=0)
+        out_of_bounds_ids = np.any(random_points < 0, axis=1) | np.any(random_points > max_coords, axis=1)
+        # where random_points_ is out of bounds, use the original random_points
+        if np.any(out_of_bounds_ids):
+            random_points[out_of_bounds_ids] = random_points_[out_of_bounds_ids]
+        # points.append(random_point)
+        # points = np.array(points)
+
+        sample_points[fname] = random_points
+
     return sample_points
 
 
@@ -395,16 +403,21 @@ def collect_data(sample_points, image_dir, out_dir, name, rng=None):
     annotations = {}
     obs_id = 0
     for f in image_files:
-        points = sample_points[f.split('.')[0]]
+        points = sample_points[f.split(".")[0]]
         img_file = glob(os.path.join(os.path.join(image_dir,f), "*image.tif"))[0]
         img = tf.imread(img_file)
+        if img.max() > 1.0:
+            img = img / 255.0
+        if img.ndim == 3:
+            img = img[None]
         img = Image(img)
         branches = glob(os.path.join(os.path.join(image_dir,f), "*branches.txt"))[0]
 
         with open(branches, 'r') as f:
             branches = torch.tensor([[float(x) for x in line.strip().split(' ')] for line in f if line.strip()])
         for point in points:
-            patch, _ = img.crop(torch.tensor(point[:3]), 7, pad=True, value=0.0)
+            point[:3] = point[2::-1]
+            patch, _ = img.crop(torch.tensor(point[:3]), 17, pad=True, value=0.0)
             distances = torch.linalg.norm(branches - point[None, :3], dim=1)
             label = float((distances.min() <= 7.0).item())
             fname = f"obs_{obs_id}.pt"

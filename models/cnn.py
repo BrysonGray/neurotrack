@@ -10,6 +10,7 @@ class ConvNet(torch.nn.Module):
         k = 3
         p = (k-1)//2
         s = 2
+        self.n0 = torch.nn.InstanceNorm3d(chin, affine=True)
         self.c0 = torch.nn.Conv3d(chin,ch0,k,s,p)
         self.b0 = torch.nn.BatchNorm3d(ch0)
         self.c1 = torch.nn.Conv3d(ch0,2*ch0,k,s,p)
@@ -19,6 +20,7 @@ class ConvNet(torch.nn.Module):
         self.l0 = torch.nn.Linear(5**3*64,64)        
         self.l1 = torch.nn.Linear(64,chout)
     def forward(self,x):
+        # x = self.n0(x)
         x = self.c0(x)
         x = self.b0(x)
         x = torch.relu(x)

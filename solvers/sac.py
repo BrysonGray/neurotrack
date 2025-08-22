@@ -390,12 +390,12 @@ def train(env,
                         
                 if terminated:
                     if save_snapshots:
-                        labeled_neuron = env.img.data[3].detach().cpu() > 0.3 
-                        true_neuron = torch.linalg.norm(env.true_density.data[:3].detach().cpu(), dim=0) > 0.94
+                        labeled_neuron = env.img.data[-1].detach().cpu() > 0.3 
+                        true_neuron = torch.linalg.norm(env.true_density.data[-1].detach().cpu(), dim=0) > 0.94
                         TP = torch.sum(torch.logical_and(labeled_neuron, true_neuron))
                         tot = torch.sum(true_neuron)
                         coverages.append(TP/tot)
-                        labeled_neurons.append(env.img.data[3].detach().clone().cpu())
+                        labeled_neurons.append(env.img.data[-1].detach().clone().cpu())
                         trial_returns.append(ep_return)
                     
                     ep_returns.append(ep_return)
@@ -459,7 +459,7 @@ def train(env,
     return
 
 
-def inference(env, actor, outdir, Q_net=None, n_trials=1, show=True, save=True, sync=False):
+def inference(env, actor, outdir, Q_net=None, n_trials=1, show=True, save_paths=True, sync=False):
     """
     Perform inference using the given actor in the specified environment.
     
@@ -482,7 +482,7 @@ def inference(env, actor, outdir, Q_net=None, n_trials=1, show=True, save=True, 
     """
 
     if show:
-        fig, ax = plt.subplots(2, 3)
+        fig, ax = plt.subplots(2, 3, figsize=(15,10))
         plt.ion()
     actor.eval()
     if sync:
@@ -501,6 +501,7 @@ def inference(env, actor, outdir, Q_net=None, n_trials=1, show=True, save=True, 
     for i in tqdm(range(len(img_indices))):
         env.img_idx = (img_indices[i] - 1) % len(env.img_files) # -1 because the index is incremented when the environment resets
         env.reset()
+        # while True:
         coverages = []
         estimated_returns = []
         labeled_neurons = []
@@ -509,7 +510,6 @@ def inference(env, actor, outdir, Q_net=None, n_trials=1, show=True, save=True, 
         for trial in range(n_trials):
             estimated_return = 0
             obs = env.get_state()
-
             for t in count():
                 with torch.no_grad():
                     actor_out = actor(obs.to(DEVICE))
@@ -523,13 +523,13 @@ def inference(env, actor, outdir, Q_net=None, n_trials=1, show=True, save=True, 
                     estimated_return += q_val.cpu().item()
                 
                 if terminated:
-                    labeled_neuron = env.img.data[3].detach().cpu() > 0.3 
-                    true_neuron = torch.linalg.norm(env.true_density.data[:3].detach().cpu(), dim=0) > 0.94
+                    labeled_neuron = env.img.data[-1].detach().cpu() > 0.3 
+                    true_neuron = torch.linalg.norm(env.true_density.data[-1].detach().cpu(), dim=0) > 0.94
                     TP = torch.sum(torch.logical_and(labeled_neuron, true_neuron))
                     tot = torch.sum(true_neuron)
                     coverages.append(TP/tot)
                     estimated_returns.append(estimated_return)
-                    labeled_neurons.append(env.img.data[3].detach().clone().cpu())
+                    labeled_neurons.append(env.img.data[-1].detach().clone().cpu())
                     trial_paths.append([path.detach().cpu().numpy().tolist() for path in env.finished_paths if isinstance(path, torch.Tensor) and len(path) > 3])
                     if show:
                         try:
@@ -544,7 +544,7 @@ def inference(env, actor, outdir, Q_net=None, n_trials=1, show=True, save=True, 
                         except NameError:
                             pass
                     env.reset(move_to_next=False)
-                    break
+                    break # Move to next trial. (same seed, same image)
 
                 obs = env.get_state()
 
@@ -568,6 +568,11 @@ def inference(env, actor, outdir, Q_net=None, n_trials=1, show=True, save=True, 
                                 coverages=coverages,
                                 estimated_returns=estimated_returns,
                                 paths=np.array(paths_to_save, dtype=object))
+        
+        # if env.seed_idx == len(env.seeds) - 1:
+        #     break # Move to next image.
+        # else:
+            # env.reset() # Move to next seed
 
     return
 

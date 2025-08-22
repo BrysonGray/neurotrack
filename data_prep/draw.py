@@ -36,13 +36,15 @@ def draw_neuron_density(segments, shape, width=None, scale=1.0):
 
     if not isinstance(segments, torch.Tensor):
         segments = torch.tensor(segments)
-    if width is None and segments.shape[2] == 4: # segments include width in the last column
+    if segments.shape[2] == 4 and width is None:
         for s in segments:
-            width = ((s[0,3]+s[1,3])/2).item() / scale # convert from real coordinates to pixels
-            density.draw_line_segment(s[:,:3], width=width, channel=0)
+            w = ((s[0,3]+s[1,3])/2).item() / scale # convert from real coordinates to pixels
+            density.draw_line_segment(s[:,:3], width=w, channel=0)
     else:
-        if width is None:
-            raise ValueError("Width must be specified when segments don't include width information")
+        if width is not None:
+            w = width
+        else:
+            w = 3.0
         for s in segments:
             density.draw_line_segment(s[:,:3], width=width, channel=0)
     
@@ -100,6 +102,8 @@ def draw_section_labels(sections, shape, width=3):
     labels = Image(torch.zeros((1,)+shape))
     for i, section in sections.items():
         for segment in section:
+            if segment.shape[1] == 4:
+                width = ((segment[0,3]+segment[1,3])/2).item()
             labels.draw_line_segment(segment[:,:3], width=width, channel=0, binary=True, value=i)
     
     return labels
@@ -138,7 +142,7 @@ def draw_path(img, path, width, binary):
     return img
 
 
-def draw_neuron(segments, shape, width, noise, neuron_color=None, background_color=None, random_brightness=False, binary=False, rng=None, save_gif=False, gif_path=None, gif_axis=0):
+def draw_neuron(segments, shape, noise, width=None, rgb=True, neuron_color=None, background_color=None, random_brightness=False, binary=False, rng=None, save_gif=False, gif_path=None, gif_axis=0):
     """
     Draws a neuron image based on provided segments and parameters.
     Optionally saves a gif animating the drawing process.
@@ -149,10 +153,11 @@ def draw_neuron(segments, shape, width, noise, neuron_color=None, background_col
         List of segments where each segment is an ndarray of shape (N, 3) representing the coordinates of the neuron segments.
     shape : tuple of int
         Shape of the output image (height, width).
-    width : int
-        Width of the neuron lines to be drawn.
     noise : float
         Standard deviation of the Gaussian noise to be added to the image.
+    width : int, optional
+        Width of the neuron lines to be drawn. If width is not provided, it will be determined from the last
+        component of the segments. If it is not specified, a default value of 3.0 is used.
     neuron_color : tuple of float, optional
         RGB color of the neuron lines. Each value should be in the range [0, 1]. Default is (1.0, 1.0, 1.0).
     background_color : tuple of float, optional
@@ -187,25 +192,40 @@ def draw_neuron(segments, shape, width, noise, neuron_color=None, background_col
         if random_brightness:
             y0 = 0.5
             value = y0 + (1.0 - y0) * rng.uniform(0.0, 1.0, size=1).item()
-        w = (s[0,3] + s[1,3]) / 2 if s.shape[1] == 4 else width
+        if width is not None:
+            w = width
+        elif s.shape[1] == 4:  # segments include width in the last
+            w = (s[0,3] + s[1,3]) / 2
+        else:
+            w = 3.0
         img.draw_line_segment(s[:,:3], width=w, binary=binary, channel=0, value=value)
+
         if save_gif and idx in gif_steps:
             arr = img.data[3].cpu().numpy()
             mip = arr.max(axis=gif_axis)
             # Normalize to 0-255 uint8
             mip = ((mip - mip.min()) / (mip.ptp() + 1e-8) * 255).astype(np.uint8)
             gif_frames.append(mip)
-    if neuron_color is None:
-        neuron_color = (1.0, 1.0, 1.0)
+    if rgb:
+        if neuron_color is None:
+            neuron_color = torch.tensor([1.0, 1.0, 1.0])
+        elif not isinstance(neuron_color, torch.Tensor):
+            neuron_color = torch.tensor(neuron_color, dtype=torch.float32)
+        img.data = neuron_color[:, None, None, None] * img.data
+        if background_color is not None:
+            if not isinstance(background_color, torch.Tensor):
+                background_color = torch.tensor(background_color, dtype=torch.float32)
+            img.data = img.data + torch.ones_like(img.data) * background_color[:,None,None,None]
 
-    img_data = torch.cat((neuron_color[0]*img.data, neuron_color[1]*img.data, neuron_color[2]*img.data), dim=0)
-    if background_color is not None:
-        img_data = img_data + torch.ones_like(img_data) * background_color[:,None,None,None]
-        img_data /= img_data.amax()
-    sigma = img_data.amax() * noise
-    img_data = img_data + torch.from_numpy(rng.normal(size=img_data.shape))*sigma # add noise
-    img_data = (img_data - img_data.amin()) / (img_data.amax() - img_data.amin()) # rescale to [0,1]
-    img = Image(img_data)
+    if random_brightness:
+        max_val = rng.uniform(0.2, 1.0, size=1).item()
+    else:
+        max_val = 1.0
+    sigma = noise
+    noise = rng.standard_normal(size=img.data.shape, dtype=np.float32) * sigma
+    noise = torch.from_numpy(noise)
+    img.data += noise # add noise
+    img.data = (img.data - img.data.amin()) / (img.data.amax() - img.data.amin()) * max_val # rescale to [0, max_val]
 
     if save_gif and gif_path is not None and gif_frames:
         imageio.mimsave(gif_path, gif_frames, duration=0.05)
@@ -213,7 +233,7 @@ def draw_neuron(segments, shape, width, noise, neuron_color=None, background_col
     return img
 
 
-def neuron_from_swc(swc_list, width=3, noise=0.05, dropout=True, adjust=False, background_color=None, neuron_color=None, random_brightness=False, binary=False, rng=None):
+def neuron_from_swc(swc_list, width=3, noise=0.05, dropout=True, adjust=False, rgb=True, background_color=None, neuron_color=None, random_brightness=False, binary=False, rng=None):
     """
     Generate a neuron image from an SWC list.
     
@@ -229,6 +249,8 @@ def neuron_from_swc(swc_list, width=3, noise=0.05, dropout=True, adjust=False, b
         Whether to add random signal dropout, by default True.
     adjust : bool, optional
         Whether to adjust the SWC data, by default True.
+    rgb : bool, optional
+        Whether to generate the neuron image in RGB format, by default True.
     background_color : optional
         Background color of the neuron image, by default None.
     neuron_color : optional
@@ -279,13 +301,13 @@ def neuron_from_swc(swc_list, width=3, noise=0.05, dropout=True, adjust=False, b
     shape = shape + np.array([10, 10, 10])  # type: ignore
     shape = tuple(shape.tolist())
 
-    img = draw_neuron(segments, shape=shape, width=width, noise=noise, neuron_color=neuron_color,
+    img = draw_neuron(segments, shape=shape, width=width, noise=noise, rgb=rgb, neuron_color=neuron_color,
                       background_color=background_color, random_brightness=random_brightness,
                       binary=binary, rng=rng)
-
+    width = 3.0
     density = draw_neuron_density(segments, shape, width=width)
     section_labels = draw_section_labels(sections, shape, width=2*width)
-    mask = draw_neuron_mask(density, threshold=5.0)
+    # mask = draw_neuron_mask(density, threshold=5.0)
 
     if dropout: # add random signal dropout (subtract gaussian blobs)
         neuron_coords = torch.nonzero(section_labels.data)
@@ -299,21 +321,20 @@ def neuron_from_swc(swc_list, width=3, noise=0.05, dropout=True, adjust=False, b
             dropout_img[:, dropout_points[0], dropout_points[1], dropout_points[2]] = 1.0
             dropout_img = gaussian(dropout_img, sigma=0.5*width)
             dropout_img /= dropout_img.max()
-            img.data = img.data - dropout_img
-            img.data = torch.where(img.data < 0, 0.0, img.data)
+            img.data = img.data * (1. - dropout_img)
 
-    branch_mask = Image(torch.zeros_like(mask))
-    for point in branches:
-        branch_mask.draw_point(point[:3], radius=width/2, binary=True, value=1, channel=0)
-    # set branch_mask.data to zero where mask is zero
-    branch_mask.data = branch_mask.data * mask.data
+    # branch_mask = Image(torch.zeros_like(mask))
+    # for point in branches:
+    #     branch_mask.draw_point(point[:3], radius=width/2, binary=True, value=1, channel=0)
+    # # set branch_mask.data to zero where mask is zero
+    # branch_mask.data = branch_mask.data * mask.data
     root_key = min(sections.keys())
     seed = sections[root_key][0,0,:3].round().astype(np.uint16).tolist() # type: ignore
 
     swc_data = {"image": img.data,
                 "neuron_density": density.data,
                 "section_labels": section_labels.data,
-                "branch_mask": branch_mask.data,
+                "branches": branches,
                 "seeds": [seed],
                 "scale": scale,
                 "graph": graph}

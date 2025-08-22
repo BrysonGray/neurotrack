@@ -215,8 +215,8 @@ def get_path(start,
         step = np.array([0.0,0.0,1.0])
     q1 = start + step * step_size
     if random_width:
-        w0 = clipped_normal(width, 1.5, 1.0, 10.0, rng=rng)
-        w1 = clipped_normal(w0, 1.5, 1.0, 10.0, rng=rng)
+        w0 = clipped_normal(width, 3.0, 1.0, 30.0, rng=rng)
+        w1 = clipped_normal(w0, 3.0, 1.0, 30.0, rng=rng)
     else:
         w0 = width
         w1 = width
@@ -224,12 +224,12 @@ def get_path(start,
     q1 = np.concatenate((q1, [w1]))
     path = [start, q1]
 
-    for i in range(length):
+    while len(path) < length + 1: # length + 1 because the number of segments is one less than the number of points
         next_point = get_next_point(path[-2], path[-1], kappa=kappa, step_size=step_size, rng=rng)
         if any(next_point > boundary.max(axis=0)) or any(next_point < boundary.min(axis=0)):
             break
         if random_width:
-            w = clipped_normal(path[-1][3], 1.5, 1.0, 10.0, rng=rng)
+            w = clipped_normal(path[-1][3], 3.0, 1.0, 30.0, rng=rng)
         else:
             w = width
         next_point = np.concatenate((next_point, [w]))

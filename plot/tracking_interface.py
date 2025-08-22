@@ -33,9 +33,9 @@ def manual_step(env, step_size=2.0):
         action = input("Choose an action: ")
         if action == 'q':
             break
-        if action == 'r':
+        elif action == 'r':
             env.reset()
-        if action == 'b':
+        elif action == 'b':
             point = env.paths[env.head_id][-1]
             env.paths.append(point[None])
             env.path_labels.append(0)
@@ -53,8 +53,9 @@ def manual_step(env, step_size=2.0):
             # 1) Whole image with path overlayed,
             # 2) Cropped image with path overlayed,
             # 3) Cropped mask, true density, and path overlayed
-            img = env.img.data[:3].amax(dim=1).permute(1,2,0)
-            path = env.img.data[3].amax(dim=0)#.permute(1,0)
+            img = env.img.data[:-1].amax(dim=1).permute(1,2,0)
+            img = img.squeeze()
+            path = env.img.data[-1].amax(dim=0)#.permute(1,0)
             ax[0].imshow(img)
             ax[0].imshow(path, cmap='plasma', alpha=0.5)
             if len(env.path_labels) > 0:
@@ -65,7 +66,7 @@ def manual_step(env, step_size=2.0):
             # patch, _ = env.img.crop(env.paths[env.head_id][-1], env.radius, interp=False)
             patch = observation[0]
             patch = patch[:, env.radius]
-            ax[1].imshow(patch[:3].permute(1,2,0))
+            ax[1].imshow(patch[:-1].permute(1,2,0).squeeze())
             # ax[1].imshow(patch[3].permute(1,0), cmap='plasma', alpha=0.5)
 
             if not terminated:
@@ -99,9 +100,9 @@ def manual_step(env, step_size=2.0):
                 # mask = mask[0,env.radius]
                 # ax[2].imshow(mask, cmap='Blues')
                 ax[2].imshow(density_patch_masked, cmap='Reds', alpha=0.5)#.permute(1,0), cmap='Reds', alpha=0.5)
-                ax[2].imshow(patch[3], cmap='Greens', alpha=0.5)#.permute(1,0), cmap='Greens', alpha=0.5)
+                ax[2].imshow(patch[-1], cmap='Greens', alpha=0.5)#.permute(1,0), cmap='Greens', alpha=0.5)
             else:
-                ax[2].imshow(torch.zeros_like(patch[3]))
+                ax[2].imshow(torch.zeros_like(patch[-1]))
                 env.reset()
         # Turn off axes for all subplots
         for a in ax:

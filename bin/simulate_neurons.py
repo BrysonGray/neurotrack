@@ -32,8 +32,6 @@ def main():
     ---------
     -i, --input : str
         Path to input JSON file containing configuration parameters.
-    -h, --help : str
-        Display help string. 
     """
     
     help_string = """
@@ -58,8 +56,12 @@ def main():
         Whether to apply random signal to noise ratio to the neuron images.
     noise : float
         Amount of noise to add to the neuron images.
+    random_noise : bool, optional
+        Generate noise with a random amplitude relative to the maximum intensity value in the range [0.05, noise).
     binary : bool
         Whether to draw the neuron images as a binary mask.
+    rgb : bool
+        Whether to draw the neuron images in RGB format.
     seed : int
         Seed for the random number generator.
     sync : bool, optional
@@ -72,8 +74,10 @@ def main():
         Length of the simulated neuron trees. Required if `labels_dir` is not provided.
     stepsize : float, optional
         Step size for the simulated neuron trees. Required if `labels_dir` is not provided.
-    uniform_len : bool, optional
-        Whether to use uniform length for the simulated neuron trees. Required if `labels_dir` is not provided.
+    random_len : bool, optional
+        Whether to use random length for the simulated neuron trees. Required if `labels_dir` is not provided.
+    random_width : bool, optional
+        Whether to use random width for the simulated neuron trees. Required if `labels_dir` is not provided.
     kappa : float, optional
         Kappa parameter for the simulated neuron trees. Required if `labels_dir` is not provided.
     random_start : bool, optional
@@ -98,7 +102,9 @@ def main():
     noise = parameters["noise"]
     binary = parameters["binary"]
     seed = parameters["seed"]
+    random_noise = parameters["random_noise"] if "random_noise" in parameters else False
     sync = parameters["sync"] if "sync" in parameters else False
+    rgb = parameters["rgb"] if "rgb" in parameters else True
     rng = np.random.default_rng(seed)
     adjust=False
 
@@ -124,6 +130,8 @@ def main():
         stepsize = parameters["stepsize"]
         random_len = parameters["random_len"]
         random_width = parameters["random_width"]
+        if random_width:
+            width = None
         kappa = parameters["kappa"]
         random_start = parameters["random_start"]
         branches = parameters["branches"]
@@ -160,7 +168,7 @@ def main():
         print("done\n")
 
     print(
-        f"Drawing neuron images and saving to {out}..."
+        f"Drawing neuron images and saving to {out}...\n"
         f"    width: {width}\n"
         f"    random_contrast: {random_contrast}\n"
         f"    random_brightness: {random_brightness}\n"
@@ -184,10 +192,14 @@ def main():
             color /= np.linalg.norm(color)
             background = np.random.rand(3)
             background = background / np.linalg.norm(background) * 0.01
+        
+        if random_noise:
+            noise_ = np.random.random() * (noise - 0.05) + 0.05 # min: 0.05, max: noise
         swc_data = draw.neuron_from_swc(swc_lists[i],
                                         width=width,
-                                        noise=noise,
+                                        noise=noise_,
                                         adjust=adjust,
+                                        rgb=rgb,
                                         neuron_color=color,
                                         background_color=background,
                                         random_brightness=random_brightness,
@@ -200,7 +212,11 @@ def main():
         tf.imwrite(os.path.join(out, f"{fnames[i]}", f"{fnames[i]}_image.tif"), swc_data['image'].numpy().astype(np.float32), compression='zlib')
         tf.imwrite(os.path.join(out, f"{fnames[i]}", f"{fnames[i]}_density.tif"), swc_data['neuron_density'].numpy().astype(np.float32), compression='zlib')
         tf.imwrite(os.path.join(out, f"{fnames[i]}", f"{fnames[i]}_sections.tif"), swc_data['section_labels'].numpy().astype(np.float32), compression='zlib')
-        tf.imwrite(os.path.join(out, f"{fnames[i]}", f"{fnames[i]}_branches.tif"), swc_data['branch_mask'].numpy().astype(np.float32), compression='zlib')
+        # tf.imwrite(os.path.join(out, f"{fnames[i]}", f"{fnames[i]}_branches.tif"), swc_data['branch_mask'].numpy().astype(np.float32), compression='zlib')
+        with open(os.path.join(out, f"{fnames[i]}", f"{fnames[i]}_branches.txt"), 'w') as f:
+            for branch_point in swc_data['branches']:
+                # Convert the branch points coordinates to string and write to file
+                f.write(f"{branch_point[0]} {branch_point[1]} {branch_point[2]}\n")
         with open(os.path.join(out, f"{fnames[i]}", f"{fnames[i]}_seeds.txt"), 'w') as f:
             for seed_point in swc_data['seeds']:
                 # Convert the seed point coordinates to string and write to file

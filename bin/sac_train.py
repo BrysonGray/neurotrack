@@ -99,11 +99,12 @@ def main():
     repeat_starts = params["repeat_starts"] if "repeat_starts" in params else True
     section_masking = params["section_masking"] if "section_masking" in params else False
     patch_radius = 17
+    in_channels = 2
 
     if "classifier_weights" in params:
         classifier_path = params["classifier_weights"]
         classifier_state_dict = torch.load(classifier_path)#, weights_only=True)
-        classifier = ResNet3D(ResidualBlock3D, [3, 4, 6, 3], num_classes=1)
+        classifier = ResNet3D(ResidualBlock3D, [3, 4, 6, 3], in_channels=in_channels-1, num_classes=1)
         classifier = classifier.to(device=DEVICE, dtype=dtype)
         classifier.load_state_dict(classifier_state_dict)
         classifier.eval()
@@ -122,7 +123,6 @@ def main():
                     section_masking=section_masking,
                     classifier=classifier)
     
-    in_channels = 4
     input_size = 2*patch_radius+1
     init_temperature = 0.005
     actor = ConvNet(chin=in_channels, chout=4)
@@ -132,9 +132,9 @@ def main():
     Q1 = Q1.to(device=DEVICE,dtype=dtype)
     Q2 = ConvNet(chin=in_channels+3,chout=1)
     Q2 = Q2.to(device=DEVICE,dtype=dtype)
-    Q1_target = ConvNet(chin=7,chout=1)
+    Q1_target = ConvNet(chin=in_channels+3,chout=1)
     Q1_target = Q1_target.to(device=DEVICE,dtype=dtype)
-    Q2_target = ConvNet(chin=7,chout=1)
+    Q2_target = ConvNet(chin=in_channels+3,chout=1)
     Q2_target = Q2_target.to(device=DEVICE,dtype=dtype)
 
     if "sac_weights" in params:

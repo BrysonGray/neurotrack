@@ -33,6 +33,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('-s', '--source', type=str, help='Source directory containing labels as csv files and input images folder (observations).')
     parser.add_argument('-o','--out', type=str, help="Path to output directory.")
+    parser.add_argument('-c', '--channels', type=int, default=3, help='Number of input channels in the images.')
     parser.add_argument('-l', '--learning_rate', type=float, default=0.001, help='Optimizer learning rate.')
     parser.add_argument('-N', '--epochs', type=int, default=15, help='Number of training epochs.')
     parser.add_argument('-w', '--weights', type=str, default=None, help='pretrained model weights')
@@ -43,6 +44,7 @@ def main():
     lr = args.learning_rate
     epochs = args.epochs
     weights = args.weights
+    channels = args.channels
 
     source_list = os.listdir(source)
     training_labels_file = [f for f in source_list if 'training_labels' in f][0]
@@ -78,7 +80,7 @@ def main():
         os.makedirs(out_dir, exist_ok=True)
 
     # classifier = models.ResNet2D(models.ResidualBlock2D, [3, 4, 6, 3], in_channels=36, num_classes=1)
-    classifier = models.ResNet3D(models.ResidualBlock3D, [3, 4, 6, 3], in_channels=3, num_classes=1)
+    classifier = models.ResNet3D(models.ResidualBlock3D, [3, 4, 6, 3], in_channels=channels, num_classes=1)
     classifier = classifier.to(device=DEVICE, dtype=dtype)
 
     if weights is not None:

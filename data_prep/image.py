@@ -20,7 +20,7 @@ import warnings
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-def draw_line_segment(segment, width, binary=False, value=1.0):
+def draw_line_segment_old(segment, width, binary=False, value=1.0):
     """ Generate an image of a line segment with width.
 
     Parameters
@@ -68,6 +68,62 @@ def draw_line_segment(segment, width, binary=False, value=1.0):
             sigma = width/2
             X = torch.tensor(gaussian(X, sigma=sigma))
             X = X / torch.amax(X) * value
+    
+    return X.to(device=segment.device)
+
+
+def draw_line_segment(segment, width, binary=False, value=1.0):
+    """ Generate an image of a line segment with width.
+
+    Parameters
+    ----------
+    segment: torch.Tensor
+        array with two three dimensional points (shape: 2x3)
+    width: scalar
+        segment width
+    binary: bool
+        Make a line mask rather than a blurred idealized line.
+    value: float
+        If binary is set to True, set the line brightness to this value. Default is 1.0.
+    
+    Returns
+    -------
+    X : torch.Tensor
+        A patch with the new line segment starting at its center.
+    """
+    start = segment[0]
+    segment = segment[1] - segment[0]
+    if isinstance(segment, np.ndarray):
+        segment = torch.from_numpy(segment)
+    # segment_length = torch.sqrt(torch.sum(segment**2))
+
+    # the patch should contain both line end points plus some blur
+    # L = int(torch.ceil(segment_length)) + 1 # The radius of the patch is the whole line length since the line starts at patch center.
+    L = int(max(abs(segment).tolist()))
+    overhang = int(np.ceil(2*width)) # include space beyond the end of the line
+    patch_radius = L + overhang
+
+    patch_size = 2*patch_radius + 1
+    x = [torch.arange(patch_size),]*3
+    X = torch.stack(torch.meshgrid(*x, indexing='ij'), -1)
+    translation = (torch.tensor([patch_radius,]*3) + (start % 1)) # add start % 1 because the center of the patch will be rounded to the nearest pixel
+    X = X - translation
+    seglen_sq = torch.dot(segment, segment)
+    P = torch.outer(segment, segment) / seglen_sq
+    P_ = (torch.eye(3) - P)
+    P_X = torch.matmul(P_[None,None,None], X[...,None]).squeeze()
+    dist = torch.linalg.norm(P_X, dim=-1)
+    segTb = torch.matmul(segment[None,None,None,None], X[...,None]).squeeze()
+    dist_to_end = torch.linalg.norm(X - segment, dim=-1)
+    dist_to_start = torch.linalg.norm(X, dim=-1)
+    dist = torch.where(segTb > seglen_sq, dist_to_end, dist)
+    dist = torch.where(segTb < 0, dist_to_start, dist)
+    
+    width = np.maximum(width, 1.0)
+    if binary:
+        X = dist < width / 2
+    else:
+        X = torch.exp(-0.5 * (dist / (width / 2.35))**2) # FWHM = 2.35 * sigma -> sigma = FWHM / 2.35
     
     return X.to(device=segment.device)
 
@@ -190,7 +246,12 @@ class Image:
                 Length that patch overlaps with image boundaries on each end of each dimension.
         """
         i,j,k = [int(round(x.item())) for x in center]
-        shape = self.data.shape[1:]
+        if self.data.ndim == 4:
+            shape = self.data.shape[1:]
+        elif self.data.ndim == 3:
+            shape = self.data.shape
+        else:
+            raise ValueError(f"Image data must be 3D or 4D, but got {self.data.ndim}D data.")
         if any([i < 0, j < 0, k < 0, i >= shape[0], j >= shape[1], k >= shape[2]]):
             warnings.warn(f"Center {center} is out of bounds for image shape {shape}. Translating to the nearest valid index.")
             i = np.clip(i, 0, shape[0]-1)
@@ -229,14 +290,16 @@ class Image:
 
         if pad:
             patch_size = 2*radius+1
-            patch_ = torch.ones((self.data.shape[0], patch_size, patch_size, patch_size), device=self.data.device) * value
+            if self.data.dtype == torch.uint8 and not isinstance(value, int):
+                value = int(value)
+            patch_ = torch.ones((self.data.shape[0], patch_size, patch_size, patch_size), device=self.data.device, dtype=self.data.dtype) * value
             patch_[:, zpad_top:patch_size - zpad_btm, ypad_front:patch_size - ypad_back, xpad_left:patch_size - xpad_right] = patch
             patch = patch_
 
         return patch, padding
     
 
-    def draw_line_segment(self, segment, width, channel=3, value=1.0, binary=False):
+    def draw_line_segment(self, segment, width, channel=-1, value=1.0, binary=False):
 
         """ Add an image patch with the new line segment to the existing image in the specified channel.
 
@@ -263,7 +326,9 @@ class Image:
         
         # create the patch with the new line segment starting at its center.
         X = draw_line_segment(segment, width, binary, value)
-
+        if self.data.dtype == torch.uint8:
+            X = X * 255.0  # scale to uint8 if necessary
+            X = X.to(dtype=torch.uint8)
         # get the patch centered on the new segment start point from the current image.
         # center = torch.round(segment[0]).to(torch.int)
         center = segment[0]
@@ -331,6 +396,10 @@ class Image:
             X = (X / torch.amax(X)) * value
         else: # mode == "mask"
             X = torch.ones((patch_size,patch_size,patch_size))*value
+        
+        if self.data.dtype == torch.uint8:
+            X = X * 255.0
+            X = X.to(dtype=torch.uint8)
 
         patch, padding = self.crop(point, radius=c, interp=False, pad=False)
         new_patch = X[padding[0]:X.shape[0]-padding[1], padding[2]:X.shape[1]-padding[3], padding[4]:X.shape[2]-padding[5]]

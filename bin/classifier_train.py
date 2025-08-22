@@ -59,7 +59,6 @@ def main():
                                 but none was found")
     img_dir = [d for d in source_list if 'observations' in d][0]
     img_dir = os.path.join(source, img_dir)
-    # img_dir = os.path.join(source, 'observations')
     if not os.path.exists(img_dir):
         raise FileNotFoundError("Source directory must contain a folder named `observations`,\
                                 but none was found.")
@@ -72,9 +71,6 @@ def main():
 
     training_dataloader = branch_classifier.init_dataloader(training_data, batchsize=64)
     test_dataloader = branch_classifier.init_dataloader(test_data, batchsize=64)
-    # batchsize=50
-    # training_dataloader = DataLoader(training_data, batch_size=batchsize)
-    # test_dataloader = DataLoader(test_data, batch_size=batchsize)
     
     if not os.path.exists(out_dir):
         os.makedirs(out_dir, exist_ok=True)

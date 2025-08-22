@@ -148,20 +148,8 @@ class Environment():
         self.img_idx = 0
         self.__load_data(self.img_files[self.img_idx])
 
-        # self.seed_idx = 0
-        # seed = torch.Tensor(self.seeds[self.seed_idx])
-        # self.r = 0.0 # radius around center to randomly place starting points
-        # offset = torch.randn((1, 3))
-        # offset /= torch.sum(offset**2, dim=1)**0.5
-        # r = self.r * torch.rand(1)
-        # seed = seed[None] + r * offset
-
-        # self.paths = [seed] # a list initialized with 1 path, a 1 x 3 tensor.
         self.paths = list(torch.tensor(self.seeds).unsqueeze(1))
-        # self.roots = [seed[0]] # a list of path start points.
         self.roots = list(torch.tensor(self.seeds))
-        # i,j,k = [int(round(x.item())) for x in seed[0]]
-        # self.path_labels = [int(self.section_labels.data[0, i, j, k].item())] if hasattr(self, 'section_labels') else [0]
         if hasattr(self, 'section_labels'):
             self.path_labels = [int(self.section_labels.data[0,
                                                             int(round(r[0].item())),
@@ -394,9 +382,6 @@ class Environment():
             # check for max branches
             if len(self.finished_paths) > self.max_paths:
                 terminated = True
-            # elif len(self.paths) == 0:
-            #     terminated = True
-            # otherwise, move to the next path
 
             elif training and self.repeat_starts and len(self.finished_paths[-1]) > 4:
                 # if the path took more than three steps, then add a new path at the same root.
@@ -501,32 +486,12 @@ class Environment():
         """
         
         if move_to_next:
-            # # reset the agent to the next image or seed and reset the path.
-            # self.seed_idx += 1
-            # self.seed_idx = self.seed_idx % len(self.seeds) # type: ignore
-            # if self.seed_idx == 0:
-            #     self.img_idx += 1
-            #     self.img_idx = self.img_idx % len(self.img_files)
-
             self.img_idx += 1
             self.img_idx = self.img_idx % len(self.img_files)
-
             self.__load_data(self.img_files[self.img_idx])
 
-        # seed = torch.tensor(self.seeds[self.seed_idx]) # type: ignore
-        # self.r = 0.0 # radius around center to randomly place starting points
-        # offset = torch.randn((1, 3))
-        # offset /= torch.sum(offset**2, dim=1)**0.5
-        # r = self.r * torch.rand(1)
-        # seed = seed[None] + r * offset
-
-        # self.paths = [seed] # a list initialized with 1 path, a 1 x 3 tensor.
         self.paths = list(torch.tensor(self.seeds).unsqueeze(1))
-        # self.roots = [seed[0]] # a list of path start points.
         self.roots = list(torch.tensor(self.seeds))
-        # i,j,k = [int(round(x.item())) for x in seed[0]]
-        # i,j,k = [int(round(x.item())) for x in self.roots[0]]
-        # self.path_labels = [int(self.section_labels.data[0, i, j, k].item())] if hasattr(self, 'section_labels') else [0] # a list with the current labels for each path.
         if hasattr(self, 'section_labels'):
             self.path_labels = [int(self.section_labels.data[0,
                                                             int(round(r[0].item())),

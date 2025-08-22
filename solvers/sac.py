@@ -118,7 +118,6 @@ def update_Q(actor, Q1, Q1_target, Q2, Q2_target,
         logprobs = direction_dist.log_prob(next_directions)
         next_directions = next_directions.to(DEVICE)
         logprobs = logprobs.to(DEVICE)
-        # next_directions = torch.cat((torch.zeros(next_directions.shape[0],1, device=DEVICE), next_directions), dim=1) # for paths constrained to a 2d slice
         # get target q-values
         next_states = torch.cat((next_obs, torch.ones((next_obs.shape[0], 1, next_obs.shape[2], next_obs.shape[3], next_obs.shape[4]), 
                                             device=DEVICE)*next_directions[:,:,None,None,None]), dim=1)
@@ -439,14 +438,12 @@ def train(env,
             if not os.path.exists(paths_dir):
                 os.makedirs(paths_dir)
 
-            # to_save = {"labeled_neuron": labeled_neuron, "true_neuron": env.true_density.data[0].detach().clone().cpu(), "coverage": coverage, "return": best_return}
-            # torch.save(to_save, os.path.join(paths_dir, f"ep_snapshot_{ep}.pt"))
             np.savez_compressed(os.path.join(paths_dir, f"ep_snapshot_{ep}.npz"),
                     name=env.img_files[env.img_idx].split('/')[-1],
                     labeled_neuron=labeled_neuron.numpy(),
                     coverage=np.float32(coverage),
                     best_return=best_return)
-                    # paths=np.array(paths_to_save, dtype=object),
+            
         # save model after at least 500 steps 
         if steps_done // 500 > last_save:
             model_dicts = {"policy_state_dict": actor.state_dict(),
@@ -501,7 +498,6 @@ def inference(env, actor, outdir, Q_net=None, n_trials=1, show=True, save_paths=
     for i in tqdm(range(len(img_indices))):
         env.img_idx = (img_indices[i] - 1) % len(env.img_files) # -1 because the index is incremented when the environment resets
         env.reset()
-        # while True:
         coverages = []
         estimated_returns = []
         labeled_neurons = []
@@ -548,7 +544,6 @@ def inference(env, actor, outdir, Q_net=None, n_trials=1, show=True, save_paths=
 
                 obs = env.get_state()
 
-        # value, index = torch.max(torch.stack(estimated_returns), dim=0)
         value = np.max(estimated_returns)
         index = np.argmax(estimated_returns)
         estimated_return = value.item()
@@ -568,11 +563,6 @@ def inference(env, actor, outdir, Q_net=None, n_trials=1, show=True, save_paths=
                                 coverages=coverages,
                                 estimated_returns=estimated_returns,
                                 paths=np.array(paths_to_save, dtype=object))
-        
-        # if env.seed_idx == len(env.seeds) - 1:
-        #     break # Move to next image.
-        # else:
-            # env.reset() # Move to next seed
 
     return
 

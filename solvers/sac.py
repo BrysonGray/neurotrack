@@ -562,7 +562,7 @@ def inference(env, actor, outdir, Q_net=None, n_trials=1, show=True, save_paths=
         labeled_neuron_np = labeled_neuron.numpy()
 
         # Using numpy's compressed format
-        if save:
+        if save_paths:
             np.savez_compressed(os.path.join(outdir, f"{name}_{date}_inference.npz"),
                                 labeled_neuron=labeled_neuron_np,
                                 coverages=coverages,

@@ -5,6 +5,7 @@ to perform tractography. The main components include functions for sampling from
 updating the Q-networks and actor, performing target network updates, and training the agent.
 """
 
+import csv
 from datetime import datetime
 from itertools import count
 import matplotlib.pyplot as plt
@@ -12,6 +13,7 @@ import numpy as np
 import os
 from pathlib import Path
 import re
+import select
 import sys
 import torch
 from tqdm import tqdm
@@ -20,8 +22,9 @@ script_path = Path(os.path.abspath(__file__))
 parent_dir = script_path.parent.parent
 sys.path.append(str(parent_dir))
 from memory.buffer import ReplayBuffer, PrioritizedReplayBuffer
-from plot.show_state import show_state
-import csv
+from plot.tracking_interface import show_state
+import ipywidgets as widgets
+from IPython.display import display
 
 DEVICE = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 dtype = torch.float32
@@ -406,7 +409,7 @@ def train(env,
                         try:
                             shell = get_ipython().__class__.__name__ # type: ignore
                             if shell:
-                                show_state(env, fig, returns=ep_returns, rewards=ep_rewards, policy_loss=policy_loss)
+                                show_state(env, fig) #, returns=ep_returns, rewards=ep_rewards, policy_loss=policy_loss)
                                 print(f"num branches: {len(env.finished_paths)}")
                         except NameError:
                             csv_file_path = os.path.join(outdir, f"{name}_{date}_log.csv")
@@ -443,12 +446,21 @@ def train(env,
                     labeled_neuron=labeled_neuron.numpy(),
                     coverage=np.float32(coverage),
                     best_return=best_return)
-            
         # save model after at least 500 steps 
         if steps_done // 500 > last_save:
-            model_dicts = {"policy_state_dict": actor.state_dict(),
-                        "Q1_state_dict": Q1_target.state_dict(),
-                        "Q2_state_dict": Q2_target.state_dict(),}
+            model_dicts = {
+            "policy_state_dict": actor.state_dict(),
+            "Q1_state_dict": Q1.state_dict(),
+            "Q2_state_dict": Q2.state_dict(),
+            "Q1_target_state_dict": Q1_target.state_dict(),
+            "Q2_target_state_dict": Q2_target.state_dict(),
+            "actor_optimizer_state_dict": actor_optimizer.state_dict(),
+            "Q1_optimizer_state_dict": Q1_optimizer.state_dict(),
+            "Q2_optimizer_state_dict": Q2_optimizer.state_dict(),
+            "log_alpha": log_alpha,
+            "log_alpha_optimizer_state_dict": log_alpha_optimizer.state_dict(),
+            "steps_done": steps_done
+            }
             torch.save(model_dicts, os.path.join(outdir, f"model_state_dicts_{name}_{date}.pt"))
             last_save = steps_done // 500
         env.reset()
@@ -456,7 +468,7 @@ def train(env,
     return
 
 
-def inference(env, actor, outdir, Q_net=None, n_trials=1, show=True, save_paths=True, sync=False):
+def inference(env, actor, outdir, Q_net=None, n_trials=1, show=True, show_live=True, save_paths=False, sync=False):
     """
     Perform inference using the given actor in the specified environment.
     
@@ -488,7 +500,7 @@ def inference(env, actor, outdir, Q_net=None, n_trials=1, show=True, save_paths=
         processed_image_names = [re.split(r'_\d\d-\d\d-\d\d_inference.npz', f)[0] for f in os.listdir(outdir) if f.endswith('.npz')]
         img_indices = [i for i, f in enumerate(env.img_files) if f.split('/')[-1] not in processed_image_names]
     else:
-        img_indices = [i for i in range(len(env.img_files))]
+        img_indices = [i for i in range(env.img_idx, len(env.img_files))]
 
     if n_trials < 1:
         raise ValueError("n_trials must be at least 1")
@@ -502,10 +514,11 @@ def inference(env, actor, outdir, Q_net=None, n_trials=1, show=True, save_paths=
         estimated_returns = []
         labeled_neurons = []
         trial_paths = []
-
+        # Begin trials. Loop through n_trials.
         for trial in range(n_trials):
             estimated_return = 0
             obs = env.get_state()
+            # Begin episode. Loop through steps.
             for t in count():
                 with torch.no_grad():
                     actor_out = actor(obs.to(DEVICE))
@@ -517,7 +530,16 @@ def inference(env, actor, outdir, Q_net=None, n_trials=1, show=True, save_paths=
                     current_state = torch.cat((obs.to(DEVICE), torch.ones((obs.shape[0], 1, obs.shape[2], obs.shape[3], obs.shape[4]),device=DEVICE)*action[None,:,None,None,None].to(DEVICE)), dim=1)
                     q_val = Q_net(current_state)[:,0]
                     estimated_return += q_val.cpu().item()
-                
+
+                # Show state after every step
+                if show_live and show:
+                    try:
+                        shell = get_ipython().__class__.__name__  # type: ignore
+                        if shell:
+                            show_state(env, fig, live=True, reward=reward.cpu().item())
+                    except NameError:
+                        pass
+
                 if terminated:
                     labeled_neuron = env.img.data[-1].detach().cpu() > 0.3 
                     true_neuron = torch.linalg.norm(env.true_density.data[-1].detach().cpu(), dim=0) > 0.94
@@ -531,12 +553,17 @@ def inference(env, actor, outdir, Q_net=None, n_trials=1, show=True, save_paths=
                         try:
                             shell = get_ipython().__class__.__name__ # type: ignore
                             if shell:
+                                # Show final state and episode info, then wait for user input
                                 show_state(env, fig)
                                 print(f"num branches: {len(env.finished_paths)}")
                                 print(f"num long paths: {len(trial_paths[-1])}")
                                 if Q_net is not None:
                                     print(f"estimated return: {estimated_return:.2f}")
                                 print(f"coverage: {coverages[-1]:.2f}")
+                                try:
+                                    input("Press Enter to continue to the next episode...")
+                                except EOFError:
+                                    pass
                         except NameError:
                             pass
                     env.reset(move_to_next=False)

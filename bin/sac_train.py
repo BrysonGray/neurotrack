@@ -143,16 +143,50 @@ def main():
         actor.load_state_dict(state_dicts["policy_state_dict"])
         Q1.load_state_dict(state_dicts["Q1_state_dict"])
         Q2.load_state_dict(state_dicts["Q2_state_dict"])
+        
+        # Load target networks if available
+        if "Q1_target_state_dict" in state_dicts:
+            Q1_target.load_state_dict(state_dicts["Q1_target_state_dict"])
+        else:
+            Q1_target.load_state_dict(Q1.state_dict())
+            
+        if "Q2_target_state_dict" in state_dicts:
+            Q2_target.load_state_dict(state_dicts["Q2_target_state_dict"])
+        else:
+            Q2_target.load_state_dict(Q2.state_dict())
+            
+        # Load log_alpha if available
+        if "log_alpha" in state_dicts:
+            log_alpha = state_dicts["log_alpha"]
+            log_alpha.requires_grad = True
+        else:
+            log_alpha = torch.log(torch.tensor(init_temperature).to(DEVICE))
+            log_alpha.requires_grad = True
+    else:
+        Q1_target.load_state_dict(Q1.state_dict())
+        Q2_target.load_state_dict(Q2.state_dict())
+        log_alpha = torch.log(torch.tensor(init_temperature).to(DEVICE))
+        log_alpha.requires_grad = True
 
-    Q1_target.load_state_dict(Q1.state_dict())
-    Q2_target.load_state_dict(Q2.state_dict())
-
-    log_alpha = torch.log(torch.tensor(init_temperature).to(DEVICE))
-    log_alpha.requires_grad = True
+    # Initialize optimizers
     Q1_optimizer = AdamW(Q1.parameters(), lr=lr)
     Q2_optimizer = AdamW(Q2.parameters(), lr=lr)
     actor_optimizer = AdamW(actor.parameters(), lr=lr)
     log_alpha_optimizer = Adam([log_alpha], lr=lr)
+
+    # Load optimizer states if available
+    if "sac_weights" in params:
+        if "Q1_optimizer_state_dict" in state_dicts:
+            Q1_optimizer.load_state_dict(state_dicts["Q1_optimizer_state_dict"])
+            
+        if "Q2_optimizer_state_dict" in state_dicts:
+            Q2_optimizer.load_state_dict(state_dicts["Q2_optimizer_state_dict"])
+            
+        if "actor_optimizer_state_dict" in state_dicts:
+            actor_optimizer.load_state_dict(state_dicts["actor_optimizer_state_dict"])
+            
+        if "log_alpha_optimizer_state_dict" in state_dicts:
+            log_alpha_optimizer.load_state_dict(state_dicts["log_alpha_optimizer_state_dict"])
 
     memory = PrioritizedReplayBuffer(100000, obs_shape=(in_channels,input_size,input_size,input_size), action_shape=(3,), alpha=0.8)
 

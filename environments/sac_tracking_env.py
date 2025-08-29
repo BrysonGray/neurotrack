@@ -234,23 +234,21 @@ class Environment():
         with open(seeds, 'r') as f:
             self.seeds = [[int(x) for x in line.strip().split(' ')] for line in f if line.strip()]
         section_labels_file = glob(os.path.join(path, "*sections.tif"))
-        if section_labels_file:
+        if section_labels_file and self.section_masking:
             section_labels_file = section_labels_file[0]
             section_labels = tf.imread(section_labels_file)
             self.section_labels = Image(torch.from_numpy(section_labels))
-        else:
-            if self.section_masking:
-                raise FileNotFoundError(f"Section masking requires section labels but no file ending in 'section.tif' found in {path}")
+        elif self.section_masking:
+            raise FileNotFoundError(f"Section masking requires section labels but no file ending in 'section.tif' found in {path}")
         graph_file = glob(os.path.join(path, '*section_graph.json'))
-        if graph_file:
+        if graph_file and self.section_masking:
             graph_file = graph_file[0]
             with open(graph_file, 'r') as f:
                 graph = json.load(f)
                 # Convert all keys from string to int
                 self.graph = {int(k): v for k, v in graph.items()}
-        else:
-            if self.section_masking:
-                raise FileNotFoundError(f"Section masking requires a section graph but no file ending in 'section_graph.json' found in {path}")
+        elif self.section_masking:
+            raise FileNotFoundError(f"Section masking requires a section graph but no file ending in 'section_graph.json' found in {path}")
     
 
     def get_state(self, terminate=False):
@@ -338,6 +336,35 @@ class Environment():
             raise NameError(f"category: {category} was not recognized.")
 
         return torch.tensor([reward], dtype=torch.float32)
+    
+
+    def apply_section_mask():
+        """
+        Applies a section mask to the current patch based on section labels and updates the masked density patch.
+
+        Returns
+        -------
+        None
+            This function modifies internal state and does not return a value.
+        """
+        labels_patch, _ = self.section_labels.crop(center, patch_radius, interp=False, pad=False)
+        end_point = [x//2 + v for x,v in zip(labels_patch.shape[1:], segment_vec)]
+        new_label_idx = (0, int(round(end_point[0].item())), int(round(end_point[1].item())), int(round(end_point[2].item())))
+        new_label = int(labels_patch[new_label_idx].item())
+        current_label = self.path_labels[self.head_id]
+
+        if current_label != 0:
+            # Pre-compute the section IDs
+            prev_children = self.prev_children[self.head_id]
+            graph_current = self.graph[current_label]
+            section_ids = [current_label] + [x for x in graph_current if x not in prev_children]
+            
+            # Create mask using vectorized operations
+            section_mask = torch.zeros_like(density_patch, dtype=torch.bool)
+            for id in section_ids:
+                section_mask |= (labels_patch == id)
+            
+            true_patch_masked = density_patch * section_mask.float()
 
 
     def step(self, action, verbose=False, training=True):
@@ -402,7 +429,7 @@ class Environment():
             self.paths[self.head_id] = torch.cat((self.paths[self.head_id], new_position[None]))
             # draw the segment on the state input image
             segment = self.paths[self.head_id][-2:, :3]
-            old_patch, new_patch = self.img.draw_line_segment(segment, width=self.step_width, channel=-1, binary=False)
+            old_patch, new_patch = self.img.draw_line_segment(segment, width=self.step_width, channel=-1, mask=False)
             if self.img.data.dtype == torch.uint8:
                 old_patch = old_patch / torch.tensor(255.0, dtype=torch.float32)
                 new_patch = new_patch / torch.tensor(255.0, dtype=torch.float32)
@@ -460,13 +487,13 @@ class Environment():
             #     out = self.classifier(observation[:, :-1].to(device=DEVICE))
             #     out = torch.sigmoid(out.squeeze())
             #     if out > 0.5: # create branch
-            if training:
-                distances = torch.linalg.norm(torch.stack(self.roots) - new_position, dim=1)
-                if not torch.any(distances < 7.0):
-                    self.paths.append(new_position[None])
-                    self.path_labels.append(0)
-                    self.prev_children.append(self.prev_children[self.head_id])
-                    self.roots.append(new_position)
+            # if training:
+            #     distances = torch.linalg.norm(torch.stack(self.roots) - new_position, dim=1)
+            #     if not torch.any(distances < 7.0):
+            #         self.paths.append(new_position[None])
+            #         self.path_labels.append(0)
+            #         self.prev_children.append(self.prev_children[self.head_id])
+            #         self.roots.append(new_position)
 
         return observation, reward, terminated
 

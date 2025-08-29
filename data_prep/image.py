@@ -72,7 +72,7 @@ def draw_line_segment_old(segment, width, binary=False, value=1.0):
     return X.to(device=segment.device)
 
 
-def draw_line_segment(segment, width, binary=False, value=1.0):
+def draw_line_segment(segment, width, mask=False, value=1):
     """ Generate an image of a line segment with width.
 
     Parameters
@@ -83,8 +83,8 @@ def draw_line_segment(segment, width, binary=False, value=1.0):
         segment width
     binary: bool
         Make a line mask rather than a blurred idealized line.
-    value: float
-        If binary is set to True, set the line brightness to this value. Default is 1.0.
+    value: int
+        If binary is set to True, set the line brightness to this value. Default is 1.
     
     Returns
     -------
@@ -120,8 +120,9 @@ def draw_line_segment(segment, width, binary=False, value=1.0):
     dist = torch.where(segTb < 0, dist_to_start, dist)
     
     width = np.maximum(width, 1.0)
-    if binary:
+    if mask:
         X = dist < width / 2
+        X = X.to(dtype=torch.int16) * value
     else:
         X = torch.exp(-0.5 * (dist / (width / 2.35))**2) # FWHM = 2.35 * sigma -> sigma = FWHM / 2.35
     
@@ -299,7 +300,7 @@ class Image:
         return patch, padding
     
 
-    def draw_line_segment(self, segment, width, channel=-1, value=1.0, binary=False):
+    def draw_line_segment(self, segment, width, channel=-1, value=1, mask=False):
 
         """ Add an image patch with the new line segment to the existing image in the specified channel.
 
@@ -325,7 +326,7 @@ class Image:
         """
         
         # create the patch with the new line segment starting at its center.
-        X = draw_line_segment(segment, width, binary, value)
+        X = draw_line_segment(segment, width, mask, value)
         if self.data.dtype == torch.uint8:
             X = X * 255.0  # scale to uint8 if necessary
             X = X.to(dtype=torch.uint8)
@@ -339,7 +340,7 @@ class Image:
         X = X[padding[0]:X.shape[0]-padding[1], padding[2]:X.shape[1]-padding[3], padding[4]:X.shape[2]-padding[5]]
 
         # add segment to patch
-        if binary:
+        if mask:
             # set the new patch to the minimum values between arrays X excluding zeros.
             patch[channel] = torch.where(X*patch[channel] > 0, torch.minimum(X,patch[channel]), torch.maximum(X,patch[channel]))
         else:

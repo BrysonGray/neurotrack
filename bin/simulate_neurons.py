@@ -180,9 +180,7 @@ def main():
     
     for i in tqdm(range(len(swc_lists))):
 
-        if os.path.exists(os.path.join(out, f"{fnames[i]}")):
-            continue
-        else:
+        if not os.path.exists(os.path.join(out, f"{fnames[i]}")):
             os.makedirs(os.path.join(out, f"{fnames[i]}"), exist_ok=True)
             
         color = np.array([1.0, 1.0, 1.0])
@@ -195,6 +193,8 @@ def main():
         
         if random_noise:
             noise_ = np.random.random() * (noise - 0.05) + 0.05 # min: 0.05, max: noise
+        else:
+            noise_ = noise
         swc_data = draw.neuron_from_swc(swc_lists[i],
                                         width=width,
                                         noise=noise_,

@@ -104,7 +104,7 @@ def draw_section_labels(sections, shape, width=3):
         for segment in section:
             if segment.shape[1] == 4:
                 width = ((segment[0,3]+segment[1,3])/2).item()
-            labels.draw_line_segment(segment[:,:3], width=width, channel=0, binary=True, value=i)
+            labels.draw_line_segment(segment[:,:3], width=width, channel=0, mask=True, value=i)
     
     return labels
 
@@ -137,7 +137,7 @@ def draw_path(img, path, width, binary):
 
     segments = torch.stack((path[:-1],path[1:]), dim=1)
     for s in segments:
-        img.draw_line_segment(s[:,:3], width=width, binary=binary, channel=0)
+        img.draw_line_segment(s[:,:3], width=width, mask=binary, channel=0)
 
     return img
 
@@ -184,7 +184,7 @@ def draw_neuron(segments, shape, noise, width=None, rgb=True, neuron_color=None,
         rng = np.random.default_rng()
 
     img = Image(torch.zeros((1,)+shape))
-    value =  1.0
+    value =  1
     n_segments = len(segments)
     gif_frames = []
     gif_steps = set(np.linspace(0, n_segments-1, 100, dtype=int)) if save_gif else set()
@@ -198,7 +198,7 @@ def draw_neuron(segments, shape, noise, width=None, rgb=True, neuron_color=None,
             w = (s[0,3] + s[1,3]) / 2
         else:
             w = 3.0
-        img.draw_line_segment(s[:,:3], width=w, binary=binary, channel=0, value=value)
+        img.draw_line_segment(s[:,:3], width=w, mask=binary, channel=0, value=value)
 
         if save_gif and idx in gif_steps:
             arr = img.data[3].cpu().numpy()

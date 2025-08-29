@@ -113,47 +113,154 @@ def manual_step(env, step_size=2.0):
         display.display(plt.gcf())
 
 
-def show_state(env, z=None, finished=False, path_id=0, t=-1):
-    
-    if finished:
-        paths = env.finished_paths
+def show_state(env, fig, live=False, ep_return=None, reward=None, policy_loss=None):
+    """Show a single max-intensity projection (over first spatial axis) of the whole neuron.
+
+    - Base image: input neuron image (grayscale)
+    - Overlay: current path (plasma colormap, semi-transparent)
+    Also draws a red rectangle centered at the current position with
+    width and height equal to env.radius (in pixels).
+    If live=True, also show a second subplot to the right with the current
+    cropped state (env.get_state()) as an overlay: image (grayscale) + path (plasma).
+    """
+    from matplotlib import patches  # local import to avoid global dependency
+
+    print(f"image: {env.img_files[env.img_idx].split('/')[-1]}")
+    display.clear_output(wait=True)
+
+    # Reset view; one or more axes depending on `live`
+    fig.clf()
+    if live:
+        # GridSpec: Left spans both rows, right has two stacked axes.
+        # Left is wider than each right axis; the midline aligns with the split between right-top and right-bottom.
+        gs = fig.add_gridspec(2, 2, width_ratios=[2.0, 1.0], wspace=0.05, hspace=0.05)
+        ax_left = fig.add_subplot(gs[:, 0])
+        ax_right = fig.add_subplot(gs[0, 1])
+        ax_right_bottom = fig.add_subplot(gs[1, 1])
     else:
-        paths = env.paths
-        path_id = env.head_id
+        ax_left = fig.add_subplot(1, 1, 1)
 
-    state = env.get_state()[0]
-    true_density_patch, _ = env.true_density.crop(paths[path_id][t], env.radius, pad=True)
-    mask = Image(env.mask)
-    mask_patch, _ = mask.crop(paths[path_id][t], env.radius, interp=False, pad=True)
-    I = np.array(env.img.data.to('cpu'))
-    O = np.array(state.to('cpu'))
-    T = np.array(true_density_patch.to('cpu'))
-    M = np.array(mask_patch.to('cpu'))
-    if z is not None:
-        z_ = state.shape[2]//2
-        I = I[:, z]
-        O = O[:, z_]
-        T = T[0,z_]
-        M = M[0,z_]
-    else: # display a maximum intensity projection along z
-        I = I.max(axis=1)
-        O = O.max(axis=1)
-        T = T[0].max(axis=0)
-        M = M[0].max(axis=0)
+    # Prepare volumes
+    env_img = env.img.data.clone().detach().cpu()
+    if env_img.dtype == torch.uint8:
+        env_img = env_img.float() / 255.0
 
-    fig, ax = plt.subplots(1,3)
-    ax[0].imshow(I[3], cmap='hot', alpha=0.5) #, int(paths[env.head_id][-1, 0])])
-    ax[0].imshow(I[:3].transpose(1,2,0), alpha=0.5) #, int(paths[env.head_id][-1, 0])])
-    ax[0].axis('off')
-    ax[1].imshow(O[:3].transpose(1,2,0), alpha=0.75)
-    ax[1].imshow(O[3], alpha=0.25, cmap='hot') #, env.radius//2])
-    ax[1].axis('off')
-    toshow = np.stack((O[3], T, M), axis=-1)
-    ax[2].imshow(toshow)
-    ax[2].axis('off')
+    # Separate channels: img (all but last) and path (last)
+    img = env_img[:-1]                  # (C_img, H, W, D) or (1, H, W, D)
+    path = env_img[-1]                  # (H, W, D)
 
-    display.display(plt.gcf())
-    plt.close()
-    
+    # Max-intensity projection of input image (img) and path
+    if img.ndim == 4:
+        img_vol = img.amax(dim=0)       # (H, W, D)
+    else:
+        img_vol = img                   # already 3D
+
+    img_proj = img_vol.amax(dim=0)      # (W, D)
+    path_proj = path.amax(dim=0)        # (W, D)
+
+    # Show RGB MIP (left axis)
+    ax_left.imshow(img_proj, cmap='gray')
+
+    # Overlay path as a transparent colored mask
+    ax_left.imshow(path_proj, cmap='plasma', alpha=0.5)
+
+    # Overlay seed points as red dots (projected using y=seed[1], x=seed[2])
+    h, w = img_proj.shape[0], img_proj.shape[1]
+    if hasattr(env, 'seeds') and env.seeds:
+        xs, ys = [], []
+        for s in env.seeds:
+            try:
+                y_s = int(round(s[1]))
+                x_s = int(round(s[2]))
+            except Exception:
+                continue
+            if 0 <= y_s < h and 0 <= x_s < w:
+                ys.append(y_s)
+                xs.append(x_s)
+        if xs:
+            ax_left.scatter(xs, ys, s=25, c='red', marker='o', linewidths=0)
+
+    if env.paths:
+        # Draw red box around current position with size env.radius x env.radius
+        pos = env.paths[env.head_id][-1]
+        y = int(round(pos[1].item()))  # axis-1 (rows)
+        x = int(round(pos[2].item()))  # axis-2 (cols)
+        r = int(env.radius)
+        h, w = img_proj.shape[0], img_proj.shape[1]
+
+        # Compute box extents; ensure width and height equal to r, clipped to bounds
+        half_down = r // 2
+        half_up = r - half_down
+        y0 = max(0, y - half_down)
+        x0 = max(0, x - half_down)
+        # Clip width/height so rectangle stays within image
+        width = min(r, w - x0)
+        height = min(r, h - y0)
+
+        rect = patches.Rectangle((x0, y0), width, height, linewidth=1.5, edgecolor='red', facecolor='none')
+        ax_left.add_patch(rect)
+
+    # Optional right subplot: current cropped state overlay
+    if live:
+        try:
+            obs = env.get_state()[0].detach().cpu()  # (C, H, W, D)
+            img_obs = obs[:-1]
+            path_obs = obs[-1]
+            if img_obs.ndim == 4:
+                img_obs_vol = img_obs.amax(dim=0)  # (H, W, D)
+            else:
+                img_obs_vol = img_obs
+            img_obs_proj = img_obs_vol.amax(dim=0)
+            path_obs_proj = path_obs.amax(dim=0)
+            ax_right_bottom.imshow(img_obs_proj, cmap='gray', vmax=1.0, vmin=0.0)
+            ax_right_bottom.imshow(path_obs_proj, cmap='plasma', vmax=1.0, vmin=0.0, alpha=0.5)
+            ax_right_bottom.axis('off')
+
+            # Bottom-right: overlay path_obs on cropped true_density MIP
+            center = env.paths[env.head_id][-1]
+            density_patch = env.true_density.crop(center, env.radius, interp=False)[0]
+            if density_patch.dtype == torch.uint8:
+                density_patch = density_patch.float() / 255.0
+            # Use first channel of density if multi-channel
+            if density_patch.ndim == 4:
+                density_ch = density_patch[0]
+            else:
+                density_ch = density_patch
+
+            # Optionally mask out competing sections
+            if env.section_masking:
+                current_label = env.path_labels[env.head_id]
+                if current_label != 0:
+                    labels_patch, _ = env.section_labels.crop(center, env.radius, interp=False, pad=False)
+                    labels_patch = labels_patch[0]
+                    # Create mask using vectorized operations
+                    section_mask = torch.zeros_like(density_ch, dtype=torch.bool)
+                    prev_children = env.prev_children[env.head_id]
+                    graph_current = env.graph[current_label]
+                    section_ids = [current_label] + [x for x in graph_current if x not in prev_children]
+                    for id in section_ids:
+                        section_mask |= (labels_patch == id)
+                    density_ch = density_ch * section_mask.float()
+
+            density_proj = density_ch.amax(dim=0)  # (W, D)
+            ax_right.imshow(density_proj, cmap='Reds', vmax=1.0, vmin=0.0)
+            ax_right.imshow(path_obs_proj, cmap='Greens', vmax=1.0, vmin=0.0, alpha=0.5)
+            ax_right.axis('off')
+            if reward is not None:
+                ax_right.set_title(f'Reward: {reward:.4f}')
+        except Exception:
+            # Fail quietly if state isn't available
+            ax_right_bottom.axis('off')
+            try:
+                ax_right.axis('off')
+            except Exception:
+                pass
+
+    ax_left.axis('off')
+    display.display(fig)
+
+
+    return
+
 if __name__ == "__main__":
     pass

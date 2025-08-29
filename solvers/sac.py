@@ -468,7 +468,7 @@ def train(env,
     return
 
 
-def inference(env, actor, outdir, Q_net=None, n_trials=1, show=True, show_live=True, save_paths=False, sync=False):
+def inference(env, actor, outdir, Q_net=None, n_trials=1, show=True, show_live=True, save_paths=False, sync=False, stochastic=False):
     """
     Perform inference using the given actor in the specified environment.
     
@@ -523,7 +523,10 @@ def inference(env, actor, outdir, Q_net=None, n_trials=1, show=True, show_live=T
                 with torch.no_grad():
                     actor_out = actor(obs.to(DEVICE))
                     direction_dist = sample_from_output(actor_out.detach().cpu())
-                    action = direction_dist.sample()[0]
+                    if stochastic:
+                        action = direction_dist.sample()[0]
+                    else:
+                        action = direction_dist.mean[0]
 
                 next_obs, reward, terminated = env.step(action)
                 if Q_net is not None:

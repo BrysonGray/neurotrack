@@ -89,18 +89,27 @@
              
   <section id="Tracking-Inference">
 <h1>Tracking Inference<a class="headerlink" href="#Tracking-Inference" title="Link to this heading"></a></h1>
-<div class="nbinput nblast docutils container">
-<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[2]:
+<div class="nbinput docutils container">
+<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[26]:
 </pre></div>
 </div>
 <div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="o">%</span><span class="k">load_ext</span> autoreload
 <span class="o">%</span><span class="k">autoreload</span> 2
-<span class="o">%</span><span class="k">matplotlib</span> inline
+<span class="o">%</span><span class="k">matplotlib</span> widget
 </pre></div>
 </div>
 </div>
+<div class="nboutput nblast docutils container">
+<div class="prompt empty docutils container">
+</div>
+<div class="output_area docutils container">
+<div class="highlight"><pre>
+The autoreload extension is already loaded. To reload it, use:
+  %reload_ext autoreload
+</pre></div></div>
+</div>
 <div class="nbinput nblast docutils container">
-<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[3]:
+<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[27]:
 </pre></div>
 </div>
 <div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">glob</span><span class="w"> </span><span class="kn">import</span> <span class="n">glob</span>
@@ -125,11 +134,12 @@
 <section id="Instantiate-environment">
 <h2>Instantiate environment<a class="headerlink" href="#Instantiate-environment" title="Link to this heading"></a></h2>
 <div class="nbinput nblast docutils container">
-<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[4]:
+<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[6]:
 </pre></div>
 </div>
 <div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="c1"># config_file = &quot;../configs/sac_inference_neuromorpho_with_artifacts.json&quot;</span>
 <span class="n">config_file</span> <span class="o">=</span> <span class="s2">&quot;../configs/sac_inference_gold166.json&quot;</span>
+<span class="c1"># config_file = &quot;../configs/sac_inference_simulated.json&quot;</span>
 <span class="k">with</span> <span class="nb">open</span><span class="p">(</span><span class="n">config_file</span><span class="p">)</span> <span class="k">as</span> <span class="n">f</span><span class="p">:</span>
     <span class="n">params</span> <span class="o">=</span> <span class="n">json</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">f</span><span class="p">)</span>
 
@@ -141,7 +151,7 @@
 <span class="n">alpha</span> <span class="o">=</span> <span class="n">params</span><span class="p">[</span><span class="s2">&quot;alpha&quot;</span><span class="p">]</span> <span class="k">if</span> <span class="s2">&quot;alpha&quot;</span> <span class="ow">in</span> <span class="n">params</span> <span class="k">else</span> <span class="mf">1.0</span>
 <span class="n">beta</span> <span class="o">=</span> <span class="n">params</span><span class="p">[</span><span class="s2">&quot;beta&quot;</span><span class="p">]</span> <span class="k">if</span> <span class="s2">&quot;beta&quot;</span> <span class="ow">in</span> <span class="n">params</span> <span class="k">else</span> <span class="mf">1e-3</span>
 <span class="n">friction</span> <span class="o">=</span> <span class="n">params</span><span class="p">[</span><span class="s2">&quot;friction&quot;</span><span class="p">]</span> <span class="k">if</span> <span class="s2">&quot;friction&quot;</span> <span class="ow">in</span> <span class="n">params</span> <span class="k">else</span> <span class="mf">1e-4</span>
-<span class="n">repeat_starts</span> <span class="o">=</span> <span class="n">params</span><span class="p">[</span><span class="s2">&quot;repeat_starts&quot;</span><span class="p">]</span> <span class="k">if</span> <span class="s2">&quot;repeat_starts&quot;</span> <span class="ow">in</span> <span class="n">params</span> <span class="k">else</span> <span class="kc">True</span>
+<span class="n">repeat_starts</span> <span class="o">=</span> <span class="n">params</span><span class="p">[</span><span class="s2">&quot;repeat_starts&quot;</span><span class="p">]</span> <span class="k">if</span> <span class="s2">&quot;repeat_starts&quot;</span> <span class="ow">in</span> <span class="n">params</span> <span class="k">else</span> <span class="kc">False</span>
 <span class="n">patch_radius</span> <span class="o">=</span> <span class="mi">17</span>
 <span class="n">inchannels</span> <span class="o">=</span> <span class="mi">1</span>
 
@@ -173,7 +183,7 @@
 <section id="Instantiate-actor-network-and-Q-network">
 <h2>Instantiate actor network and Q-network<a class="headerlink" href="#Instantiate-actor-network-and-Q-network" title="Link to this heading"></a></h2>
 <div class="nbinput nblast docutils container">
-<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[5]:
+<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[7]:
 </pre></div>
 </div>
 <div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">in_channels</span> <span class="o">=</span> <span class="mi">2</span>
@@ -191,6 +201,121 @@
 <br/></pre></div>
 </div>
 </div>
+<div class="nbinput docutils container">
+<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[10]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">env</span><span class="o">.</span><span class="n">img</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">shape</span>
+</pre></div>
+</div>
+</div>
+<div class="nboutput nblast docutils container">
+<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[10]:
+</pre></div>
+</div>
+<div class="output_area docutils container">
+<div class="highlight"><pre>
+torch.Size([2, 108, 658, 787])
+</pre></div></div>
+</div>
+<div class="nbinput docutils container">
+<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[18]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">env</span><span class="o">.</span><span class="n">img</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">max</span><span class="p">()</span>
+</pre></div>
+</div>
+</div>
+<div class="nboutput nblast docutils container">
+<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[18]:
+</pre></div>
+</div>
+<div class="output_area docutils container">
+<div class="highlight"><pre>
+tensor(255, dtype=torch.uint8)
+</pre></div></div>
+</div>
+<div class="nbinput docutils container">
+<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[15]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">plt</span><span class="o">.</span><span class="n">hist</span><span class="p">(</span><span class="n">env</span><span class="o">.</span><span class="n">img</span><span class="o">.</span><span class="n">data</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">flatten</span><span class="p">(),</span> <span class="n">bins</span><span class="o">=</span><span class="mi">100</span><span class="p">)</span>
+<span class="n">plt</span><span class="o">.</span><span class="n">show</span><span class="p">()</span>
+</pre></div>
+</div>
+</div>
+<div class="nboutput nblast docutils container">
+<div class="prompt empty docutils container">
+</div>
+<div class="output_area docutils container">
+<img alt="_images/sac_tracking_inference_9_0.png" src="_images/sac_tracking_inference_9_0.png" />
+</div>
+</div>
+<div class="nbinput docutils container">
+<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[29]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">plt</span><span class="o">.</span><span class="n">close</span><span class="p">(</span><span class="s2">&quot;all&quot;</span><span class="p">)</span>
+<span class="n">plt</span><span class="o">.</span><span class="n">imshow</span><span class="p">(</span><span class="n">env</span><span class="o">.</span><span class="n">img</span><span class="o">.</span><span class="n">data</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">amax</span><span class="p">(</span><span class="mi">0</span><span class="p">))</span>
+<span class="n">plt</span><span class="o">.</span><span class="n">show</span><span class="p">()</span>
+</pre></div>
+</div>
+</div>
+<div class="nboutput nblast docutils container">
+<div class="prompt empty docutils container">
+</div>
+<div class="output_area docutils container">
+<script type="application/vnd.jupyter.widget-view+json">{"model_id": "f7263a6c4886449786e6b0a94c10ac05", "version_major": 2, "version_minor": 0}</script></div>
+</div>
+<div class="nbinput docutils container">
+<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[20]:
+</pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">sac</span><span class="o">.</span><span class="n">inference</span><span class="p">(</span><span class="n">env</span><span class="p">,</span> <span class="n">actor</span><span class="p">,</span> <span class="n">outdir</span><span class="p">,</span> <span class="n">Q_net</span><span class="o">=</span><span class="n">Q</span><span class="p">,</span> <span class="n">n_trials</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">save_paths</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">sync</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+</pre></div>
+</div>
+</div>
+<div class="nboutput docutils container">
+<div class="prompt empty docutils container">
+</div>
+<div class="output_area stderr docutils container">
+<div class="highlight"><pre>
+  0%|          | 0/28 [00:13&lt;?, ?it/s]
+</pre></div></div>
+</div>
+<div class="nboutput docutils container">
+<div class="prompt empty docutils container">
+</div>
+<div class="output_area docutils container">
+<div class="highlight"><pre>
+<span class="ansi-red-fg">---------------------------------------------------------------------------</span>
+<span class="ansi-red-fg">KeyboardInterrupt</span>                         Traceback (most recent call last)
+Cell <span class="ansi-green-fg">In[20], line 1</span>
+<span class="ansi-green-fg">----&gt; 1</span> <span class="ansi-yellow-bg">sac</span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">.</span><span class="ansi-yellow-bg">inference</span><span class="ansi-yellow-bg">(</span><span class="ansi-yellow-bg">env</span><span class="ansi-yellow-bg">,</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg">actor</span><span class="ansi-yellow-bg">,</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg">outdir</span><span class="ansi-yellow-bg">,</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg">Q_net</span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">=</span><span class="ansi-yellow-bg">Q</span><span class="ansi-yellow-bg">,</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg">n_trials</span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">=</span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">1</span><span class="ansi-yellow-bg">,</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg">save_paths</span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">=</span><span class="ansi-yellow-bg ansi-bold" style="color: rgb(0,135,0)">False</span><span class="ansi-yellow-bg">,</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg">sync</span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">=</span><span class="ansi-yellow-bg ansi-bold" style="color: rgb(0,135,0)">False</span><span class="ansi-yellow-bg">)</span>
+
+File <span class="ansi-green-fg">~/neurotrack/notebooks/../solvers/sac.py:542</span>, in <span class="ansi-cyan-fg">inference</span><span class="ansi-blue-fg">(env, actor, outdir, Q_net, n_trials, show, show_live, save_paths, sync, stochastic)</span>
+<span class="ansi-green-intense-fg ansi-bold">    540</span>     shell <span style="color: rgb(98,98,98)">=</span> get_ipython()<span style="color: rgb(98,98,98)">.</span><span style="color: rgb(0,0,135)">__class__</span><span style="color: rgb(98,98,98)">.</span><span style="color: rgb(0,0,135)">__name__</span>  <span style="color: rgb(95,135,135)"># type: ignore</span>
+<span class="ansi-green-intense-fg ansi-bold">    541</span>     <span class="ansi-bold" style="color: rgb(0,135,0)">if</span> shell:
+<span class="ansi-green-fg">--&gt; 542</span>         <span class="ansi-yellow-bg">show_state</span><span class="ansi-yellow-bg">(</span><span class="ansi-yellow-bg">env</span><span class="ansi-yellow-bg">,</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg">fig</span><span class="ansi-yellow-bg">,</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg">live</span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">=</span><span class="ansi-yellow-bg ansi-bold" style="color: rgb(0,135,0)">True</span><span class="ansi-yellow-bg">,</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg">reward</span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">=</span><span class="ansi-yellow-bg">reward</span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">.</span><span class="ansi-yellow-bg">cpu</span><span class="ansi-yellow-bg">(</span><span class="ansi-yellow-bg">)</span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">.</span><span class="ansi-yellow-bg">item</span><span class="ansi-yellow-bg">(</span><span class="ansi-yellow-bg">)</span><span class="ansi-yellow-bg">)</span>
+<span class="ansi-green-intense-fg ansi-bold">    543</span> <span class="ansi-bold" style="color: rgb(0,135,0)">except</span> <span class="ansi-bold" style="color: rgb(215,95,95)">NameError</span>:
+<span class="ansi-green-intense-fg ansi-bold">    544</span>     <span class="ansi-bold" style="color: rgb(0,135,0)">pass</span>
+
+File <span class="ansi-green-fg">~/neurotrack/notebooks/../plot/tracking_interface.py:159</span>, in <span class="ansi-cyan-fg">show_state</span><span class="ansi-blue-fg">(env, fig, live, ep_return, reward, policy_loss)</span>
+<span class="ansi-green-intense-fg ansi-bold">    156</span>     img_vol <span style="color: rgb(98,98,98)">=</span> img                   <span style="color: rgb(95,135,135)"># already 3D</span>
+<span class="ansi-green-intense-fg ansi-bold">    158</span> img_proj <span style="color: rgb(98,98,98)">=</span> img_vol<span style="color: rgb(98,98,98)">.</span>amax(dim<span style="color: rgb(98,98,98)">=</span><span style="color: rgb(98,98,98)">0</span>)      <span style="color: rgb(95,135,135)"># (W, D)</span>
+<span class="ansi-green-fg">--&gt; 159</span> path_proj <span style="color: rgb(98,98,98)">=</span> <span class="ansi-yellow-bg">path</span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">.</span><span class="ansi-yellow-bg">amax</span><span class="ansi-yellow-bg">(</span><span class="ansi-yellow-bg">dim</span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">=</span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">0</span><span class="ansi-yellow-bg">)</span>        <span style="color: rgb(95,135,135)"># (W, D)</span>
+<span class="ansi-green-intense-fg ansi-bold">    161</span> <span style="color: rgb(95,135,135)"># Show RGB MIP (left axis)</span>
+<span class="ansi-green-intense-fg ansi-bold">    162</span> ax_left<span style="color: rgb(98,98,98)">.</span>imshow(img_proj, cmap<span style="color: rgb(98,98,98)">=</span><span style="color: rgb(175,0,0)">&#39;</span><span style="color: rgb(175,0,0)">gray</span><span style="color: rgb(175,0,0)">&#39;</span>, vmax<span style="color: rgb(98,98,98)">=</span><span style="color: rgb(98,98,98)">1.0</span>, vmin<span style="color: rgb(98,98,98)">=</span><span style="color: rgb(98,98,98)">0.0</span>)
+
+<span class="ansi-red-fg">KeyboardInterrupt</span>:
+</pre></div></div>
+</div>
+<div class="nboutput nblast docutils container">
+<div class="prompt empty docutils container">
+</div>
+<div class="output_area docutils container">
+<script type="application/vnd.jupyter.widget-view+json">{"model_id": "ef3b158b50b1414ca69d9f34fb1a9f1f", "version_major": 2, "version_minor": 0}</script></div>
+</div>
 </section>
 <section id="Perform-tracking">
 <h2>Perform tracking<a class="headerlink" href="#Perform-tracking" title="Link to this heading"></a></h2>
@@ -206,7 +331,7 @@
 <div class="prompt empty docutils container">
 </div>
 <div class="output_area docutils container">
-<img alt="_images/sac_tracking_inference_8_0.png" src="_images/sac_tracking_inference_8_0.png" />
+<img alt="_images/sac_tracking_inference_13_0.png" src="_images/sac_tracking_inference_13_0.png" />
 </div>
 </div>
 <div class="nboutput docutils container">
@@ -232,50 +357,7 @@ coverage: 0.98
 <div class="prompt empty docutils container">
 </div>
 <div class="output_area docutils container">
-<img alt="_images/sac_tracking_inference_8_3.png" src="_images/sac_tracking_inference_8_3.png" />
-</div>
-</div>
-<div class="nbinput docutils container">
-<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[ ]:
-</pre></div>
-</div>
-<div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">sac</span><span class="o">.</span><span class="n">inference</span><span class="p">(</span><span class="n">env</span><span class="p">,</span> <span class="n">actor</span><span class="p">,</span> <span class="n">outdir</span><span class="p">,</span> <span class="n">Q_net</span><span class="o">=</span><span class="n">Q</span><span class="p">,</span> <span class="n">n_trials</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">save_paths</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">sync</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
-</pre></div>
-</div>
-</div>
-<div class="nboutput docutils container">
-<div class="prompt empty docutils container">
-</div>
-<div class="output_area stderr docutils container">
-<div class="highlight"><pre>
-  0%|          | 0/30 [00:01&lt;?, ?it/s]
-</pre></div></div>
-</div>
-<div class="nboutput docutils container">
-<div class="prompt empty docutils container">
-</div>
-<div class="output_area docutils container">
-<div class="highlight"><pre>
-<span class="ansi-red-fg">---------------------------------------------------------------------------</span>
-<span class="ansi-red-fg">KeyboardInterrupt</span>                         Traceback (most recent call last)
-Cell <span class="ansi-green-fg">In[6], line 1</span>
-<span class="ansi-green-fg">----&gt; 1</span> <span class="ansi-yellow-bg">sac</span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">.</span><span class="ansi-yellow-bg">inference</span><span class="ansi-yellow-bg">(</span><span class="ansi-yellow-bg">env</span><span class="ansi-yellow-bg">,</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg">actor</span><span class="ansi-yellow-bg">,</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg">outdir</span><span class="ansi-yellow-bg">,</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg">Q_net</span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">=</span><span class="ansi-yellow-bg">Q</span><span class="ansi-yellow-bg">,</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg">n_trials</span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">=</span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">1</span><span class="ansi-yellow-bg">,</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg">save</span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">=</span><span class="ansi-yellow-bg ansi-bold" style="color: rgb(0,135,0)">False</span><span class="ansi-yellow-bg">,</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg">sync</span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">=</span><span class="ansi-yellow-bg ansi-bold" style="color: rgb(0,135,0)">False</span><span class="ansi-yellow-bg">)</span>
-
-File <span class="ansi-green-fg">~/neurotrack/notebooks/../solvers/sac.py:523</span>, in <span class="ansi-cyan-fg">inference</span><span class="ansi-blue-fg">(env, actor, outdir, Q_net, n_trials, show, save, sync)</span>
-<span class="ansi-green-intense-fg ansi-bold">    521</span>     current_state <span style="color: rgb(98,98,98)">=</span> torch<span style="color: rgb(98,98,98)">.</span>cat((obs<span style="color: rgb(98,98,98)">.</span>to(DEVICE), torch<span style="color: rgb(98,98,98)">.</span>ones((obs<span style="color: rgb(98,98,98)">.</span>shape[<span style="color: rgb(98,98,98)">0</span>], <span style="color: rgb(98,98,98)">1</span>, obs<span style="color: rgb(98,98,98)">.</span>shape[<span style="color: rgb(98,98,98)">2</span>], obs<span style="color: rgb(98,98,98)">.</span>shape[<span style="color: rgb(98,98,98)">3</span>], obs<span style="color: rgb(98,98,98)">.</span>shape[<span style="color: rgb(98,98,98)">4</span>]),device<span style="color: rgb(98,98,98)">=</span>DEVICE)<span style="color: rgb(98,98,98)">*</span>action[<span class="ansi-bold" style="color: rgb(0,135,0)">None</span>,:,<span class="ansi-bold" style="color: rgb(0,135,0)">None</span>,<span class="ansi-bold" style="color: rgb(0,135,0)">None</span>,<span class="ansi-bold" style="color: rgb(0,135,0)">None</span>]<span style="color: rgb(98,98,98)">.</span>to(DEVICE)), dim<span style="color: rgb(98,98,98)">=</span><span style="color: rgb(98,98,98)">1</span>)
-<span class="ansi-green-intense-fg ansi-bold">    522</span>     q_val <span style="color: rgb(98,98,98)">=</span> Q_net(current_state)[:,<span style="color: rgb(98,98,98)">0</span>]
-<span class="ansi-green-fg">--&gt; 523</span>     estimated_return <span style="color: rgb(98,98,98)">+</span><span style="color: rgb(98,98,98)">=</span> <span class="ansi-yellow-bg">q_val</span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">.</span><span class="ansi-yellow-bg">cpu</span><span class="ansi-yellow-bg">(</span><span class="ansi-yellow-bg">)</span><span style="color: rgb(98,98,98)">.</span>item()
-<span class="ansi-green-intense-fg ansi-bold">    525</span> <span class="ansi-bold" style="color: rgb(0,135,0)">if</span> terminated:
-<span class="ansi-green-intense-fg ansi-bold">    526</span>     labeled_neuron <span style="color: rgb(98,98,98)">=</span> env<span style="color: rgb(98,98,98)">.</span>img<span style="color: rgb(98,98,98)">.</span>data[<span style="color: rgb(98,98,98)">-</span><span style="color: rgb(98,98,98)">1</span>]<span style="color: rgb(98,98,98)">.</span>detach()<span style="color: rgb(98,98,98)">.</span>cpu() <span style="color: rgb(98,98,98)">&gt;</span> <span style="color: rgb(98,98,98)">0.3</span>
-
-<span class="ansi-red-fg">KeyboardInterrupt</span>:
-</pre></div></div>
-</div>
-<div class="nboutput nblast docutils container">
-<div class="prompt empty docutils container">
-</div>
-<div class="output_area docutils container">
-<img alt="_images/sac_tracking_inference_9_2.png" src="_images/sac_tracking_inference_9_2.png" />
+<img alt="_images/sac_tracking_inference_13_3.png" src="_images/sac_tracking_inference_13_3.png" />
 </div>
 </div>
 <div class="nbinput nblast docutils container">
@@ -318,7 +400,7 @@ File <span class="ansi-green-fg">~/neurotrack/notebooks/../solvers/sac.py:523</s
 </pre></div></div>
 </div>
 <div class="nbinput docutils container">
-<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[33]:
+<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[9]:
 </pre></div>
 </div>
 <div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">ref_dir</span> <span class="o">=</span> <span class="s2">&quot;/home/brysongray/data/neurotrack_data/gold166/gold166_soma-removed_training_set/&quot;</span>
@@ -353,7 +435,7 @@ File <span class="ansi-green-fg">~/neurotrack/notebooks/../solvers/sac.py:523</s
 <div class="highlight"><pre>
 <span class="ansi-red-fg">---------------------------------------------------------------------------</span>
 <span class="ansi-red-fg">IndexError</span>                                Traceback (most recent call last)
-Cell <span class="ansi-green-fg">In[33], line 17</span>
+Cell <span class="ansi-green-fg">In[9], line 17</span>
 <span class="ansi-green-intense-fg ansi-bold">     14</span>     labeled_neuron <span style="color: rgb(98,98,98)">=</span> labeled_neuron <span style="color: rgb(98,98,98)">/</span> np<span style="color: rgb(98,98,98)">.</span>array(<span style="color: rgb(98,98,98)">255.</span>, dtype<span style="color: rgb(98,98,98)">=</span>np<span style="color: rgb(98,98,98)">.</span>float32)
 <span class="ansi-green-intense-fg ansi-bold">     16</span> name <span style="color: rgb(98,98,98)">=</span> out_files[i]<span style="color: rgb(98,98,98)">.</span>split(<span style="color: rgb(175,0,0)">&#39;</span><span style="color: rgb(175,0,0)">_08-13-25*</span><span style="color: rgb(175,0,0)">&#39;</span>)[<span style="color: rgb(98,98,98)">0</span>][:<span style="color: rgb(98,98,98)">-</span><span style="color: rgb(98,98,98)">1</span>]
 <span class="ansi-green-fg">---&gt; 17</span> reference_img_path <span style="color: rgb(98,98,98)">=</span> <span class="ansi-yellow-bg">[</span><span class="ansi-yellow-bg">f</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg ansi-bold" style="color: rgb(0,135,0)">for</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg">f</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg ansi-bold" style="color: rgb(175,0,255)">in</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg">ref_img_files</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg ansi-bold" style="color: rgb(0,135,0)">if</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg">f</span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">.</span><span class="ansi-yellow-bg">split</span><span class="ansi-yellow-bg">(</span><span class="ansi-yellow-bg" style="color: rgb(175,0,0)">&#39;</span><span class="ansi-yellow-bg" style="color: rgb(175,0,0)">/</span><span class="ansi-yellow-bg" style="color: rgb(175,0,0)">&#39;</span><span class="ansi-yellow-bg">)</span><span class="ansi-yellow-bg">[</span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">-</span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">1</span><span class="ansi-yellow-bg">]</span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">.</span><span class="ansi-yellow-bg">split</span><span class="ansi-yellow-bg">(</span><span class="ansi-yellow-bg" style="color: rgb(175,0,0)">&#39;</span><span class="ansi-yellow-bg" style="color: rgb(175,0,0)">_image.tif</span><span class="ansi-yellow-bg" style="color: rgb(175,0,0)">&#39;</span><span class="ansi-yellow-bg">)</span><span class="ansi-yellow-bg">[</span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">0</span><span class="ansi-yellow-bg">]</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">==</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg">name</span><span class="ansi-yellow-bg">]</span><span class="ansi-yellow-bg">[</span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">0</span><span class="ansi-yellow-bg">]</span>
@@ -367,7 +449,7 @@ Cell <span class="ansi-green-fg">In[33], line 17</span>
 <div class="prompt empty docutils container">
 </div>
 <div class="output_area docutils container">
-<img alt="_images/sac_tracking_inference_12_1.png" src="_images/sac_tracking_inference_12_1.png" />
+<img alt="_images/sac_tracking_inference_16_1.png" src="_images/sac_tracking_inference_16_1.png" />
 </div>
 </div>
 </section>

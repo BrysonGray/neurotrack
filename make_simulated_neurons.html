@@ -96,7 +96,7 @@
   <section id="Make-Simulated-Neurons">
 <h1>Make Simulated Neurons<a class="headerlink" href="#Make-Simulated-Neurons" title="Link to this heading"></a></h1>
 <div class="nbinput nblast docutils container">
-<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[2]:
+<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[1]:
 </pre></div>
 </div>
 <div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="o">%</span><span class="k">load_ext</span> autoreload
@@ -106,7 +106,7 @@
 </div>
 </div>
 <div class="nbinput nblast docutils container">
-<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[3]:
+<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[2]:
 </pre></div>
 </div>
 <div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">glob</span><span class="w"> </span><span class="kn">import</span> <span class="n">glob</span>
@@ -131,18 +131,18 @@
 <h2>Generate simulated SWC file data.<a class="headerlink" href="#Generate-simulated-SWC-file-data." title="Link to this heading"></a></h2>
 <p>This is a list of nodes, each node being a list: [sample_idx, structure_id, x, y, z, radius, parent_id]</p>
 <div class="nbinput nblast docutils container">
-<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[35]:
+<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[58]:
 </pre></div>
 </div>
-<div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">swc_list</span> <span class="o">=</span> <span class="n">generate</span><span class="o">.</span><span class="n">make_swc_list</span><span class="p">((</span><span class="mi">101</span><span class="p">,</span><span class="mi">101</span><span class="p">,</span><span class="mi">101</span><span class="p">),</span>
-                        <span class="n">length</span><span class="o">=</span><span class="mi">20</span><span class="p">,</span>
+<div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">swc_list</span> <span class="o">=</span> <span class="n">generate</span><span class="o">.</span><span class="n">make_swc_list</span><span class="p">((</span><span class="mi">121</span><span class="p">,</span><span class="mi">121</span><span class="p">,</span><span class="mi">121</span><span class="p">),</span>
+                        <span class="n">length</span><span class="o">=</span><span class="mi">100</span><span class="p">,</span>
                         <span class="n">step_size</span><span class="o">=</span><span class="mi">3</span><span class="p">,</span>
-                        <span class="n">kappa</span><span class="o">=</span><span class="mf">20.0</span><span class="p">,</span>
+                        <span class="n">kappa</span><span class="o">=</span><span class="mf">30.0</span><span class="p">,</span>
                         <span class="n">random_len</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
                         <span class="n">random_width</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
                         <span class="n">random_start</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
                         <span class="n">rng</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
-                        <span class="n">num_branches</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span> <span class="c1"># make simulated neuron paths.</span>
+                        <span class="n">num_branches</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span> <span class="c1"># make simulated neuron paths.</span>
 </pre></div>
 </div>
 </div>
@@ -160,56 +160,31 @@
 </pre></div>
 </div>
 </div>
-<div class="nbinput docutils container">
-<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[29]:
-</pre></div>
-</div>
-<div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">source_dir</span> <span class="o">=</span> <span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">expanduser</span><span class="p">(</span><span class="s2">&quot;~/data/neurotrack_data/simulated_neurons/de-novo/curves_with_artifacts_grayscale_var_width/&quot;</span><span class="p">)</span>
-<span class="n">fig</span><span class="p">,</span> <span class="n">ax</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">subplots</span><span class="p">(</span><span class="mi">5</span><span class="p">,</span><span class="mi">5</span><span class="p">,</span><span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">20</span><span class="p">,</span><span class="mi">20</span><span class="p">))</span>
-<span class="n">ax</span> <span class="o">=</span> <span class="n">ax</span><span class="o">.</span><span class="n">ravel</span><span class="p">()</span>
-<span class="k">for</span> <span class="n">i</span> <span class="ow">in</span> <span class="nb">range</span><span class="p">(</span><span class="nb">len</span><span class="p">(</span><span class="n">ax</span><span class="p">)):</span>
-    <span class="n">img</span> <span class="o">=</span> <span class="n">tf</span><span class="o">.</span><span class="n">imread</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">source_dir</span><span class="p">,</span> <span class="sa">f</span><span class="s2">&quot;img_</span><span class="si">{</span><span class="n">i</span><span class="o">+</span><span class="mi">1</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span> <span class="sa">f</span><span class="s2">&quot;img_</span><span class="si">{</span><span class="n">i</span><span class="o">+</span><span class="mi">1</span><span class="si">}</span><span class="s2">_image.tif&quot;</span><span class="p">))</span>
-    <span class="n">density</span> <span class="o">=</span> <span class="n">tf</span><span class="o">.</span><span class="n">imread</span><span class="p">(</span><span class="n">os</span><span class="o">.</span><span class="n">path</span><span class="o">.</span><span class="n">join</span><span class="p">(</span><span class="n">source_dir</span><span class="p">,</span> <span class="sa">f</span><span class="s2">&quot;img_</span><span class="si">{</span><span class="n">i</span><span class="o">+</span><span class="mi">1</span><span class="si">}</span><span class="s2">&quot;</span><span class="p">,</span> <span class="sa">f</span><span class="s2">&quot;img_</span><span class="si">{</span><span class="n">i</span><span class="o">+</span><span class="mi">1</span><span class="si">}</span><span class="s2">_density.tif&quot;</span><span class="p">))</span>
-    <span class="n">img</span> <span class="o">=</span> <span class="n">img</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">max</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
-    <span class="n">density</span> <span class="o">=</span> <span class="n">density</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">max</span><span class="p">(</span><span class="mi">0</span><span class="p">)</span>
-    <span class="n">ax</span><span class="p">[</span><span class="n">i</span><span class="p">]</span><span class="o">.</span><span class="n">imshow</span><span class="p">(</span><span class="n">img</span><span class="p">,</span> <span class="n">cmap</span><span class="o">=</span><span class="s1">&#39;gray&#39;</span><span class="p">,</span> <span class="n">vmin</span><span class="o">=</span><span class="mf">0.0</span><span class="p">,</span> <span class="n">vmax</span><span class="o">=</span><span class="mf">1.0</span><span class="p">)</span>
-    <span class="c1"># ax[i].imshow(density, alpha=0.5, cmap=&#39;hot&#39;)</span>
-
-
-<span class="n">plt</span><span class="o">.</span><span class="n">show</span><span class="p">()</span>
-</pre></div>
-</div>
-</div>
-<div class="nboutput nblast docutils container">
-<div class="prompt empty docutils container">
-</div>
-<div class="output_area docutils container">
-<img alt="_images/make_simulated_neurons_7_0.png" src="_images/make_simulated_neurons_7_0.png" />
-</div>
-</div>
 <p>Draw neurons from SWC format data; one without and one with added noise and artifacts.</p>
 <div class="nbinput nblast docutils container">
-<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[ ]:
+<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[77]:
 </pre></div>
 </div>
-<div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">neuron_no_artifacts</span> <span class="o">=</span> <span class="n">draw</span><span class="o">.</span><span class="n">neuron_from_swc</span><span class="p">(</span><span class="n">swc_list</span><span class="p">,</span>
-                                <span class="n">width</span><span class="o">=</span><span class="mi">3</span><span class="p">,</span>
-                                <span class="n">noise</span><span class="o">=</span><span class="mf">0.0</span><span class="p">,</span>
+<div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="c1"># neuron_no_artifacts = draw.neuron_from_swc(swc_list,</span>
+<span class="c1">#                                 width=3,</span>
+<span class="c1">#                                 noise=0.0,</span>
+<span class="c1">#                                 adjust=False,</span>
+<span class="c1">#                                 neuron_color=None,</span>
+<span class="c1">#                                 background_color=None,</span>
+<span class="c1">#                                 random_brightness=False,</span>
+<span class="c1">#                                 dropout=False,</span>
+<span class="c1">#                                 binary=False)</span>
+
+<span class="n">neuron_with_artifacts</span> <span class="o">=</span> <span class="n">draw</span><span class="o">.</span><span class="n">neuron_from_swc</span><span class="p">(</span><span class="n">swc_list</span><span class="p">,</span>
+                                <span class="n">width</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
+                                <span class="n">noise</span><span class="o">=</span><span class="mf">0.25</span><span class="p">,</span>
+                                <span class="n">random_sharpness</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
                                 <span class="n">adjust</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
                                 <span class="n">neuron_color</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
                                 <span class="n">background_color</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
                                 <span class="n">random_brightness</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
                                 <span class="n">dropout</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
-                                <span class="n">binary</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
-
-<span class="n">neuron_with_artifacts</span> <span class="o">=</span> <span class="n">draw</span><span class="o">.</span><span class="n">neuron_from_swc</span><span class="p">(</span><span class="n">swc_list</span><span class="p">,</span>
-                                <span class="n">width</span><span class="o">=</span><span class="mi">3</span><span class="p">,</span>
-                                <span class="n">noise</span><span class="o">=</span><span class="mf">0.05</span><span class="p">,</span>
-                                <span class="n">adjust</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
-                                <span class="n">neuron_color</span><span class="o">=</span><span class="n">neuron_color</span><span class="p">,</span>
-                                <span class="n">background_color</span><span class="o">=</span><span class="n">background</span><span class="p">,</span>
-                                <span class="n">random_brightness</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
-                                <span class="n">dropout</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
+                                <span class="n">rgb</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
                                 <span class="n">binary</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
 <br/></pre></div>
 </div>
@@ -220,21 +195,33 @@
 <div class="highlight-none notranslate"><div class="highlight"><pre><span></span>a. Without artifacts
 </pre></div>
 </div>
-<div class="nbinput nblast docutils container">
-<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[48]:
+<div class="highlight-none notranslate"><div class="highlight"><pre><span></span>b. With artifacts
 </pre></div>
 </div>
-<div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">neuron_no_artifacts</span> <span class="o">=</span> <span class="n">draw</span><span class="o">.</span><span class="n">neuron_from_swc</span><span class="p">(</span><span class="n">swc_list</span><span class="p">,</span>
-                                <span class="n">width</span><span class="o">=</span><span class="mi">3</span><span class="p">,</span>
-                                <span class="n">noise</span><span class="o">=</span><span class="mf">0.0</span><span class="p">,</span>
-                                <span class="n">adjust</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
-                                <span class="n">neuron_color</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
-                                <span class="n">rgb</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span>
-                                <span class="n">background_color</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span>
-                                <span class="n">random_brightness</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
-                                <span class="n">dropout</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span>
-                                <span class="n">binary</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+<div class="nbinput docutils container">
+<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[78]:
 </pre></div>
+</div>
+<div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">img</span> <span class="o">=</span> <span class="n">neuron_with_artifacts</span><span class="p">[</span><span class="s2">&quot;image&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">permute</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">,</span><span class="mi">0</span><span class="p">)</span>
+
+<span class="n">fig</span><span class="p">,</span> <span class="n">ax</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">subplots</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span><span class="mi">3</span><span class="p">,</span> <span class="n">figsize</span><span class="o">=</span><span class="p">(</span><span class="mi">12</span><span class="p">,</span><span class="mi">4</span><span class="p">))</span>
+<span class="n">ax</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">imshow</span><span class="p">(</span><span class="n">img</span><span class="o">.</span><span class="n">amax</span><span class="p">(</span><span class="mi">0</span><span class="p">),</span> <span class="n">cmap</span><span class="o">=</span><span class="s1">&#39;gray&#39;</span><span class="p">,</span> <span class="n">vmin</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">vmax</span><span class="o">=</span><span class="mf">1.0</span><span class="p">)</span>
+<span class="n">ax</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">set_title</span><span class="p">(</span><span class="s1">&#39;xy&#39;</span><span class="p">)</span>
+<span class="n">ax</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">imshow</span><span class="p">(</span><span class="n">img</span><span class="o">.</span><span class="n">amax</span><span class="p">(</span><span class="mi">1</span><span class="p">),</span> <span class="n">cmap</span><span class="o">=</span><span class="s1">&#39;gray&#39;</span><span class="p">,</span> <span class="n">vmin</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">vmax</span><span class="o">=</span><span class="mf">1.0</span><span class="p">)</span>
+<span class="n">ax</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">set_title</span><span class="p">(</span><span class="s1">&#39;xz&#39;</span><span class="p">)</span>
+<span class="n">ax</span><span class="p">[</span><span class="mi">2</span><span class="p">]</span><span class="o">.</span><span class="n">imshow</span><span class="p">(</span><span class="n">img</span><span class="o">.</span><span class="n">amax</span><span class="p">(</span><span class="mi">2</span><span class="p">),</span> <span class="n">cmap</span><span class="o">=</span><span class="s1">&#39;gray&#39;</span><span class="p">,</span> <span class="n">vmin</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">vmax</span><span class="o">=</span><span class="mf">1.0</span><span class="p">)</span>
+<span class="n">ax</span><span class="p">[</span><span class="mi">2</span><span class="p">]</span><span class="o">.</span><span class="n">set_title</span><span class="p">(</span><span class="s1">&#39;yz&#39;</span><span class="p">)</span>
+<span class="k">for</span> <span class="n">x</span> <span class="ow">in</span> <span class="n">ax</span><span class="p">:</span>
+    <span class="n">x</span><span class="o">.</span><span class="n">set_axis_off</span><span class="p">()</span>
+<span class="n">plt</span><span class="o">.</span><span class="n">show</span><span class="p">()</span>
+</pre></div>
+</div>
+</div>
+<div class="nboutput nblast docutils container">
+<div class="prompt empty docutils container">
+</div>
+<div class="output_area docutils container">
+<img alt="_images/make_simulated_neurons_11_0.png" src="_images/make_simulated_neurons_11_0.png" />
 </div>
 </div>
 <div class="nbinput docutils container">
@@ -270,35 +257,6 @@ torch.Size([60, 60, 81, 1])
 </div>
 <div class="output_area docutils container">
 <img alt="_images/make_simulated_neurons_12_1.png" src="_images/make_simulated_neurons_12_1.png" />
-</div>
-</div>
-<div class="highlight-none notranslate"><div class="highlight"><pre><span></span>b. With artifacts
-</pre></div>
-</div>
-<div class="nbinput docutils container">
-<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[7]:
-</pre></div>
-</div>
-<div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">img</span> <span class="o">=</span> <span class="n">neuron_with_artifacts</span><span class="p">[</span><span class="s2">&quot;image&quot;</span><span class="p">]</span><span class="o">.</span><span class="n">data</span><span class="o">.</span><span class="n">permute</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span><span class="mi">2</span><span class="p">,</span><span class="mi">3</span><span class="p">,</span><span class="mi">0</span><span class="p">)</span>
-
-<span class="n">fig</span><span class="p">,</span> <span class="n">ax</span> <span class="o">=</span> <span class="n">plt</span><span class="o">.</span><span class="n">subplots</span><span class="p">(</span><span class="mi">1</span><span class="p">,</span><span class="mi">3</span><span class="p">)</span>
-<span class="n">ax</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">imshow</span><span class="p">(</span><span class="n">img</span><span class="o">.</span><span class="n">amax</span><span class="p">(</span><span class="mi">0</span><span class="p">))</span>
-<span class="n">ax</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span><span class="o">.</span><span class="n">set_title</span><span class="p">(</span><span class="s1">&#39;xy&#39;</span><span class="p">)</span>
-<span class="n">ax</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">imshow</span><span class="p">(</span><span class="n">img</span><span class="o">.</span><span class="n">amax</span><span class="p">(</span><span class="mi">1</span><span class="p">))</span>
-<span class="n">ax</span><span class="p">[</span><span class="mi">1</span><span class="p">]</span><span class="o">.</span><span class="n">set_title</span><span class="p">(</span><span class="s1">&#39;xz&#39;</span><span class="p">)</span>
-<span class="n">ax</span><span class="p">[</span><span class="mi">2</span><span class="p">]</span><span class="o">.</span><span class="n">imshow</span><span class="p">(</span><span class="n">img</span><span class="o">.</span><span class="n">amax</span><span class="p">(</span><span class="mi">2</span><span class="p">))</span>
-<span class="n">ax</span><span class="p">[</span><span class="mi">2</span><span class="p">]</span><span class="o">.</span><span class="n">set_title</span><span class="p">(</span><span class="s1">&#39;yz&#39;</span><span class="p">)</span>
-<span class="k">for</span> <span class="n">x</span> <span class="ow">in</span> <span class="n">ax</span><span class="p">:</span>
-    <span class="n">x</span><span class="o">.</span><span class="n">set_axis_off</span><span class="p">()</span>
-<span class="n">plt</span><span class="o">.</span><span class="n">show</span><span class="p">()</span>
-</pre></div>
-</div>
-</div>
-<div class="nboutput nblast docutils container">
-<div class="prompt empty docutils container">
-</div>
-<div class="output_area docutils container">
-<img alt="_images/make_simulated_neurons_14_0.png" src="_images/make_simulated_neurons_14_0.png" />
 </div>
 </div>
 </section>
@@ -450,7 +408,7 @@ if (outputEl) {{
 <div class="prompt empty docutils container">
 </div>
 <div class="output_area docutils container">
-<img alt="_images/make_simulated_neurons_26_0.png" src="_images/make_simulated_neurons_26_0.png" />
+<img alt="_images/make_simulated_neurons_24_0.png" src="_images/make_simulated_neurons_24_0.png" />
 </div>
 </div>
 <div class="nbinput nblast docutils container">

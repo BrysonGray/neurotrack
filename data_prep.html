@@ -229,7 +229,7 @@ This is the input image resampled at the points stored in phii.</p>
 <span id="data-prep-draw-module"></span><h2>data_prep.draw module<a class="headerlink" href="#module-data_prep.draw" title="Link to this heading"></a></h2>
 <dl class="py function">
 <dt class="sig sig-object py" id="data_prep.draw.draw_neuron">
-<span class="sig-prename descclassname"><span class="pre">data_prep.draw.</span></span><span class="sig-name descname"><span class="pre">draw_neuron</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">segments</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">shape</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">noise</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">width</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">rgb</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">neuron_color</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">background_color</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">random_brightness</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">binary</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">rng</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">save_gif</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">gif_path</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">gif_axis</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">0</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#data_prep.draw.draw_neuron" title="Link to this definition"></a></dt>
+<span class="sig-prename descclassname"><span class="pre">data_prep.draw.</span></span><span class="sig-name descname"><span class="pre">draw_neuron</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">segments</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">shape</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">noise</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">width</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">random_sharpness</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">rgb</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">neuron_color</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">background_color</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">random_brightness</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">binary</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">rng</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">save_gif</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">gif_path</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">gif_axis</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">0</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#data_prep.draw.draw_neuron" title="Link to this definition"></a></dt>
 <dd><p>Draws a neuron image based on provided segments and parameters.
 Optionally saves a gif animating the drawing process.</p>
 <dl class="field-list simple">
@@ -350,58 +350,59 @@ Each segment is a numpy array with shape (n, 3) representing the coordinates.</p
 
 <dl class="py function">
 <dt class="sig sig-object py" id="data_prep.draw.neuron_from_swc">
-<span class="sig-prename descclassname"><span class="pre">data_prep.draw.</span></span><span class="sig-name descname"><span class="pre">neuron_from_swc</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">swc_list</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">width</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">3</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">noise</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">0.05</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dropout</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">adjust</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">rgb</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">background_color</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">neuron_color</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">random_brightness</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">binary</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">rng</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#data_prep.draw.neuron_from_swc" title="Link to this definition"></a></dt>
+<span class="sig-prename descclassname"><span class="pre">data_prep.draw.</span></span><span class="sig-name descname"><span class="pre">neuron_from_swc</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">swc_list</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">width</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">3</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">noise</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">0.05</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">shape</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dropout</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">adjust</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">rgb</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">background_color</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">neuron_color</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">random_brightness</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">random_sharpness</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">binary</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">rng</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#data_prep.draw.neuron_from_swc" title="Link to this definition"></a></dt>
 <dd><p>Generate a neuron image from an SWC list.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span></dt>
 <dd class="field-odd"><ul class="simple">
 <li><p><strong>swc_list</strong> (<em>list</em>) – List of SWC data representing neuron structure.</p></li>
-<li><p><strong>width</strong> (<em>int</em><em>, </em><em>optional</em>) – Width of the neuron lines, by default 3.</p></li>
-<li><p><strong>noise</strong> (<em>float</em><em>, </em><em>optional</em>) – Amount of noise to add to the neuron image, by default 0.05.</p></li>
-<li><p><strong>dropout</strong> (<em>bool</em><em>, </em><em>optional</em>) – Whether to add random signal dropout, by default True.</p></li>
-<li><p><strong>adjust</strong> (<em>bool</em><em>, </em><em>optional</em>) – Whether to adjust the SWC data, by default True.</p></li>
-<li><p><strong>rgb</strong> (<em>bool</em><em>, </em><em>optional</em>) – Whether to generate the neuron image in RGB format, by default True.</p></li>
-<li><p><strong>background_color</strong> (<em>optional</em>) – Background color of the neuron image, by default None.</p></li>
-<li><p><strong>neuron_color</strong> (<em>optional</em>) – Color of the neuron, by default None.</p></li>
-<li><p><strong>random_brightness</strong> (<em>bool</em><em>, </em><em>optional</em>) – Whether to apply random brightness to the neuron image, by default False.</p></li>
-<li><p><strong>binary</strong> (<em>bool</em><em>, </em><em>optional</em>) – Whether to generate a binary image, by default False.</p></li>
-<li><p><strong>rng</strong> (<em>numpy.random.Generator</em><em>, </em><em>optional</em>) – Random number generator, by default None.</p></li>
+<li><p><strong>width</strong> (<em>int</em><em>, </em><em>optional</em>) – Width of the neuron lines. Default is 3.</p></li>
+<li><p><strong>noise</strong> (<em>float</em><em>, </em><em>optional</em>) – Amount of noise to add to the neuron image. Default is 0.05.</p></li>
+<li><p><strong>dropout</strong> (<em>bool</em><em>, </em><em>optional</em>) – Whether to add random signal dropout. Default is True.</p></li>
+<li><p><strong>adjust</strong> (<em>bool</em><em>, </em><em>optional</em>) – Whether to adjust the SWC data. Default is False.</p></li>
+<li><p><strong>rgb</strong> (<em>bool</em><em>, </em><em>optional</em>) – Whether to generate the neuron image in RGB format. Default is True.</p></li>
+<li><p><strong>background_color</strong> (<em>array-like</em><em>, </em><em>optional</em>) – Background color of the neuron image. Default is None.</p></li>
+<li><p><strong>neuron_color</strong> (<em>array-like</em><em>, </em><em>optional</em>) – Color of the neuron. Default is None.</p></li>
+<li><p><strong>random_brightness</strong> (<em>bool</em><em>, </em><em>optional</em>) – Whether to apply random brightness to the neuron image. Default is False.</p></li>
+<li><p><strong>random_sharpness</strong> (<em>bool</em><em>, </em><em>optional</em>) – Whether to randomly vary the sharpness of neuron edges. Default is False.</p></li>
+<li><p><strong>binary</strong> (<em>bool</em><em>, </em><em>optional</em>) – Whether to generate a binary image. Default is False.</p></li>
+<li><p><strong>rng</strong> (<em>numpy.random.Generator</em><em>, </em><em>optional</em>) – Random number generator. Default is None.</p></li>
 </ul>
 </dd>
 <dt class="field-even">Returns<span class="colon">:</span></dt>
 <dd class="field-even"><p><p>Dictionary containing the following keys:
-- “image”: torch.Tensor</p>
+- “image” : torch.Tensor</p>
 <blockquote>
 <div><p>The generated neuron image.</p>
 </div></blockquote>
 <ul class="simple">
 <li><dl class="simple">
-<dt>”neuron_density”: torch.Tensor</dt><dd><p>The density map of the neuron.</p>
+<dt>”neuron_density”<span class="classifier">torch.Tensor</span></dt><dd><p>The density map of the neuron.</p>
 </dd>
 </dl>
 </li>
 <li><dl class="simple">
-<dt>”section_labels”: torch.Tensor</dt><dd><p>The section labels of the neuron.</p>
+<dt>”section_labels”<span class="classifier">torch.Tensor</span></dt><dd><p>The section labels of the neuron.</p>
 </dd>
 </dl>
 </li>
 <li><dl class="simple">
-<dt>”branch_mask”: torch.Tensor</dt><dd><p>The branch mask of the neuron.</p>
+<dt>”branches”<span class="classifier">array-like</span></dt><dd><p>The branch points of the neuron.</p>
 </dd>
 </dl>
 </li>
 <li><dl class="simple">
-<dt>”seeds”: list</dt><dd><p>List of seed points.</p>
+<dt>”seeds”<span class="classifier">list</span></dt><dd><p>List of seed points.</p>
 </dd>
 </dl>
 </li>
 <li><dl class="simple">
-<dt>”scale”: float</dt><dd><p>Scale of the neuron.</p>
+<dt>”scale”<span class="classifier">float</span></dt><dd><p>Scale of the neuron.</p>
 </dd>
 </dl>
 </li>
 <li><dl class="simple">
-<dt>”graph”: dict</dt><dd><p>Graph representation of the neuron.</p>
+<dt>”graph”<span class="classifier">dict</span></dt><dd><p>Graph representation of the neuron.</p>
 </dd>
 </dl>
 </li>
@@ -605,7 +606,7 @@ Interpolation is not currently implemented.</p>
 
 <dl class="py method">
 <dt class="sig sig-object py" id="data_prep.image.Image.draw_line_segment">
-<span class="sig-name descname"><span class="pre">draw_line_segment</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">segment</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">width</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">channel</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">-1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">value</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">1.0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">binary</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#data_prep.image.Image.draw_line_segment" title="Link to this definition"></a></dt>
+<span class="sig-name descname"><span class="pre">draw_line_segment</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">segment</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">width</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">channel</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">-1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">value</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">mask</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">sharpness</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">1.0</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#data_prep.image.Image.draw_line_segment" title="Link to this definition"></a></dt>
 <dd><p>Add an image patch with the new line segment to the existing image in the specified channel.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span></dt>
@@ -659,7 +660,7 @@ gaussian blurred point.</p></li>
 
 <dl class="py function">
 <dt class="sig sig-object py" id="data_prep.image.draw_line_segment">
-<span class="sig-prename descclassname"><span class="pre">data_prep.image.</span></span><span class="sig-name descname"><span class="pre">draw_line_segment</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">segment</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">width</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">binary</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">value</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">1.0</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#data_prep.image.draw_line_segment" title="Link to this definition"></a></dt>
+<span class="sig-prename descclassname"><span class="pre">data_prep.image.</span></span><span class="sig-name descname"><span class="pre">draw_line_segment</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">segment</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">width</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">mask</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">value</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">sharpness</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">1.0</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#data_prep.image.draw_line_segment" title="Link to this definition"></a></dt>
 <dd><p>Generate an image of a line segment with width.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span></dt>
@@ -667,7 +668,7 @@ gaussian blurred point.</p></li>
 <li><p><strong>segment</strong> (<em>torch.Tensor</em>) – array with two three dimensional points (shape: 2x3)</p></li>
 <li><p><strong>width</strong> (<em>scalar</em>) – segment width</p></li>
 <li><p><strong>binary</strong> (<em>bool</em>) – Make a line mask rather than a blurred idealized line.</p></li>
-<li><p><strong>value</strong> (<em>float</em>) – If binary is set to True, set the line brightness to this value. Default is 1.0.</p></li>
+<li><p><strong>value</strong> (<em>int</em>) – If binary is set to True, set the line brightness to this value. Default is 1.</p></li>
 </ul>
 </dd>
 <dt class="field-even">Returns<span class="colon">:</span></dt>

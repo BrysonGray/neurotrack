@@ -142,7 +142,9 @@ def draw_path(img, path, width, binary):
     return img
 
 
-def draw_neuron(segments, shape, noise, width=None, rgb=True, neuron_color=None, background_color=None, random_brightness=False, binary=False, rng=None, save_gif=False, gif_path=None, gif_axis=0):
+def draw_neuron(segments, shape, noise, width=None, random_sharpness=None,
+               rgb=True, neuron_color=None, background_color=None, random_brightness=False,
+               binary=False, rng=None, save_gif=False, gif_path=None, gif_axis=0):
     """
     Draws a neuron image based on provided segments and parameters.
     Optionally saves a gif animating the drawing process.
@@ -188,17 +190,21 @@ def draw_neuron(segments, shape, noise, width=None, rgb=True, neuron_color=None,
     n_segments = len(segments)
     gif_frames = []
     gif_steps = set(np.linspace(0, n_segments-1, 100, dtype=int)) if save_gif else set()
+    sharpness = 1.0
     for idx, s in enumerate(segments):
         if random_brightness:
             y0 = 0.5
             value = y0 + (1.0 - y0) * rng.uniform(0.0, 1.0, size=1).item()
+        if random_sharpness:
+            sharpness = rng.normal(sharpness, 1.0, size=1).item()
+            sharpness = np.clip(sharpness, 1.0, 6.0)
         if width is not None:
             w = width
         elif s.shape[1] == 4:  # segments include width in the last
             w = (s[0,3] + s[1,3]) / 2
         else:
             w = 3.0
-        img.draw_line_segment(s[:,:3], width=w, mask=binary, channel=0, value=value)
+        img.draw_line_segment(s[:,:3], width=w, sharpness=sharpness, mask=binary, channel=0, value=value)
 
         if save_gif and idx in gif_steps:
             arr = img.data[3].cpu().numpy()
@@ -233,52 +239,55 @@ def draw_neuron(segments, shape, noise, width=None, rgb=True, neuron_color=None,
     return img
 
 
-def neuron_from_swc(swc_list, width=3, noise=0.05, dropout=True, adjust=False, rgb=True, background_color=None, neuron_color=None, random_brightness=False, binary=False, rng=None):
-    """
-    Generate a neuron image from an SWC list.
+def neuron_from_swc(swc_list, width=3, noise=0.05, shape=None, dropout=False, adjust=False, rgb=False,
+                   background_color=None, neuron_color=None, random_brightness=False,
+                   random_sharpness=False, binary=False, rng=None):
+    """Generate a neuron image from an SWC list.
     
     Parameters
     ----------
     swc_list : list
         List of SWC data representing neuron structure.
     width : int, optional
-        Width of the neuron lines, by default 3.
+        Width of the neuron lines. Default is 3.
     noise : float, optional
-        Amount of noise to add to the neuron image, by default 0.05.
+        Amount of noise to add to the neuron image. Default is 0.05.
     dropout : bool, optional
-        Whether to add random signal dropout, by default True.
+        Whether to add random signal dropout. Default is True.
     adjust : bool, optional
-        Whether to adjust the SWC data, by default True.
+        Whether to adjust the SWC data. Default is False.
     rgb : bool, optional
-        Whether to generate the neuron image in RGB format, by default True.
-    background_color : optional
-        Background color of the neuron image, by default None.
-    neuron_color : optional
-        Color of the neuron, by default None.
+        Whether to generate the neuron image in RGB format. Default is True.
+    background_color : array-like, optional
+        Background color of the neuron image. Default is None.
+    neuron_color : array-like, optional
+        Color of the neuron. Default is None.
     random_brightness : bool, optional
-        Whether to apply random brightness to the neuron image, by default False.
+        Whether to apply random brightness to the neuron image. Default is False.
+    random_sharpness : bool, optional
+        Whether to randomly vary the sharpness of neuron edges. Default is False.
     binary : bool, optional
-        Whether to generate a binary image, by default False.
+        Whether to generate a binary image. Default is False.
     rng : numpy.random.Generator, optional
-        Random number generator, by default None.
+        Random number generator. Default is None.
         
     Returns
     -------
     dict
         Dictionary containing the following keys:
-        - "image": torch.Tensor
+        - "image" : torch.Tensor
             The generated neuron image.
-        - "neuron_density": torch.Tensor
+        - "neuron_density" : torch.Tensor
             The density map of the neuron.
-        - "section_labels": torch.Tensor
+        - "section_labels" : torch.Tensor
             The section labels of the neuron.
-        - "branch_mask": torch.Tensor
-            The branch mask of the neuron.
-        - "seeds": list
+        - "branches" : array-like
+            The branch points of the neuron.
+        - "seeds" : list
             List of seed points.
-        - "scale": float
+        - "scale" : float
             Scale of the neuron.
-        - "graph": dict
+        - "graph" : dict
             Graph representation of the neuron.
     """
     
@@ -296,12 +305,14 @@ def neuron_from_swc(swc_list, width=3, noise=0.05, dropout=True, adjust=False, r
         segments.append(section)
     segments = np.concatenate(segments)
 
-    shape = np.ceil(np.max(segments[...,:3], axis=(0,1)))
-    shape = shape.astype(np.uint16)
-    shape = shape + np.array([10, 10, 10])  # type: ignore
-    shape = tuple(shape.tolist())
+    if shape is None:
+        shape = np.ceil(np.max(segments[...,:3], axis=(0,1)))
+        shape = shape.astype(np.uint16)
+        shape = shape + np.array([10, 10, 10])  # type: ignore
+        shape = tuple(shape.tolist())
 
-    img = draw_neuron(segments, shape=shape, width=width, noise=noise, rgb=rgb, neuron_color=neuron_color,
+    img = draw_neuron(segments, shape=shape, width=width, noise=noise, 
+                      random_sharpness=random_sharpness, rgb=rgb, neuron_color=neuron_color,
                       background_color=background_color, random_brightness=random_brightness,
                       binary=binary, rng=rng)
     width = 3.0
@@ -309,14 +320,14 @@ def neuron_from_swc(swc_list, width=3, noise=0.05, dropout=True, adjust=False, r
     section_labels = draw_section_labels(sections, shape, width=2*width)
     # mask = draw_neuron_mask(density, threshold=5.0)
 
-    if dropout: # add random signal dropout (subtract gaussian blobs)
+    if dropout:  # add random signal dropout (subtract gaussian blobs)
         neuron_coords = torch.nonzero(section_labels.data)
         dropout_density = 0.001
         size = int(dropout_density * len(neuron_coords))
         if size > 0:
             rand_ints = rng.integers(0, len(neuron_coords), size=(size,))
             dropout_points = neuron_coords[rand_ints]
-            dropout_points = dropout_points[:,1:].T
+            dropout_points = dropout_points[:, 1:].T
             dropout_img = torch.zeros_like(img.data)
             dropout_img[:, dropout_points[0], dropout_points[1], dropout_points[2]] = 1.0
             dropout_img = gaussian(dropout_img, sigma=0.5*width)
@@ -329,15 +340,17 @@ def neuron_from_swc(swc_list, width=3, noise=0.05, dropout=True, adjust=False, r
     # # set branch_mask.data to zero where mask is zero
     # branch_mask.data = branch_mask.data * mask.data
     root_key = min(sections.keys())
-    seed = sections[root_key][0,0,:3].round().astype(np.uint16).tolist() # type: ignore
+    seed = sections[root_key][0, 0, :3].round().astype(np.uint16).tolist()  # type: ignore
 
-    swc_data = {"image": img.data,
-                "neuron_density": density.data,
-                "section_labels": section_labels.data,
-                "branches": branches,
-                "seeds": [seed],
-                "scale": scale,
-                "graph": graph}
+    swc_data = {
+        "image": img.data,
+        "neuron_density": density.data,
+        "section_labels": section_labels.data,
+        "branches": branches,
+        "seeds": [seed],
+        "scale": scale,
+        "graph": graph
+    }
 
     return swc_data
 

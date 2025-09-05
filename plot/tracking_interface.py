@@ -159,7 +159,7 @@ def show_state(env, fig, live=False, ep_return=None, reward=None, policy_loss=No
     path_proj = path.amax(dim=0)        # (W, D)
 
     # Show RGB MIP (left axis)
-    ax_left.imshow(img_proj, cmap='gray')
+    ax_left.imshow(img_proj, cmap='gray', vmax=1.0, vmin=0.0)
 
     # Overlay path as a transparent colored mask
     ax_left.imshow(path_proj, cmap='plasma', alpha=0.5)

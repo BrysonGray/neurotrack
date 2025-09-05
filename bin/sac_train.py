@@ -137,6 +137,9 @@ def main():
     Q2_target = ConvNet(chin=in_channels+3,chout=1)
     Q2_target = Q2_target.to(device=DEVICE,dtype=dtype)
 
+    log_alpha = torch.log(torch.tensor(init_temperature).to(DEVICE))
+    log_alpha.requires_grad = True
+
     if "sac_weights" in params:
         sac_path = params["sac_weights"]
         state_dicts = torch.load(sac_path)#, weights_only=True)
@@ -155,18 +158,9 @@ def main():
         else:
             Q2_target.load_state_dict(Q2.state_dict())
             
-        # Load log_alpha if available
-        if "log_alpha" in state_dicts:
-            log_alpha = state_dicts["log_alpha"]
-            log_alpha.requires_grad = True
-        else:
-            log_alpha = torch.log(torch.tensor(init_temperature).to(DEVICE))
-            log_alpha.requires_grad = True
     else:
         Q1_target.load_state_dict(Q1.state_dict())
         Q2_target.load_state_dict(Q2.state_dict())
-        log_alpha = torch.log(torch.tensor(init_temperature).to(DEVICE))
-        log_alpha.requires_grad = True
 
     # Initialize optimizers
     Q1_optimizer = AdamW(Q1.parameters(), lr=lr)
@@ -184,9 +178,6 @@ def main():
             
         if "actor_optimizer_state_dict" in state_dicts:
             actor_optimizer.load_state_dict(state_dicts["actor_optimizer_state_dict"])
-            
-        if "log_alpha_optimizer_state_dict" in state_dicts:
-            log_alpha_optimizer.load_state_dict(state_dicts["log_alpha_optimizer_state_dict"])
 
     memory = PrioritizedReplayBuffer(100000, obs_shape=(in_channels,input_size,input_size,input_size), action_shape=(3,), alpha=0.8)
 

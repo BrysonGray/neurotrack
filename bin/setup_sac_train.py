@@ -118,8 +118,9 @@ def setup(
         
         if random_seeds:
             random_seed_ids = np.random.choice(len(swc_list), 10)
-            new_seeds = np.array(swc_list)[random_seed_ids][:, 4:1:-1]
-            seeds = np.concatenate((seeds, new_seeds), 0)
+            # new_seeds = np.array(swc_list)[random_seed_ids][:, 4:1:-1]
+            # seeds = np.concatenate((seeds, new_seeds), 0)
+            seeds = np.array(swc_list)[random_seed_ids][:, 4:1:-1]
 
         # Parse the SWC file to get sections and section graph
         sections, section_graph = load.parse_swc(swc_list)

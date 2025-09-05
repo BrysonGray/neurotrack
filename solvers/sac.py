@@ -204,7 +204,7 @@ def update_actor(obs, actor, actor_optimizer, Q1, Q2, log_alpha, log_alpha_optim
     actor_optimizer.step()
 
     log_alpha_optimizer.zero_grad()
-    alpha_loss = (log_alpha.exp() * (-logprobs - target_entropy).detach()).mean()
+    alpha_loss = log_alpha * (-logprobs - target_entropy).detach().mean()
     alpha_loss.backward()
     log_alpha_optimizer.step()
 
@@ -545,7 +545,7 @@ def inference(env, actor, outdir, Q_net=None, n_trials=1, show=True, show_live=T
 
                 if terminated:
                     labeled_neuron = env.img.data[-1].detach().cpu() > 0.3 
-                    true_neuron = torch.linalg.norm(env.true_density.data[-1].detach().cpu(), dim=0) > 0.94
+                    true_neuron = env.true_density.data[-1].detach().cpu() > 0.94
                     TP = torch.sum(torch.logical_and(labeled_neuron, true_neuron))
                     tot = torch.sum(true_neuron)
                     coverages.append(TP/tot)

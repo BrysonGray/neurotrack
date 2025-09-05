@@ -168,7 +168,7 @@ class Environment():
         self.img.data = torch.cat((self.img.data, torch.zeros((1,)+self.img.data.shape[1:], dtype=self.img.data.dtype)), dim=0) # add 1 channel for path.
         
         self.head_id = 0 # head id keeps track of the current path since there may be multiple paths per episode 
-        self.img.draw_point(self.paths[self.head_id][-1], radius=(self.step_width-1)//2, channel=-1, binary=False)
+        self.img.draw_point(self.paths[self.head_id][-1], radius=(self.step_width / 2.35), channel=-1, mode="gaussian", binary=False)
 
     
     def __step_prior(self, sigmaf: float = 1.5, sigmab: float = 1.5) -> float:
@@ -335,36 +335,7 @@ class Environment():
         else:
             raise NameError(f"category: {category} was not recognized.")
 
-        return torch.tensor([reward], dtype=torch.float32)
-    
-
-    def apply_section_mask():
-        """
-        Applies a section mask to the current patch based on section labels and updates the masked density patch.
-
-        Returns
-        -------
-        None
-            This function modifies internal state and does not return a value.
-        """
-        labels_patch, _ = self.section_labels.crop(center, patch_radius, interp=False, pad=False)
-        end_point = [x//2 + v for x,v in zip(labels_patch.shape[1:], segment_vec)]
-        new_label_idx = (0, int(round(end_point[0].item())), int(round(end_point[1].item())), int(round(end_point[2].item())))
-        new_label = int(labels_patch[new_label_idx].item())
-        current_label = self.path_labels[self.head_id]
-
-        if current_label != 0:
-            # Pre-compute the section IDs
-            prev_children = self.prev_children[self.head_id]
-            graph_current = self.graph[current_label]
-            section_ids = [current_label] + [x for x in graph_current if x not in prev_children]
-            
-            # Create mask using vectorized operations
-            section_mask = torch.zeros_like(density_patch, dtype=torch.bool)
-            for id in section_ids:
-                section_mask |= (labels_patch == id)
-            
-            true_patch_masked = density_patch * section_mask.float()
+        return torch.tensor([reward], dtype=torch.float32)    
 
 
     def step(self, action, verbose=False, training=True):
@@ -487,13 +458,13 @@ class Environment():
             #     out = self.classifier(observation[:, :-1].to(device=DEVICE))
             #     out = torch.sigmoid(out.squeeze())
             #     if out > 0.5: # create branch
-            # if training:
-            #     distances = torch.linalg.norm(torch.stack(self.roots) - new_position, dim=1)
-            #     if not torch.any(distances < 7.0):
-            #         self.paths.append(new_position[None])
-            #         self.path_labels.append(0)
-            #         self.prev_children.append(self.prev_children[self.head_id])
-            #         self.roots.append(new_position)
+            if training:
+                distances = torch.linalg.norm(torch.stack(self.roots) - new_position, dim=1)
+                if not torch.any(distances < 12.0):
+                    self.paths.append(new_position[None])
+                    self.path_labels.append(0)
+                    self.prev_children.append(self.prev_children[self.head_id])
+                    self.roots.append(new_position)
 
         return observation, reward, terminated
 
@@ -534,7 +505,7 @@ class Environment():
             self.img.data = torch.cat((self.img.data, torch.zeros((1,)+self.img.data.shape[1:], dtype=self.img.data.dtype)), dim=0) # add 1 channel for path.
 
         self.head_id = 0
-        self.img.draw_point(self.paths[self.head_id][-1], radius=(self.step_width-1)//2, channel=-1, binary=False)
+        self.img.draw_point(self.paths[self.head_id][-1], radius=(self.step_width / 2.35), channel=-1, mode="gaussian", binary=False)
 
         return
     

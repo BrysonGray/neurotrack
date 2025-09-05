@@ -72,7 +72,7 @@ def draw_line_segment_old(segment, width, binary=False, value=1.0):
     return X.to(device=segment.device)
 
 
-def draw_line_segment(segment, width, mask=False, value=1):
+def draw_line_segment(segment, width, mask=False, value=1, sharpness=1.0):
     """ Generate an image of a line segment with width.
 
     Parameters
@@ -120,11 +120,12 @@ def draw_line_segment(segment, width, mask=False, value=1):
     dist = torch.where(segTb < 0, dist_to_start, dist)
     
     width = np.maximum(width, 1.0)
+    sharpness = 1.0 if sharpness is None else sharpness
     if mask:
         X = dist < width / 2
         X = X.to(dtype=torch.int16) * value
     else:
-        X = torch.exp(-0.5 * (dist / (width / 2.35))**2) # FWHM = 2.35 * sigma -> sigma = FWHM / 2.35
+        X = torch.exp(-0.5 * (dist / (width / 2.35))**(2 * sharpness)) # FWHM = 2.35 * sigma -> sigma = FWHM / 2.35
     
     return X.to(device=segment.device)
 
@@ -300,7 +301,7 @@ class Image:
         return patch, padding
     
 
-    def draw_line_segment(self, segment, width, channel=-1, value=1, mask=False):
+    def draw_line_segment(self, segment, width, channel=-1, value=1, mask=False, sharpness=1.0):
 
         """ Add an image patch with the new line segment to the existing image in the specified channel.
 
@@ -326,7 +327,7 @@ class Image:
         """
         
         # create the patch with the new line segment starting at its center.
-        X = draw_line_segment(segment, width, mask, value)
+        X = draw_line_segment(segment, width, mask, value, sharpness=sharpness)
         if self.data.dtype == torch.uint8:
             X = X * 255.0  # scale to uint8 if necessary
             X = X.to(dtype=torch.uint8)

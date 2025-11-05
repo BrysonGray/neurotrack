@@ -227,192 +227,243 @@ This is the input image resampled at the points stored in phii.</p>
 </section>
 <section id="module-data_prep.draw">
 <span id="data-prep-draw-module"></span><h2>data_prep.draw module<a class="headerlink" href="#module-data_prep.draw" title="Link to this heading"></a></h2>
-<dl class="py function">
-<dt class="sig sig-object py" id="data_prep.draw.draw_neuron">
-<span class="sig-prename descclassname"><span class="pre">data_prep.draw.</span></span><span class="sig-name descname"><span class="pre">draw_neuron</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">segments</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">shape</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">noise</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">width</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">random_sharpness</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">rgb</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">neuron_color</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">background_color</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">random_brightness</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">binary</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">rng</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">save_gif</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">gif_path</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">gif_axis</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">0</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#data_prep.draw.draw_neuron" title="Link to this definition"></a></dt>
-<dd><p>Draws a neuron image based on provided segments and parameters.
-Optionally saves a gif animating the drawing process.</p>
-<dl class="field-list simple">
-<dt class="field-odd">Parameters<span class="colon">:</span></dt>
-<dd class="field-odd"><ul class="simple">
-<li><p><strong>segments</strong> (<em>list</em><em> of </em><em>ndarray</em>) – List of segments where each segment is an ndarray of shape (N, 3) representing the coordinates of the neuron segments.</p></li>
-<li><p><strong>shape</strong> (<em>tuple</em><em> of </em><em>int</em>) – Shape of the output image (height, width).</p></li>
-<li><p><strong>noise</strong> (<em>float</em>) – Standard deviation of the Gaussian noise to be added to the image.</p></li>
-<li><p><strong>width</strong> (<em>int</em><em>, </em><em>optional</em>) – Width of the neuron lines to be drawn. If width is not provided, it will be determined from the last
-component of the segments. If it is not specified, a default value of 3.0 is used.</p></li>
-<li><p><strong>neuron_color</strong> (<em>tuple</em><em> of </em><em>float</em><em>, </em><em>optional</em>) – RGB color of the neuron lines. Each value should be in the range [0, 1]. Default is (1.0, 1.0, 1.0).</p></li>
-<li><p><strong>background_color</strong> (<em>tuple</em><em> of </em><em>float</em><em>, </em><em>optional</em>) – RGB color of the background. Each value should be in the range [0, 1]. Default is None.</p></li>
-<li><p><strong>random_brightness</strong> (<em>bool</em><em>, </em><em>optional</em>) – If True, random brightness will be applied to each segment. Default is False.</p></li>
-<li><p><strong>binary</strong> (<em>bool</em><em>, </em><em>optional</em>) – If True, the image will be binary. Default is False.</p></li>
-<li><p><strong>rng</strong> (<em>numpy.random.Generator</em><em>, </em><em>optional</em>) – Random number generator instance. Default is None, which uses numpy’s default_rng.</p></li>
-<li><p><strong>save_gif</strong> (<em>bool</em><em>, </em><em>optional</em>) – If True, saves a gif of the drawing process. Default is False.</p></li>
-<li><p><strong>gif_path</strong> (<em>str</em><em>, </em><em>optional</em>) – Output path for the gif. Required if save_gif is True.</p></li>
-<li><p><strong>gif_axis</strong> (<em>int</em><em>, </em><em>optional</em>) – Axis for max intensity projection (0, 1, or 2). Default is 0.</p></li>
-</ul>
+<p>Refactored draw.py - Simplified and more readable neuron drawing functionality.</p>
+<p>This module provides clean interfaces for drawing neuron structures with clear
+separation of concerns and improved readability.</p>
+<dl class="py class">
+<dt class="sig sig-object py" id="data_prep.draw.DrawingConfig">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">data_prep.draw.</span></span><span class="sig-name descname"><span class="pre">DrawingConfig</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">width</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">float</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">4.0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">rgb</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">random_width</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">neuron_color</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Tuple</span><span class="p"><span class="pre">[</span></span><span class="pre">float</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">float</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">float</span><span class="p"><span class="pre">]</span></span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">background_color</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Tuple</span><span class="p"><span class="pre">[</span></span><span class="pre">float</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">float</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">float</span><span class="p"><span class="pre">]</span></span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">foreground_mean</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">float</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">0.8</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">foreground_std</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">float</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">0.1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">background_mean</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">float</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">0.2</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">background_std</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">float</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">0.05</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">mask_threshold</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">float</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">0.1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">spatial_noise_scale</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">float</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">10.0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">spatial_noise_amplitude</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">float</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">1.0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">noise_method</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">'gaussian_convolution'</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">blur</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">float</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">1.0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">sharpness</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">float</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">1.0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">vignette_magnitude</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">float</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">0.2</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">width_correlation</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">width_correlation_rho</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">float</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">0.0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">segment_intensity_correlation</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">segment_intensity_correlation_rho</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">float</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">0.0</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#data_prep.draw.DrawingConfig" title="Link to this definition"></a></dt>
+<dd><p>Bases: <code class="xref py py-class docutils literal notranslate"><span class="pre">object</span></code></p>
+<p>Configuration for neuron drawing parameters.</p>
+<dl class="py method">
+<dt class="sig sig-object py" id="data_prep.draw.DrawingConfig.__post_init__">
+<span class="sig-name descname"><span class="pre">__post_init__</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#data_prep.draw.DrawingConfig.__post_init__" title="Link to this definition"></a></dt>
+<dd><p>Validate configuration parameters.</p>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="data_prep.draw.DrawingConfig.background_color">
+<span class="sig-name descname"><span class="pre">background_color</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">Tuple</span><span class="p"><span class="pre">[</span></span><span class="pre">float</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">float</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">float</span><span class="p"><span class="pre">]</span></span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></em><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">None</span></em><a class="headerlink" href="#data_prep.draw.DrawingConfig.background_color" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="data_prep.draw.DrawingConfig.background_mean">
+<span class="sig-name descname"><span class="pre">background_mean</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">float</span></em><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">0.2</span></em><a class="headerlink" href="#data_prep.draw.DrawingConfig.background_mean" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="data_prep.draw.DrawingConfig.background_std">
+<span class="sig-name descname"><span class="pre">background_std</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">float</span></em><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">0.05</span></em><a class="headerlink" href="#data_prep.draw.DrawingConfig.background_std" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="data_prep.draw.DrawingConfig.blur">
+<span class="sig-name descname"><span class="pre">blur</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">float</span></em><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">1.0</span></em><a class="headerlink" href="#data_prep.draw.DrawingConfig.blur" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="data_prep.draw.DrawingConfig.foreground_mean">
+<span class="sig-name descname"><span class="pre">foreground_mean</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">float</span></em><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">0.8</span></em><a class="headerlink" href="#data_prep.draw.DrawingConfig.foreground_mean" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="data_prep.draw.DrawingConfig.foreground_std">
+<span class="sig-name descname"><span class="pre">foreground_std</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">float</span></em><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">0.1</span></em><a class="headerlink" href="#data_prep.draw.DrawingConfig.foreground_std" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="data_prep.draw.DrawingConfig.mask_threshold">
+<span class="sig-name descname"><span class="pre">mask_threshold</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">float</span></em><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">0.1</span></em><a class="headerlink" href="#data_prep.draw.DrawingConfig.mask_threshold" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="data_prep.draw.DrawingConfig.neuron_color">
+<span class="sig-name descname"><span class="pre">neuron_color</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">Tuple</span><span class="p"><span class="pre">[</span></span><span class="pre">float</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">float</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">float</span><span class="p"><span class="pre">]</span></span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></em><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">None</span></em><a class="headerlink" href="#data_prep.draw.DrawingConfig.neuron_color" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="data_prep.draw.DrawingConfig.noise_method">
+<span class="sig-name descname"><span class="pre">noise_method</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">str</span></em><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">'gaussian_convolution'</span></em><a class="headerlink" href="#data_prep.draw.DrawingConfig.noise_method" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="data_prep.draw.DrawingConfig.random_width">
+<span class="sig-name descname"><span class="pre">random_width</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">bool</span></em><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">False</span></em><a class="headerlink" href="#data_prep.draw.DrawingConfig.random_width" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="data_prep.draw.DrawingConfig.rgb">
+<span class="sig-name descname"><span class="pre">rgb</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">bool</span></em><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">False</span></em><a class="headerlink" href="#data_prep.draw.DrawingConfig.rgb" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="data_prep.draw.DrawingConfig.segment_intensity_correlation">
+<span class="sig-name descname"><span class="pre">segment_intensity_correlation</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">bool</span></em><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">False</span></em><a class="headerlink" href="#data_prep.draw.DrawingConfig.segment_intensity_correlation" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="data_prep.draw.DrawingConfig.segment_intensity_correlation_rho">
+<span class="sig-name descname"><span class="pre">segment_intensity_correlation_rho</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">float</span></em><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">0.0</span></em><a class="headerlink" href="#data_prep.draw.DrawingConfig.segment_intensity_correlation_rho" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="data_prep.draw.DrawingConfig.sharpness">
+<span class="sig-name descname"><span class="pre">sharpness</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">float</span></em><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">1.0</span></em><a class="headerlink" href="#data_prep.draw.DrawingConfig.sharpness" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="data_prep.draw.DrawingConfig.spatial_noise_amplitude">
+<span class="sig-name descname"><span class="pre">spatial_noise_amplitude</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">float</span></em><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">1.0</span></em><a class="headerlink" href="#data_prep.draw.DrawingConfig.spatial_noise_amplitude" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="data_prep.draw.DrawingConfig.spatial_noise_scale">
+<span class="sig-name descname"><span class="pre">spatial_noise_scale</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">float</span></em><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">10.0</span></em><a class="headerlink" href="#data_prep.draw.DrawingConfig.spatial_noise_scale" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="data_prep.draw.DrawingConfig.vignette_magnitude">
+<span class="sig-name descname"><span class="pre">vignette_magnitude</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">float</span></em><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">0.2</span></em><a class="headerlink" href="#data_prep.draw.DrawingConfig.vignette_magnitude" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="data_prep.draw.DrawingConfig.width">
+<span class="sig-name descname"><span class="pre">width</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">float</span></em><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">4.0</span></em><a class="headerlink" href="#data_prep.draw.DrawingConfig.width" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="data_prep.draw.DrawingConfig.width_correlation">
+<span class="sig-name descname"><span class="pre">width_correlation</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">bool</span></em><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">False</span></em><a class="headerlink" href="#data_prep.draw.DrawingConfig.width_correlation" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="data_prep.draw.DrawingConfig.width_correlation_rho">
+<span class="sig-name descname"><span class="pre">width_correlation_rho</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">float</span></em><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">0.0</span></em><a class="headerlink" href="#data_prep.draw.DrawingConfig.width_correlation_rho" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="data_prep.draw.GifConfig">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">data_prep.draw.</span></span><span class="sig-name descname"><span class="pre">GifConfig</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">save_gif</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">gif_path</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">str</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">gif_axis</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">gif_frames</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">100</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#data_prep.draw.GifConfig" title="Link to this definition"></a></dt>
+<dd><p>Bases: <code class="xref py py-class docutils literal notranslate"><span class="pre">object</span></code></p>
+<p>Configuration for GIF generation.</p>
+<dl class="py attribute">
+<dt class="sig sig-object py" id="data_prep.draw.GifConfig.gif_axis">
+<span class="sig-name descname"><span class="pre">gif_axis</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">int</span></em><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">0</span></em><a class="headerlink" href="#data_prep.draw.GifConfig.gif_axis" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="data_prep.draw.GifConfig.gif_frames">
+<span class="sig-name descname"><span class="pre">gif_frames</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">int</span></em><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">100</span></em><a class="headerlink" href="#data_prep.draw.GifConfig.gif_frames" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="data_prep.draw.GifConfig.gif_path">
+<span class="sig-name descname"><span class="pre">gif_path</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">str</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></em><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">None</span></em><a class="headerlink" href="#data_prep.draw.GifConfig.gif_path" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="data_prep.draw.GifConfig.save_gif">
+<span class="sig-name descname"><span class="pre">save_gif</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">bool</span></em><em class="property"><span class="w"> </span><span class="p"><span class="pre">=</span></span><span class="w"> </span><span class="pre">False</span></em><a class="headerlink" href="#data_prep.draw.GifConfig.save_gif" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+</dd></dl>
+
+<dl class="py class">
+<dt class="sig sig-object py" id="data_prep.draw.NeuronRenderer">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">data_prep.draw.</span></span><span class="sig-name descname"><span class="pre">NeuronRenderer</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">rng</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Generator</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#data_prep.draw.NeuronRenderer" title="Link to this definition"></a></dt>
+<dd><p>Bases: <code class="xref py py-class docutils literal notranslate"><span class="pre">object</span></code></p>
+<p>Main class for rendering neuron structures.</p>
+<dl class="py method">
+<dt class="sig sig-object py" id="data_prep.draw.NeuronRenderer.draw_density">
+<span class="sig-name descname"><span class="pre">draw_density</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">sections</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Dict</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">shape</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Tuple</span><span class="p"><span class="pre">[</span></span><span class="pre">int</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="p"><span class="pre">...</span></span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">width</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">float</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">mask</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">scale</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">float</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">1.0</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference internal" href="#data_prep.image.Image" title="data_prep.image.Image"><span class="pre">Image</span></a></span></span><a class="headerlink" href="#data_prep.draw.NeuronRenderer.draw_density" title="Link to this definition"></a></dt>
+<dd><p>Draw neuron density image from sections.</p>
+<dl class="simple">
+<dt>Args:</dt><dd><p>sections: Dictionary of section_id -&gt; segments
+shape: Output image shape
+width: Line width (auto-detected if None)
+mask: Whether to create a binary mask
+scale: Pixel scale factor</p>
 </dd>
-<dt class="field-even">Returns<span class="colon">:</span></dt>
-<dd class="field-even"><p>An Image object containing the drawn neuron.</p>
-</dd>
-<dt class="field-odd">Return type<span class="colon">:</span></dt>
-<dd class="field-odd"><p><a class="reference internal" href="#data_prep.image.Image" title="data_prep.image.Image">Image</a></p>
+<dt>Returns:</dt><dd><p>Image object with neuron density</p>
 </dd>
 </dl>
 </dd></dl>
 
-<dl class="py function">
-<dt class="sig sig-object py" id="data_prep.draw.draw_neuron_density">
-<span class="sig-prename descclassname"><span class="pre">data_prep.draw.</span></span><span class="sig-name descname"><span class="pre">draw_neuron_density</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">segments</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">shape</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">width</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">scale</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">1.0</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#data_prep.draw.draw_neuron_density" title="Link to this definition"></a></dt>
-<dd><p>Draws neuron density on an image based on given segments.</p>
-<dl class="field-list simple">
-<dt class="field-odd">Parameters<span class="colon">:</span></dt>
-<dd class="field-odd"><ul class="simple">
-<li><p><strong>segments</strong> (<em>array-like</em><em> or </em><em>torch.Tensor</em>) – A list or tensor of neuron segments, where each segment is represented by a set of points.</p></li>
-<li><p><strong>shape</strong> (<em>tuple</em><em> of </em><em>int</em>) – The shape of the output density image (height, width, depth).</p></li>
-<li><p><strong>width</strong> (<em>int</em><em>, </em><em>optional</em>) – The width of the line segments to be drawn, by default 3.</p></li>
-<li><p><strong>scale</strong> (<em>float</em>) – The pixel size</p></li>
-</ul>
+<dl class="py method">
+<dt class="sig sig-object py" id="data_prep.draw.NeuronRenderer.draw_mask">
+<span class="sig-name descname"><span class="pre">draw_mask</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">density</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">threshold</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">float</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">1.0</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">Tensor</span></span></span><a class="headerlink" href="#data_prep.draw.NeuronRenderer.draw_mask" title="Link to this definition"></a></dt>
+<dd><p>Create binary mask from density image.</p>
+<dl class="simple">
+<dt>Args:</dt><dd><p>density: Neuron density tensor
+threshold: Threshold for mask creation</p>
 </dd>
-<dt class="field-even">Returns<span class="colon">:</span></dt>
-<dd class="field-even"><p>An image object with the neuron density drawn on it.</p>
-</dd>
-<dt class="field-odd">Return type<span class="colon">:</span></dt>
-<dd class="field-odd"><p><a class="reference internal" href="#data_prep.image.Image" title="data_prep.image.Image">Image</a></p>
+<dt>Returns:</dt><dd><p>Binary mask tensor</p>
 </dd>
 </dl>
 </dd></dl>
 
-<dl class="py function">
-<dt class="sig sig-object py" id="data_prep.draw.draw_neuron_mask">
-<span class="sig-prename descclassname"><span class="pre">data_prep.draw.</span></span><span class="sig-name descname"><span class="pre">draw_neuron_mask</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">density</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">threshold</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">1.0</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#data_prep.draw.draw_neuron_mask" title="Link to this definition"></a></dt>
-<dd><p>Create a binary mask from the neuron density image.</p>
-<dl class="field-list simple">
-<dt class="field-odd">Parameters<span class="colon">:</span></dt>
-<dd class="field-odd"><ul class="simple">
-<li><p><strong>density</strong> (<em>torch.Tensor</em>) – Neuron density image.</p></li>
-<li><p><strong>threshold</strong> (<em>float</em>) – Threshold value for classifying a voxel in the neuron density image as inside the neuron.
-The threshold value is relative to the width of the neuron. Specifically, the mask will label
-as neuron voxels within one standard deviation from the peak neuron value, where the neuron
-intensities are assumed to be normally distributed around the centerline.</p></li>
-</ul>
+<dl class="py method">
+<dt class="sig sig-object py" id="data_prep.draw.NeuronRenderer.draw_neuron">
+<span class="sig-name descname"><span class="pre">draw_neuron</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">sections</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Dict</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">shape</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Tuple</span><span class="p"><span class="pre">[</span></span><span class="pre">int</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="p"><span class="pre">...</span></span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#data_prep.draw.DrawingConfig" title="data_prep.draw.DrawingConfig"><span class="pre">DrawingConfig</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">gif_config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#data_prep.draw.GifConfig" title="data_prep.draw.GifConfig"><span class="pre">GifConfig</span></a><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference internal" href="#data_prep.image.Image" title="data_prep.image.Image"><span class="pre">Image</span></a></span></span><a class="headerlink" href="#data_prep.draw.NeuronRenderer.draw_neuron" title="Link to this definition"></a></dt>
+<dd><p>Draw complete neuron image with all effects.</p>
+<dl class="simple">
+<dt>Args:</dt><dd><p>sections: Dictionary of section_id -&gt; segments
+shape: Output image shape
+config: Drawing configuration
+gif_config: Optional GIF generation config</p>
 </dd>
-<dt class="field-even">Returns<span class="colon">:</span></dt>
-<dd class="field-even"><p><strong>mask</strong> – A binary mask of the neuron.</p>
-</dd>
-<dt class="field-odd">Return type<span class="colon">:</span></dt>
-<dd class="field-odd"><p>torch.Tensor</p>
+<dt>Returns:</dt><dd><p>Rendered neuron image</p>
 </dd>
 </dl>
 </dd></dl>
 
-<dl class="py function">
-<dt class="sig sig-object py" id="data_prep.draw.draw_path">
-<span class="sig-prename descclassname"><span class="pre">data_prep.draw.</span></span><span class="sig-name descname"><span class="pre">draw_path</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">img</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">path</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">width</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">binary</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#data_prep.draw.draw_path" title="Link to this definition"></a></dt>
-<dd><p>Draws a path on the given image.</p>
-<dl class="field-list simple">
-<dt class="field-odd">Parameters<span class="colon">:</span></dt>
-<dd class="field-odd"><ul class="simple">
-<li><p><strong>img</strong> (<em>object</em>) – The image object on which the path will be drawn. It should have a method <cite>draw_line_segment</cite>.</p></li>
-<li><p><strong>path</strong> (<em>list</em><em> or </em><em>numpy.ndarray</em><em> or </em><em>torch.Tensor</em>) – The path to be drawn. It can be a list of coordinates, a numpy array, or a torch tensor.</p></li>
-<li><p><strong>width</strong> (<em>int</em>) – The width of the line segments to be drawn.</p></li>
-<li><p><strong>binary</strong> (<em>bool</em>) – If True, the line segments will be drawn in binary mode.</p></li>
-</ul>
+<dl class="py method">
+<dt class="sig sig-object py" id="data_prep.draw.NeuronRenderer.draw_path">
+<span class="sig-name descname"><span class="pre">draw_path</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">img</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#data_prep.image.Image" title="data_prep.image.Image"><span class="pre">Image</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">path</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">List</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">ndarray</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">Tensor</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">width</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">float</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">binary</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">False</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference internal" href="#data_prep.image.Image" title="data_prep.image.Image"><span class="pre">Image</span></a></span></span><a class="headerlink" href="#data_prep.draw.NeuronRenderer.draw_path" title="Link to this definition"></a></dt>
+<dd><p>Draw a path on an image.</p>
+<dl class="simple">
+<dt>Args:</dt><dd><p>img: Target image
+path: Path coordinates
+width: Line width
+binary: Whether to use binary drawing</p>
 </dd>
-<dt class="field-even">Returns<span class="colon">:</span></dt>
-<dd class="field-even"><p>The image object with the path drawn on it.</p>
-</dd>
-<dt class="field-odd">Return type<span class="colon">:</span></dt>
-<dd class="field-odd"><p>object</p>
+<dt>Returns:</dt><dd><p>Modified image</p>
 </dd>
 </dl>
 </dd></dl>
 
-<dl class="py function">
-<dt class="sig sig-object py" id="data_prep.draw.draw_section_labels">
-<span class="sig-prename descclassname"><span class="pre">data_prep.draw.</span></span><span class="sig-name descname"><span class="pre">draw_section_labels</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">sections</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">shape</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">width</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">3</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#data_prep.draw.draw_section_labels" title="Link to this definition"></a></dt>
-<dd><p>Draws discrete labels for each section on an image.</p>
-<dl class="field-list simple">
-<dt class="field-odd">Parameters<span class="colon">:</span></dt>
-<dd class="field-odd"><ul class="simple">
-<li><p><strong>sections</strong> (<em>dict</em>) – A dictionary where keys are section labels and values are lists of segments.
-Each segment is a numpy array with shape (n, 3) representing the coordinates.</p></li>
-<li><p><strong>shape</strong> (<em>tuple</em>) – The shape of the output image (height, width, depth).</p></li>
-<li><p><strong>width</strong> (<em>int</em><em>, </em><em>optional</em>) – The width of the line segments to be drawn, by default 3.</p></li>
-</ul>
+<dl class="py method">
+<dt class="sig sig-object py" id="data_prep.draw.NeuronRenderer.draw_section_labels">
+<span class="sig-name descname"><span class="pre">draw_section_labels</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">sections</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Dict</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">shape</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Tuple</span><span class="p"><span class="pre">[</span></span><span class="pre">int</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="p"><span class="pre">...</span></span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">width</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">float</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">3.0</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><a class="reference internal" href="#data_prep.image.Image" title="data_prep.image.Image"><span class="pre">Image</span></a></span></span><a class="headerlink" href="#data_prep.draw.NeuronRenderer.draw_section_labels" title="Link to this definition"></a></dt>
+<dd><p>Draw discrete labels for neuron sections.</p>
+<dl class="simple">
+<dt>Args:</dt><dd><p>sections: Dictionary of section_id -&gt; segments
+shape: Output image shape
+width: Line width</p>
 </dd>
-<dt class="field-even">Returns<span class="colon">:</span></dt>
-<dd class="field-even"><p>An image object with the drawn sections labeled.</p>
-</dd>
-<dt class="field-odd">Return type<span class="colon">:</span></dt>
-<dd class="field-odd"><p><a class="reference internal" href="#data_prep.image.Image" title="data_prep.image.Image">Image</a></p>
+<dt>Returns:</dt><dd><p>Image with section labels</p>
 </dd>
 </dl>
 </dd></dl>
 
-<dl class="py function">
-<dt class="sig sig-object py" id="data_prep.draw.neuron_from_swc">
-<span class="sig-prename descclassname"><span class="pre">data_prep.draw.</span></span><span class="sig-name descname"><span class="pre">neuron_from_swc</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">swc_list</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">width</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">3</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">noise</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">0.05</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">shape</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dropout</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">adjust</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">rgb</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">background_color</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">neuron_color</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">random_brightness</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">random_sharpness</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">binary</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">rng</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#data_prep.draw.neuron_from_swc" title="Link to this definition"></a></dt>
-<dd><p>Generate a neuron image from an SWC list.</p>
-<dl class="field-list simple">
-<dt class="field-odd">Parameters<span class="colon">:</span></dt>
-<dd class="field-odd"><ul class="simple">
-<li><p><strong>swc_list</strong> (<em>list</em>) – List of SWC data representing neuron structure.</p></li>
-<li><p><strong>width</strong> (<em>int</em><em>, </em><em>optional</em>) – Width of the neuron lines. Default is 3.</p></li>
-<li><p><strong>noise</strong> (<em>float</em><em>, </em><em>optional</em>) – Amount of noise to add to the neuron image. Default is 0.05.</p></li>
-<li><p><strong>dropout</strong> (<em>bool</em><em>, </em><em>optional</em>) – Whether to add random signal dropout. Default is True.</p></li>
-<li><p><strong>adjust</strong> (<em>bool</em><em>, </em><em>optional</em>) – Whether to adjust the SWC data. Default is False.</p></li>
-<li><p><strong>rgb</strong> (<em>bool</em><em>, </em><em>optional</em>) – Whether to generate the neuron image in RGB format. Default is True.</p></li>
-<li><p><strong>background_color</strong> (<em>array-like</em><em>, </em><em>optional</em>) – Background color of the neuron image. Default is None.</p></li>
-<li><p><strong>neuron_color</strong> (<em>array-like</em><em>, </em><em>optional</em>) – Color of the neuron. Default is None.</p></li>
-<li><p><strong>random_brightness</strong> (<em>bool</em><em>, </em><em>optional</em>) – Whether to apply random brightness to the neuron image. Default is False.</p></li>
-<li><p><strong>random_sharpness</strong> (<em>bool</em><em>, </em><em>optional</em>) – Whether to randomly vary the sharpness of neuron edges. Default is False.</p></li>
-<li><p><strong>binary</strong> (<em>bool</em><em>, </em><em>optional</em>) – Whether to generate a binary image. Default is False.</p></li>
-<li><p><strong>rng</strong> (<em>numpy.random.Generator</em><em>, </em><em>optional</em>) – Random number generator. Default is None.</p></li>
-</ul>
+<dl class="py method">
+<dt class="sig sig-object py" id="data_prep.draw.NeuronRenderer.neuron_from_swc">
+<span class="sig-name descname"><span class="pre">neuron_from_swc</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">swc_list</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">List</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">config</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><a class="reference internal" href="#data_prep.draw.DrawingConfig" title="data_prep.draw.DrawingConfig"><span class="pre">DrawingConfig</span></a></span></em>, <em class="sig-param"><span class="n"><span class="pre">shape</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Tuple</span><span class="p"><span class="pre">[</span></span><span class="pre">int</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="p"><span class="pre">...</span></span><span class="p"><span class="pre">]</span></span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">None</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dropout</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">adjust</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">False</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">Dict</span></span></span><a class="headerlink" href="#data_prep.draw.NeuronRenderer.neuron_from_swc" title="Link to this definition"></a></dt>
+<dd><p>Generate neuron image from SWC data.</p>
+<dl class="simple">
+<dt>Args:</dt><dd><p>swc_list: SWC neuron data
+config: Drawing configuration
+shape: Output shape (auto-calculated if None)
+dropout: Whether to add signal dropout
+adjust: Whether to adjust coordinates</p>
 </dd>
-<dt class="field-even">Returns<span class="colon">:</span></dt>
-<dd class="field-even"><p><p>Dictionary containing the following keys:
-- “image” : torch.Tensor</p>
-<blockquote>
-<div><p>The generated neuron image.</p>
-</div></blockquote>
-<ul class="simple">
-<li><dl class="simple">
-<dt>”neuron_density”<span class="classifier">torch.Tensor</span></dt><dd><p>The density map of the neuron.</p>
+<dt>Returns:</dt><dd><p>Dictionary with image, density, labels, etc.</p>
 </dd>
 </dl>
-</li>
-<li><dl class="simple">
-<dt>”section_labels”<span class="classifier">torch.Tensor</span></dt><dd><p>The section labels of the neuron.</p>
-</dd>
-</dl>
-</li>
-<li><dl class="simple">
-<dt>”branches”<span class="classifier">array-like</span></dt><dd><p>The branch points of the neuron.</p>
-</dd>
-</dl>
-</li>
-<li><dl class="simple">
-<dt>”seeds”<span class="classifier">list</span></dt><dd><p>List of seed points.</p>
-</dd>
-</dl>
-</li>
-<li><dl class="simple">
-<dt>”scale”<span class="classifier">float</span></dt><dd><p>Scale of the neuron.</p>
-</dd>
-</dl>
-</li>
-<li><dl class="simple">
-<dt>”graph”<span class="classifier">dict</span></dt><dd><p>Graph representation of the neuron.</p>
-</dd>
-</dl>
-</li>
-</ul>
-</p>
-</dd>
-<dt class="field-odd">Return type<span class="colon">:</span></dt>
-<dd class="field-odd"><p>dict</p>
-</dd>
-</dl>
+</dd></dl>
+
 </dd></dl>
 
 </section>
@@ -466,7 +517,7 @@ Each segment is a numpy array with shape (n, 3) representing the coordinates.</p
 
 <dl class="py function">
 <dt class="sig sig-object py" id="data_prep.generate.get_path">
-<span class="sig-prename descclassname"><span class="pre">data_prep.generate.</span></span><span class="sig-name descname"><span class="pre">get_path</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">start</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">boundary</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">kappa</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">20.0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">rng</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">length</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">100</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">step_size</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">1.0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">width</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">3.0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">random_len</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">random_width</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">random_start</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#data_prep.generate.get_path" title="Link to this definition"></a></dt>
+<span class="sig-prename descclassname"><span class="pre">data_prep.generate.</span></span><span class="sig-name descname"><span class="pre">get_path</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">start</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">boundary</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">kappa</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">20.0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">rng</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">length</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">500</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">step_size</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">1.0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">width</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">3.0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">random_len</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">random_width</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">random_start</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#data_prep.generate.get_path" title="Link to this definition"></a></dt>
 <dd><p>Get the neuron segment endpoints starting at a seed point,
 and ending if the path exits the boundary or reaches the path length.</p>
 <dl class="field-list simple">
@@ -477,9 +528,9 @@ and ending if the path exits the boundary or reaches the path length.</p>
 values along each dimension.</p></li>
 <li><p><strong>kappa</strong> (<em>float</em><em>, </em><em>optional</em>) – Concentration parameter for step direction distribution.</p></li>
 <li><p><strong>rng</strong> (<em>np.random.Generator</em><em>, </em><em>optional</em>)</p></li>
-<li><p><strong>length</strong> (<em>int</em><em>, </em><em>optional</em>) – Path length in number of segments. This is the expected path length
-if uniform_len is set to False. The minimum length is 10 if uniform_len is False.
-Default is 100.</p></li>
+<li><p><strong>length</strong> (<em>int</em><em>, </em><em>optional</em>) – Path length in pixels. This is the expected path length
+if uniform_len is set to False. The minimum length is 50 if uniform_len is False.
+Default is 500.</p></li>
 <li><p><strong>step_size</strong> (<em>float</em><em>, </em><em>optional</em>) – Length of each path segment in pixels. Default is 1.0</p></li>
 <li><p><strong>random_len</strong> (<em>bool</em>) – If True, the path length will be sampled from a normal distribution with mean given by length, by default True.</p></li>
 <li><p><strong>random_width</strong> (<em>bool</em><em>, </em><em>optional</em>) – If True, the width of the path segments will be randomly sampled from a truncated normal distribution</p></li>
@@ -497,13 +548,13 @@ Default is 100.</p></li>
 
 <dl class="py function">
 <dt class="sig sig-object py" id="data_prep.generate.make_swc_list">
-<span class="sig-prename descclassname"><span class="pre">data_prep.generate.</span></span><span class="sig-name descname"><span class="pre">make_swc_list</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">size</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Tuple</span><span class="p"><span class="pre">[</span></span><span class="pre">int</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="p"><span class="pre">...</span></span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">length</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">step_size</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">float</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">1.0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">kappa</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">float</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">20.0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">random_len</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">True</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">random_start</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">True</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">random_width</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">rng</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">num_branches</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">0</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">list</span></span></span><a class="headerlink" href="#data_prep.generate.make_swc_list" title="Link to this definition"></a></dt>
+<span class="sig-prename descclassname"><span class="pre">data_prep.generate.</span></span><span class="sig-name descname"><span class="pre">make_swc_list</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">size</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">Tuple</span><span class="p"><span class="pre">[</span></span><span class="pre">int</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="p"><span class="pre">...</span></span><span class="p"><span class="pre">]</span></span></span></em>, <em class="sig-param"><span class="n"><span class="pre">length</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">float</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">step_size</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">float</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">1.0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">kappa</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">float</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">20.0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">random_len</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">True</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">random_start</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">True</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">random_width</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">bool</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">rng</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">num_branches</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">int</span></span><span class="w"> </span><span class="o"><span class="pre">=</span></span><span class="w"> </span><span class="default_value"><span class="pre">0</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">list</span></span></span><a class="headerlink" href="#data_prep.generate.make_swc_list" title="Link to this definition"></a></dt>
 <dd><p>Generate a list of SWC formatted data representing a path with optional branches.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span></dt>
 <dd class="field-odd"><ul class="simple">
 <li><p><strong>size</strong> (<em>Tuple</em><em>[</em><em>int</em><em>, </em><em>...</em><em>]</em>) – The dimensions of the 3D space.</p></li>
-<li><p><strong>length</strong> (<em>int</em>) – The length of the path.</p></li>
+<li><p><strong>length</strong> (<em>float</em>) – The length of the path in pixels.</p></li>
 <li><p><strong>step_size</strong> (<em>float</em><em>, </em><em>optional</em>) – The step size for each move in the path, by default 1.0.</p></li>
 <li><p><strong>kappa</strong> (<em>float</em><em>, </em><em>optional</em>) – The concentration parameter for the von Mises-Fisher distribution, by default 20.0.</p></li>
 <li><p><strong>random_len</strong> (<em>bool</em><em>, </em><em>optional</em>) – If True, the path length will be sampled from a normal distribution with mean given by length, by default True.</p></li>
@@ -518,6 +569,23 @@ Default is 100.</p></li>
 </dd>
 <dt class="field-odd">Return type<span class="colon">:</span></dt>
 <dd class="field-odd"><p>list</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="data_prep.generate.path_length">
+<span class="sig-prename descclassname"><span class="pre">data_prep.generate.</span></span><span class="sig-name descname"><span class="pre">path_length</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">path</span></span><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="n"><span class="pre">ndarray</span><span class="w"> </span><span class="p"><span class="pre">|</span></span><span class="w"> </span><span class="pre">list</span></span></em><span class="sig-paren">)</span> <span class="sig-return"><span class="sig-return-icon">&#x2192;</span> <span class="sig-return-typehint"><span class="pre">float</span></span></span><a class="headerlink" href="#data_prep.generate.path_length" title="Link to this definition"></a></dt>
+<dd><p>Calculate the length of a path defined by a sequence of 3D points.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>path</strong> (<em>Union</em><em>[</em><em>np.ndarray</em><em>, </em><em>list</em><em>]</em>) – A sequence of 3D points defining the path.</p>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>The total length of the path.</p>
+</dd>
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>float</p>
 </dd>
 </dl>
 </dd></dl>
@@ -549,15 +617,15 @@ Default is 100.</p></li>
 <dl class="py function">
 <dt class="sig sig-object py" id="data_prep.generate.save_images_from_swc">
 <span class="sig-prename descclassname"><span class="pre">data_prep.generate.</span></span><span class="sig-name descname"><span class="pre">save_images_from_swc</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">labels_dir</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">outdir</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">sync</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">random_contrast</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">rng</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#data_prep.generate.save_images_from_swc" title="Link to this definition"></a></dt>
-<dd><p>Save images generated from SWC files to the specified output directory.</p>
+<dd><p>Saves images from SWC files using the improved NeuronRenderer API.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters<span class="colon">:</span></dt>
 <dd class="field-odd"><ul class="simple">
-<li><p><strong>labels_dir</strong> (<em>str</em>) – Directory containing the SWC files.</p></li>
-<li><p><strong>outdir</strong> (<em>str</em>) – Directory where the output images will be saved.</p></li>
-<li><p><strong>sync</strong> (<em>bool</em><em>, </em><em>optional</em>) – If True, only save images for SWC files that do not have corresponding output files in the output directory (default is True).</p></li>
-<li><p><strong>random_contrast</strong> (<em>bool</em><em>, </em><em>optional</em>) – If True, apply random contrast to the neuron images (default is False).</p></li>
-<li><p><strong>rng</strong> (<em>numpy.random.Generator</em><em>, </em><em>optional</em>) – Random number generator for reproducibility. If None, a new generator is created (default is None).</p></li>
+<li><p><strong>labels_dir</strong> (<em>str</em>) – Path to directory containing SWC files.</p></li>
+<li><p><strong>outdir</strong> (<em>str</em>) – Path to output directory.</p></li>
+<li><p><strong>sync</strong> (<em>bool</em><em>, </em><em>optional</em>) – Whether to skip files that already have outputs, by default True.</p></li>
+<li><p><strong>random_contrast</strong> (<em>bool</em><em>, </em><em>optional</em>) – Whether to use random contrast, by default False.</p></li>
+<li><p><strong>rng</strong> (<em>numpy.random.Generator</em><em>, </em><em>optional</em>) – Random number generator, by default None.</p></li>
 </ul>
 </dd>
 <dt class="field-even">Return type<span class="colon">:</span></dt>

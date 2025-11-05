@@ -96,12 +96,46 @@
 </ul>
 </li>
 <li class="toctree-l2"><a class="reference internal" href="data_prep.html#module-data_prep.draw">data_prep.draw module</a><ul>
-<li class="toctree-l3"><a class="reference internal" href="data_prep.html#data_prep.draw.draw_neuron"><code class="docutils literal notranslate"><span class="pre">draw_neuron()</span></code></a></li>
-<li class="toctree-l3"><a class="reference internal" href="data_prep.html#data_prep.draw.draw_neuron_density"><code class="docutils literal notranslate"><span class="pre">draw_neuron_density()</span></code></a></li>
-<li class="toctree-l3"><a class="reference internal" href="data_prep.html#data_prep.draw.draw_neuron_mask"><code class="docutils literal notranslate"><span class="pre">draw_neuron_mask()</span></code></a></li>
-<li class="toctree-l3"><a class="reference internal" href="data_prep.html#data_prep.draw.draw_path"><code class="docutils literal notranslate"><span class="pre">draw_path()</span></code></a></li>
-<li class="toctree-l3"><a class="reference internal" href="data_prep.html#data_prep.draw.draw_section_labels"><code class="docutils literal notranslate"><span class="pre">draw_section_labels()</span></code></a></li>
-<li class="toctree-l3"><a class="reference internal" href="data_prep.html#data_prep.draw.neuron_from_swc"><code class="docutils literal notranslate"><span class="pre">neuron_from_swc()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="data_prep.html#data_prep.draw.DrawingConfig"><code class="docutils literal notranslate"><span class="pre">DrawingConfig</span></code></a><ul>
+<li class="toctree-l4"><a class="reference internal" href="data_prep.html#data_prep.draw.DrawingConfig.__post_init__"><code class="docutils literal notranslate"><span class="pre">DrawingConfig.__post_init__()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="data_prep.html#data_prep.draw.DrawingConfig.background_color"><code class="docutils literal notranslate"><span class="pre">DrawingConfig.background_color</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="data_prep.html#data_prep.draw.DrawingConfig.background_mean"><code class="docutils literal notranslate"><span class="pre">DrawingConfig.background_mean</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="data_prep.html#data_prep.draw.DrawingConfig.background_std"><code class="docutils literal notranslate"><span class="pre">DrawingConfig.background_std</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="data_prep.html#data_prep.draw.DrawingConfig.blur"><code class="docutils literal notranslate"><span class="pre">DrawingConfig.blur</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="data_prep.html#data_prep.draw.DrawingConfig.foreground_mean"><code class="docutils literal notranslate"><span class="pre">DrawingConfig.foreground_mean</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="data_prep.html#data_prep.draw.DrawingConfig.foreground_std"><code class="docutils literal notranslate"><span class="pre">DrawingConfig.foreground_std</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="data_prep.html#data_prep.draw.DrawingConfig.mask_threshold"><code class="docutils literal notranslate"><span class="pre">DrawingConfig.mask_threshold</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="data_prep.html#data_prep.draw.DrawingConfig.neuron_color"><code class="docutils literal notranslate"><span class="pre">DrawingConfig.neuron_color</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="data_prep.html#data_prep.draw.DrawingConfig.noise_method"><code class="docutils literal notranslate"><span class="pre">DrawingConfig.noise_method</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="data_prep.html#data_prep.draw.DrawingConfig.random_width"><code class="docutils literal notranslate"><span class="pre">DrawingConfig.random_width</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="data_prep.html#data_prep.draw.DrawingConfig.rgb"><code class="docutils literal notranslate"><span class="pre">DrawingConfig.rgb</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="data_prep.html#data_prep.draw.DrawingConfig.segment_intensity_correlation"><code class="docutils literal notranslate"><span class="pre">DrawingConfig.segment_intensity_correlation</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="data_prep.html#data_prep.draw.DrawingConfig.segment_intensity_correlation_rho"><code class="docutils literal notranslate"><span class="pre">DrawingConfig.segment_intensity_correlation_rho</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="data_prep.html#data_prep.draw.DrawingConfig.sharpness"><code class="docutils literal notranslate"><span class="pre">DrawingConfig.sharpness</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="data_prep.html#data_prep.draw.DrawingConfig.spatial_noise_amplitude"><code class="docutils literal notranslate"><span class="pre">DrawingConfig.spatial_noise_amplitude</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="data_prep.html#data_prep.draw.DrawingConfig.spatial_noise_scale"><code class="docutils literal notranslate"><span class="pre">DrawingConfig.spatial_noise_scale</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="data_prep.html#data_prep.draw.DrawingConfig.vignette_magnitude"><code class="docutils literal notranslate"><span class="pre">DrawingConfig.vignette_magnitude</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="data_prep.html#data_prep.draw.DrawingConfig.width"><code class="docutils literal notranslate"><span class="pre">DrawingConfig.width</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="data_prep.html#data_prep.draw.DrawingConfig.width_correlation"><code class="docutils literal notranslate"><span class="pre">DrawingConfig.width_correlation</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="data_prep.html#data_prep.draw.DrawingConfig.width_correlation_rho"><code class="docutils literal notranslate"><span class="pre">DrawingConfig.width_correlation_rho</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="data_prep.html#data_prep.draw.GifConfig"><code class="docutils literal notranslate"><span class="pre">GifConfig</span></code></a><ul>
+<li class="toctree-l4"><a class="reference internal" href="data_prep.html#data_prep.draw.GifConfig.gif_axis"><code class="docutils literal notranslate"><span class="pre">GifConfig.gif_axis</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="data_prep.html#data_prep.draw.GifConfig.gif_frames"><code class="docutils literal notranslate"><span class="pre">GifConfig.gif_frames</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="data_prep.html#data_prep.draw.GifConfig.gif_path"><code class="docutils literal notranslate"><span class="pre">GifConfig.gif_path</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="data_prep.html#data_prep.draw.GifConfig.save_gif"><code class="docutils literal notranslate"><span class="pre">GifConfig.save_gif</span></code></a></li>
+</ul>
+</li>
+<li class="toctree-l3"><a class="reference internal" href="data_prep.html#data_prep.draw.NeuronRenderer"><code class="docutils literal notranslate"><span class="pre">NeuronRenderer</span></code></a><ul>
+<li class="toctree-l4"><a class="reference internal" href="data_prep.html#data_prep.draw.NeuronRenderer.draw_density"><code class="docutils literal notranslate"><span class="pre">NeuronRenderer.draw_density()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="data_prep.html#data_prep.draw.NeuronRenderer.draw_mask"><code class="docutils literal notranslate"><span class="pre">NeuronRenderer.draw_mask()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="data_prep.html#data_prep.draw.NeuronRenderer.draw_neuron"><code class="docutils literal notranslate"><span class="pre">NeuronRenderer.draw_neuron()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="data_prep.html#data_prep.draw.NeuronRenderer.draw_path"><code class="docutils literal notranslate"><span class="pre">NeuronRenderer.draw_path()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="data_prep.html#data_prep.draw.NeuronRenderer.draw_section_labels"><code class="docutils literal notranslate"><span class="pre">NeuronRenderer.draw_section_labels()</span></code></a></li>
+<li class="toctree-l4"><a class="reference internal" href="data_prep.html#data_prep.draw.NeuronRenderer.neuron_from_swc"><code class="docutils literal notranslate"><span class="pre">NeuronRenderer.neuron_from_swc()</span></code></a></li>
+</ul>
+</li>
 </ul>
 </li>
 <li class="toctree-l2"><a class="reference internal" href="data_prep.html#module-data_prep.generate">data_prep.generate module</a><ul>
@@ -109,6 +143,7 @@
 <li class="toctree-l3"><a class="reference internal" href="data_prep.html#data_prep.generate.get_next_point"><code class="docutils literal notranslate"><span class="pre">get_next_point()</span></code></a></li>
 <li class="toctree-l3"><a class="reference internal" href="data_prep.html#data_prep.generate.get_path"><code class="docutils literal notranslate"><span class="pre">get_path()</span></code></a></li>
 <li class="toctree-l3"><a class="reference internal" href="data_prep.html#data_prep.generate.make_swc_list"><code class="docutils literal notranslate"><span class="pre">make_swc_list()</span></code></a></li>
+<li class="toctree-l3"><a class="reference internal" href="data_prep.html#data_prep.generate.path_length"><code class="docutils literal notranslate"><span class="pre">path_length()</span></code></a></li>
 <li class="toctree-l3"><a class="reference internal" href="data_prep.html#data_prep.generate.rvmf"><code class="docutils literal notranslate"><span class="pre">rvmf()</span></code></a></li>
 <li class="toctree-l3"><a class="reference internal" href="data_prep.html#data_prep.generate.save_images_from_swc"><code class="docutils literal notranslate"><span class="pre">save_images_from_swc()</span></code></a></li>
 </ul>

@@ -1,6 +1,7 @@
 
 import random
 import torch
+import numpy as np
 
 from memory.tree import SumTree
 
@@ -234,6 +235,10 @@ class PrioritizedReplayBuffer:
         real_size = len(self)
         assert real_size >= batch_size, "buffer contains less samples than batch size"
         
+        # Handle edge case where tree.total might be 0
+        if self.tree.total <= 0:
+            raise ValueError(f"Tree total is {self.tree.total}, which should not happen. Buffer may be corrupted.")
+        
         sample_idxs, tree_idxs = [], []
         priorities = torch.empty(batch_size, 1, dtype=torch.float)
 
@@ -242,6 +247,8 @@ class PrioritizedReplayBuffer:
             a, b = segment * i, segment * (i + 1)
 
             cumsum = random.uniform(a, b)
+            # Ensure cumsum doesn't exceed tree.total due to floating point precision
+            cumsum = min(cumsum, self.tree.total)
             # sample_idx is a sample index in buffer, needed further to sample actual transitions
             # tree_idx is a index of a sample in the tree, needed further to update priorities
             tree_idx, priority, sample_idx = self.tree.get(cumsum)
@@ -305,7 +312,21 @@ class PrioritizedReplayBuffer:
 
         for data_idx, priority in zip(data_idxs, priorities):
             priority = priority.item()
-            priority = (priority + self.eps) ** self.alpha
+            
+            # Check for NaN or invalid values
+            if not isinstance(priority, (int, float)) or np.isnan(priority) or np.isinf(priority):
+                print(f"Warning: Invalid priority {priority} detected, using eps instead")
+                priority = self.eps
+            
+            # Ensure priority is non-negative before transformation
+            priority = abs(priority) + self.eps
+            priority = priority ** self.alpha
+            
+            # Check again after transformation
+            if np.isnan(priority) or np.isinf(priority):
+                print(f"Warning: Priority became invalid after transformation, using eps instead")
+                priority = self.eps
+                
             self.tree.update(data_idx, priority)
             self.max_priority = max(self.max_priority, priority)
     

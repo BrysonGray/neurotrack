@@ -5,6 +5,7 @@ Train a Soft Actor-Critic (SAC) model for neuron tracing.
 import argparse
 from datetime import datetime
 import json
+import numpy as np
 import os
 from pathlib import Path
 import sys
@@ -16,6 +17,9 @@ script_path = Path(os.path.abspath(__file__))
 parent_dir = script_path.parent.parent  # Go up two levels
 sys.path.append(str(parent_dir))
 from environments.sac_tracking_env import Environment
+from neurotrack.data.neuron_data import Dataset, DataLoader, DataGenerator, DrawingComplexityConfig
+# from environments.neuron_tracking_environment import NeuronTrackingEnvironment
+from environments.neuron_tracking_environment import NeuronTrackingEnvironment
 from memory.buffer import PrioritizedReplayBuffer
 from models.resblock import ResidualBlock3D
 from models.resnet import ResNet3D
@@ -37,8 +41,8 @@ def main():
     
     JSON Configuration Parameters
     -----------------------------
-    img_path : str
-        Path to the input image.
+    data_dir : str
+        Path to the input data directory.
     outdir : str
         Directory to save output results.
     name : str
@@ -81,7 +85,7 @@ def main():
     with open(args_json) as f:
         params = json.load(f)
     
-    img_path = params["img_path"]
+    data_dir = params["data_dir"]
     outdir = params["outdir"]
     name = params["name"]
     step_size = params["step_size"] if "step_size" in params else 1.0
@@ -98,6 +102,9 @@ def main():
     target_entropy = params["target_entropy"] if "target_entropy" in params else 0.0
     repeat_starts = params["repeat_starts"] if "repeat_starts" in params else True
     section_masking = params["section_masking"] if "section_masking" in params else False
+    branching = params["branching"] if "branching" in params else 0
+    rng_seed = params["rng_seed"] if "rng_seed" in params else 1
+    start_complexity = params["start_complexity"] if "start_complexity" in params else 0.0
     patch_radius = 17
     in_channels = 2
 
@@ -110,18 +117,28 @@ def main():
         classifier.eval()
     else:
         classifier = None
+    
+    rng = np.random.default_rng(rng_seed)
+    # Create dataset
+    dataset = Dataset(data_dir=data_dir, rng=rng)
+    # Create dataloader
+    dataloader = DataLoader(dataset=dataset, complexity=start_complexity, rng=rng)
 
-    env = Environment(img_path,
-                    radius=patch_radius,
-                    step_size=step_size,
-                    step_width=step_width,
-                    max_len=1000,
-                    alpha=alpha,
-                    beta=beta,
-                    friction=friction,
-                    repeat_starts=repeat_starts,
-                    section_masking=section_masking,
-                    classifier=classifier)
+    # Create environment
+    env = NeuronTrackingEnvironment(
+        dataloader=dataloader,
+        radius=patch_radius,
+        step_size=step_size,
+        step_width=step_width,
+        max_len=1000,
+        alpha=alpha,
+        beta=beta,
+        friction=friction,
+        repeat_starts=repeat_starts,
+        section_masking=section_masking,
+        branching=branching,
+        classifier=classifier
+    )
     
     input_size = 2*patch_radius+1
     init_temperature = 0.005
@@ -181,11 +198,13 @@ def main():
 
     memory = PrioritizedReplayBuffer(100000, obs_shape=(in_channels,input_size,input_size,input_size), action_shape=(3,), alpha=0.8)
 
+    logdir = script_path.parent.parent / "logs" / name
+    os.makedirs(logdir, exist_ok=True)
     sac.train(env, actor, Q1, Q2, Q1_target, Q2_target, log_alpha,
           actor_optimizer, Q1_optimizer, Q2_optimizer, log_alpha_optimizer,
-          memory, target_entropy, batch_size, gamma, tau, outdir, name,
-          show_states=True, save_snapshots=False, update_after=256,
-          updates_per_step=1, update_every=1, n_episodes=n_episodes, n_trials=1)
+          memory, target_entropy, batch_size, gamma, tau, outdir, logdir,
+          name, show=True, pause_after_episode=False, show_live=False,
+          update_after=256, updates_per_step=1, update_every=1, n_episodes=n_episodes)
     
     print("Done!")
     

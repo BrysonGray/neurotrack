@@ -29,6 +29,7 @@ from tqdm import tqdm
 # Add parent directory to path to import local modules
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from data_prep import load, draw, save, data_utils
+from data_prep.draw import NeuronRenderer, DrawingConfig
 
 
 def parse_args():
@@ -167,11 +168,11 @@ def process_neuron_data(tifs_path, swc_path, tifs_out, swc_out, scaling_dict_pat
             # Draw density
             sections, section_graph = load.parse_swc(swc_list)
             branches, terminals = load.get_critical_points(swc_list, sections)
-            segments = []
-            for section in sections.values():
-                segments.append(section)
-            segments = np.concatenate(segments)
-            density = draw.draw_neuron(segments, shape=img.shape, width=3.0, noise=0.0, rgb=False)
+                        
+            # Use the new NeuronRenderer with clean config
+            renderer = NeuronRenderer()
+            config = DrawingConfig(width=3.0, rgb=False)
+            density = renderer.draw_neuron(sections, shape=img.shape, config=config)
             
             # Get a random branch point
             branch_point = branches[torch.randint(0, len(branches), (1,)).squeeze(0)]

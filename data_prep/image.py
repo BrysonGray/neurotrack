@@ -91,30 +91,33 @@ def draw_line_segment(segment, width, mask=False, value=1, sharpness=1.0):
     X : torch.Tensor
         A patch with the new line segment starting at its center.
     """
-    start = segment[0]
-    segment = segment[1] - segment[0]
     if isinstance(segment, np.ndarray):
-        segment = torch.from_numpy(segment)
-    # segment_length = torch.sqrt(torch.sum(segment**2))
+        segment = torch.from_numpy(segment).to(dtype=torch.float32)
+    else:
+        # ensure float dtype for subsequent math
+        segment = segment.to(dtype=torch.float32)
+    start = segment[0]
+    direction_vec = segment[1] - segment[0]
 
     # the patch should contain both line end points plus some blur
     # L = int(torch.ceil(segment_length)) + 1 # The radius of the patch is the whole line length since the line starts at patch center.
-    L = int(max(abs(segment).tolist()))
+    L = int(max(abs(direction_vec).tolist()))
     overhang = int(np.ceil(2*width)) # include space beyond the end of the line
     patch_radius = L + overhang
 
     patch_size = 2*patch_radius + 1
-    x = [torch.arange(patch_size),]*3
+    # Create coordinate grid as float tensors on same device as direction_vec
+    x = [torch.arange(patch_size, dtype=torch.float32, device=direction_vec.device),] * 3
     X = torch.stack(torch.meshgrid(*x, indexing='ij'), -1)
-    translation = (torch.tensor([patch_radius,]*3) + (start % 1)) # add start % 1 because the center of the patch will be rounded to the nearest pixel
+    translation = (torch.tensor([patch_radius,] * 3, dtype=torch.float32, device=direction_vec.device) + (start % 1))
     X = X - translation
-    seglen_sq = torch.dot(segment, segment)
-    P = torch.outer(segment, segment) / seglen_sq
-    P_ = (torch.eye(3) - P)
+    seglen_sq = torch.dot(direction_vec, direction_vec)
+    P = torch.outer(direction_vec, direction_vec) / seglen_sq
+    P_ = (torch.eye(3, dtype=direction_vec.dtype, device=direction_vec.device) - P)
     P_X = torch.matmul(P_[None,None,None], X[...,None]).squeeze()
     dist = torch.linalg.norm(P_X, dim=-1)
-    segTb = torch.matmul(segment[None,None,None,None], X[...,None]).squeeze()
-    dist_to_end = torch.linalg.norm(X - segment, dim=-1)
+    segTb = torch.matmul(direction_vec[None,None,None,None], X[...,None]).squeeze()
+    dist_to_end = torch.linalg.norm(X - direction_vec, dim=-1)
     dist_to_start = torch.linalg.norm(X, dim=-1)
     dist = torch.where(segTb > seglen_sq, dist_to_end, dist)
     dist = torch.where(segTb < 0, dist_to_start, dist)
@@ -125,9 +128,9 @@ def draw_line_segment(segment, width, mask=False, value=1, sharpness=1.0):
         X = dist < width / 2
         X = X.to(dtype=torch.int16) * value
     else:
-        X = torch.exp(-0.5 * (dist / (width / 2.35))**(2 * sharpness)) # FWHM = 2.35 * sigma -> sigma = FWHM / 2.35
+        X = torch.exp(-0.5 * (dist / (width / 2.35))**(2 * sharpness)) * value # FWHM = 2.35 * sigma -> sigma = FWHM / 2.35
     
-    return X.to(device=segment.device)
+    return X.to(device=direction_vec.device)
 
 
 def extract_spherical_patch(volume, x, y, z, center, radius, order=1, permutation=None, normalize=False):
@@ -247,7 +250,7 @@ class Image:
             padding : ndarray
                 Length that patch overlaps with image boundaries on each end of each dimension.
         """
-        i,j,k = [int(round(x.item())) for x in center]
+        i,j,k = [int(x.item()) for x in center]
         if self.data.ndim == 4:
             shape = self.data.shape[1:]
         elif self.data.ndim == 3:
@@ -341,11 +344,11 @@ class Image:
         X = X[padding[0]:X.shape[0]-padding[1], padding[2]:X.shape[1]-padding[3], padding[4]:X.shape[2]-padding[5]]
 
         # add segment to patch
-        if mask:
-            # set the new patch to the minimum values between arrays X excluding zeros.
-            patch[channel] = torch.where(X*patch[channel] > 0, torch.minimum(X,patch[channel]), torch.maximum(X,patch[channel]))
-        else:
-            patch[channel] = torch.maximum(X, patch[channel])
+        # if mask:
+        #     # set the new patch to the minimum values between arrays X excluding zeros.
+        #     patch[channel] = torch.where(X*patch[channel] > 0, torch.minimum(X,patch[channel]), torch.maximum(X,patch[channel]))
+        # else:
+        patch[channel] = torch.maximum(X, patch[channel])
         new_patch = patch[channel].clone()
 
         return old_patch, new_patch

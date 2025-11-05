@@ -135,3 +135,5 @@ dmypy.json
 # Training data and model weights
 *.pt
 *.csv
+*.tif
+*.swc

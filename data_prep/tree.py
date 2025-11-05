@@ -18,11 +18,11 @@ def split_paths_into_sections(paths):
     for path in paths:
         intersections = [0] + [i+1 for i, point in enumerate(path[1:]) if point[:3] in path_origins]
         if len(intersections) > 1:
-            sections |= {len(sections) + i: path[intersections[i]:intersections[i+1]+1] for i in range(len(intersections)-1)}
+            sections |= {len(sections) + i+1: path[intersections[i]:intersections[i+1]+1] for i in range(len(intersections)-1)}
             if intersections[-1] != len(path) - 1:
-                sections[len(sections)] = path[intersections[-1]:]  # Add the last segment
+                sections[len(sections)+1] = path[intersections[-1]:]  # Add the last segment
         else:
-            sections[len(sections)] = path
+            sections[len(sections)+1] = path
 
     return sections
 
@@ -140,7 +140,6 @@ def remove_soma(swc_list, max_radius=7.0, verbose=False):
     seeds : np.ndarray
         Coordinates of the seeds after soma removal.
     """
-    max_radius = 7.0
     buffer = []
     buffer_size = 5
     edge_list = load.undirected_edge_list(swc_list)

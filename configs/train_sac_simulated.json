@@ -1,0 +1,21 @@
+{
+    "img_path": "/home/brysongray/data/neurotrack_data/simulated_neurons/de-novo/curves_with_artifacts_grayscale_b-1/",
+    "outdir": "/home/brysongray/data/neurotrack_data/model_weights/sac_weights/curves_with_artifacts_grayscale_b-1_training_outputs",
+    "sac_weights": "/home/brysongray/data/neurotrack_data/model_weights/sac_weights/curves_with_artifacts_grayscale_var_width_training_outputs/model_state_dicts_curves_with_artifacts_grayscale_var_width_08-30-25.pt",
+    "name": "curves_with_artifacts_grayscale_b-1",
+    "n_seeds": 1,
+    "step_size": 2.0,
+    "step_width": 4.0,
+    "batch_size": 256,
+    "tau": 0.005,
+    "gamma": 0.1,
+    "learning_rate": 0.001,
+    "alpha": 1.0,
+    "beta": 0.2,
+    "friction": 0.0,
+    "n_episodes": 4000,
+    "init_temperature": 0.005,
+    "target_entropy": 0.0,
+    "repeat_starts": 0,
+    "section_masking": 0
+}

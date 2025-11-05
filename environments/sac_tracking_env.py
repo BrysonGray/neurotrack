@@ -405,11 +405,11 @@ class Environment():
                 old_patch = old_patch / torch.tensor(255.0, dtype=torch.float32)
                 new_patch = new_patch / torch.tensor(255.0, dtype=torch.float32)
             # get reward
-            center = torch.round(segment[0]).to(dtype=torch.int)
             segment_vec = segment[1] - segment[0]
             L = int(torch.abs(segment_vec).max().item()) # The radius of the patch is the whole line length since the line starts at patch center.
             overhang = int(2*self.step_width) # include space beyond the end of the line
             patch_radius = L + overhang
+            center = segment[0]
             density_patch, _ = self.true_density.crop(center, patch_radius, interp=False, pad=False)
 
             # mask out competing paths

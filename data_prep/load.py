@@ -171,6 +171,7 @@ def parse_swc_list_original(swc_list, transpose=True):
                     sections[section_id] = torch.stack((sections[section_id][...,2], sections[section_id][...,1], sections[section_id][...,0], sections[section_id][...,3]), dim=2) #type: ignore #
                 section_id = key+1 # go to the section whose first segment corresponds to the next key
                 section_graph[section_id] = []
+                
     return sections, section_graph
 
 
@@ -220,6 +221,9 @@ def parse_swc(swc_list, transpose=True, verbose=False):
         The directed adjacency list of neuron sections.
     """
     swc_list = np.array(swc_list)
+    if swc_list.size == 0:
+        return {}, {}
+    
     # Compute undirected edge list
     edge_list = undirected_edge_list(swc_list)
     # Make list of branching nodes

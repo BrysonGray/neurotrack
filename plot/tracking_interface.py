@@ -38,16 +38,16 @@ def manual_step(env, step_size=2.0):
         elif action == 'b':
             point = env.paths[env.head_id][-1]
             env.paths.append(point[None])
-            env.path_labels.append(0)
+            # env.path_labels.append(0)
             env.prev_children.append(env.prev_children[env.head_id])
             env.roots.append(point)
             env.img.draw_point(point, radius=env.step_width, channel=-1)
         else:
             action = user_input_dict[action]
             action = action.to(device=device)
-            action = action * step_size
+            action = action * getattr(env, 'step_size', step_size)
             display.clear_output(wait=True)
-            observation, reward, terminated = env.step(action, verbose=True)
+            observation, reward, terminated, truncated, info = env.step(action, verbose=True, training=False)
 
             # Show:
             # 1) Whole image with path overlayed,
@@ -58,18 +58,18 @@ def manual_step(env, step_size=2.0):
             path = env.img.data[-1].amax(dim=0)#.permute(1,0)
             ax[0].imshow(img)
             ax[0].imshow(path, cmap='plasma', alpha=0.5)
-            if len(env.path_labels) > 0:
-                label = env.path_labels[env.head_id]
-            else:
-                label = None
-            ax[0].set_title(f'path label: {label}')
+            # if len(env.path_labels) > 0:
+            #     label = env.path_labels[env.head_id]
+            # else:
+            #     label = None
+            # ax[0].set_title(f'path label: {label}')
             # patch, _ = env.img.crop(env.paths[env.head_id][-1], env.radius, interp=False)
             patch = observation[0]
             patch = patch[:, env.radius]
             ax[1].imshow(patch[:-1].permute(1,2,0).squeeze())
-            # ax[1].imshow(patch[3].permute(1,0), cmap='plasma', alpha=0.5)
+            ax[1].imshow(patch[-1], cmap='plasma', alpha=0.5)
 
-            if not terminated:
+            if not info["terminate_episode"]:
                 center = env.paths[env.head_id][-1]
 
                 density_patch = env.true_density.crop(center, env.radius, interp=False)[0]
@@ -108,7 +108,7 @@ def manual_step(env, step_size=2.0):
         for a in ax:
             a.axis('off')
         print(f"reward: {reward}")
-        print(f"terminated: {terminated}")
+        print(f"terminated: {info['terminate_episode']}")
 
         display.display(plt.gcf())
 
@@ -125,7 +125,7 @@ def show_state(env, fig, live=False, ep_return=None, reward=None, policy_loss=No
     """
     from matplotlib import patches  # local import to avoid global dependency
 
-    print(f"image: {env.img_files[env.img_idx].split('/')[-1]}")
+    print(f"image: {env.current_neuron_info['neuron_name']}")
     display.clear_output(wait=True)
 
     # Reset view; one or more axes depending on `live`
@@ -227,22 +227,23 @@ def show_state(env, fig, live=False, ep_return=None, reward=None, policy_loss=No
             else:
                 density_ch = density_patch
 
-            # Optionally mask out competing sections
-            if env.section_masking:
-                current_label = env.path_labels[env.head_id]
-                if current_label != 0:
-                    labels_patch, _ = env.section_labels.crop(center, env.radius, interp=False, pad=False)
-                    labels_patch = labels_patch[0]
-                    # Create mask using vectorized operations
-                    section_mask = torch.zeros_like(density_ch, dtype=torch.bool)
-                    prev_children = env.prev_children[env.head_id]
-                    graph_current = env.graph[current_label]
-                    section_ids = [current_label] + [x for x in graph_current if x not in prev_children]
-                    for id in section_ids:
-                        section_mask |= (labels_patch == id)
-                    density_ch = density_ch * section_mask.float()
+            # # Optionally mask out competing sections
+            # if env.section_masking:
+            #     current_label = env.path_labels[env.head_id]
+            #     if current_label != 0:
+            #         labels_patch, _ = env.section_labels.crop(center, env.radius, interp=False, pad=False)
+            #         labels_patch = labels_patch[0]
+            #         # Create mask using vectorized operations
+            #         section_mask = torch.zeros_like(density_ch, dtype=torch.bool)
+            #         prev_children = env.prev_children[env.head_id]
+            #         graph_current = env.graph[current_label]
+            #         section_ids = [current_label] + [x for x in graph_current if x not in prev_children]
+            #         for id in section_ids:
+            #             section_mask |= (labels_patch == id)
+            #         density_ch = density_ch * section_mask.float()
 
-            density_proj = density_ch.amax(dim=0)  # (W, D)
+            # density_proj = density_ch.amax(dim=0)  # (W, D)
+            density_proj = density_ch[env.radius]  # single slice through center
             ax_right.imshow(density_proj, cmap='Reds', vmax=1.0, vmin=0.0)
             ax_right.imshow(path_obs_proj, cmap='Greens', vmax=1.0, vmin=0.0, alpha=0.5)
             ax_right.axis('off')

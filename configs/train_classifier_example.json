@@ -1,0 +1,14 @@
+{
+    "name": "branch_classifier_training",
+    "data_dir": "/path/to/training/data",
+    "outdir": "/path/to/output",
+    "epochs": 100,
+    "learning_rate": 0.001,
+    "batch_size": 32,
+    "channels": 1,
+    "weights": null,
+    "checkpoint_path": null,
+    "save_checkpoints": true,
+    "checkpoint_interval": 10,
+    "keep_last_n_checkpoints": 5
+}

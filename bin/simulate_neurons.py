@@ -195,16 +195,20 @@ def main():
             noise_ = np.random.random() * (noise - 0.05) + 0.05 # min: 0.05, max: noise
         else:
             noise_ = noise
-        swc_data = draw.neuron_from_swc(swc_lists[i],
-                                        width=width,
-                                        noise=noise_,
-                                        adjust=adjust,
-                                        rgb=rgb,
-                                        neuron_color=color,
-                                        background_color=background,
-                                        random_brightness=random_brightness,
-                                        dropout=dropout,
-                                        binary=binary) # Use simulated paths to draw the image.
+        renderer = draw.NeuronRenderer()
+        config = draw.DrawingConfig(
+            width=width,
+            rgb=rgb,
+            neuron_color=tuple(color.tolist()),
+            background_color=tuple(background.tolist()),
+        )
+        swc_data = renderer.neuron_from_swc(
+            swc_lists[i],
+            config=config,
+            shape=None,
+            dropout=dropout,
+            adjust=adjust,
+        )  # Use simulated paths to draw the image.
         
         # torch.save(swc_data, os.path.join(out, f"{fnames[i]}.pt"))
         if not os.path.exists(os.path.join(out, f"{fnames[i]}")):

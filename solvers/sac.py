@@ -6,6 +6,7 @@ updating the Q-networks and actor, performing target network updates, and traini
 """
 
 import csv
+from collections import deque
 from datetime import datetime
 from itertools import count
 import matplotlib.pyplot as plt
@@ -50,9 +51,6 @@ def sample_from_output(out, random=False):
         A multivariate normal distribution parameterized by the processed mean
         and log variance.
     """
-    
-    if out.isnan().any(): # TODO: solve this properly
-        out = torch.nan_to_num(out, nan=1.0, posinf=1.0, neginf=1.0)
 
     mean = out[:,:3] # component 0, 1 and 2
     logvar = out[:,3:] # logvar component 3
@@ -127,6 +125,18 @@ def update_Q(actor, Q1, Q1_target, Q2, Q2_target,
         Q1_target_vals = Q1_target(next_states) # vector of q-values for each choice
         Q2_target_vals = Q2_target(next_states)
         targets = rewards + gamma * torch.logical_not(dones) * (torch.minimum(Q1_target_vals, Q2_target_vals) - log_alpha.exp() * logprobs[:,None])
+        
+        # Check for NaN values in intermediate computations
+        if torch.isnan(logprobs).any():
+            print("WARNING: NaN detected in logprobs!", flush=True)
+        if torch.isnan(Q1_target_vals).any():
+            print("WARNING: NaN detected in Q1_target_vals!", flush=True)
+        if torch.isnan(Q2_target_vals).any():
+            print("WARNING: NaN detected in Q2_target_vals!", flush=True)
+        if torch.isnan(log_alpha.exp()).any():
+            print(f"WARNING: NaN detected in log_alpha.exp()! log_alpha={log_alpha}", flush=True)
+        if torch.isnan(targets).any():
+            print("WARNING: NaN detected in targets!", flush=True)
     # compute q-values to compare against targets
     current_state = torch.cat((obs, 
                         torch.ones((obs.shape[0], 1, obs.shape[2], obs.shape[3], obs.shape[4]), 
@@ -153,6 +163,15 @@ def update_Q(actor, Q1, Q1_target, Q2, Q2_target,
     Q2_optimizer.step()
 
     td_error = torch.maximum(Q1_td_error, Q2_td_error).squeeze()
+    
+    # Check for NaN values in td_error
+    if torch.isnan(td_error).any():
+        print("WARNING: NaN detected in td_error!", flush=True)
+        print(f"Q1_vals has NaN: {torch.isnan(Q1_vals).any()}", flush=True)
+        print(f"Q2_vals has NaN: {torch.isnan(Q2_vals).any()}", flush=True)
+        print(f"targets has NaN: {torch.isnan(targets).any()}", flush=True)
+        print(f"Q1_td_error has NaN: {torch.isnan(Q1_td_error).any()}", flush=True)
+        print(f"Q2_td_error has NaN: {torch.isnan(Q2_td_error).any()}", flush=True)
     
     return td_error
 
@@ -204,7 +223,22 @@ def update_actor(obs, actor, actor_optimizer, Q1, Q2, log_alpha, log_alpha_optim
     actor_optimizer.step()
 
     log_alpha_optimizer.zero_grad()
-    alpha_loss = log_alpha * (-logprobs - target_entropy).detach().mean()
+    entropy_term = (-logprobs - target_entropy).detach()
+    
+    # Check for NaN in entropy term
+    if torch.isnan(entropy_term).any():
+        print("WARNING: NaN detected in entropy term for alpha loss!", flush=True)
+        print(f"logprobs has NaN: {torch.isnan(logprobs).any()}", flush=True)
+        print(f"target_entropy: {target_entropy}", flush=True)
+    
+    alpha_loss = log_alpha * entropy_term.mean()
+    
+    # Check for NaN in alpha_loss
+    if torch.isnan(alpha_loss).any():
+        print("WARNING: NaN detected in alpha_loss!", flush=True)
+        print(f"log_alpha: {log_alpha}", flush=True)
+        print(f"entropy_term.mean(): {entropy_term.mean()}", flush=True)
+    
     alpha_loss.backward()
     log_alpha_optimizer.step()
 
@@ -253,14 +287,17 @@ def train(env,
           gamma,
           tau,
           outdir,
+          logdir,
           name,
-          show_states=True,
-          save_snapshots=False,
           update_after=256,
           updates_per_step=1,
           update_every=1,
           n_episodes=50,
-          n_trials=1,):
+          dynamic_complexity=True,
+          show=True,
+          pause_after_episode=False,
+          show_live=False,
+          pause_after_step=False):
     """
     Train the Soft Actor-Critic (SAC) model.
     
@@ -298,14 +335,12 @@ def train(env,
         Discount factor for future rewards.
     tau : float
         Soft update parameter for updating the target networks.
-    outdir : str
-        Directory to save model snapshots and logs.
+    outdir : str or Path
+        Directory to save model snapshots and checkpoints.
+    logdir : str or Path
+        Directory to save training logs.
     name : str
         Name for saving model snapshots and logs.
-    show_states : bool, optional
-        Whether to show the states during training (default is True).
-    save_snapshots : bool, optional
-        Whether to save snapshots of the best trials (default is False).
     update_after : int, optional
         Number of steps to collect transitions before starting updates (default is 256).
     updates_per_step : int, optional
@@ -314,138 +349,178 @@ def train(env,
         Frequency of updates in terms of steps (default is 1).
     n_episodes : int, optional
         Number of episodes to train for (default is 50).
-    n_trials : int, optional
-        Number of trials per episode (default is 1).
+    dynamic_complexity : bool, optional
+        Whether to use dynamic complexity adjustment (default is True).
+    show : bool, optional
+        Whether to show each finished episode and pause.
+    pause_after_episode : bool, optional
+        Whether to pause after each episode (default is False).
+    show_live : bool, optional
+        Whether to show the state of the environment after each step during training.
+    pause_after_step : bool, optional
+        Whether to pause after each step (default is False).
     """
 
     steps_done = 0
     last_save = 0
     ep_returns = []
+    
+    reward_cache = deque(maxlen=10000)
+    moving_avg_reward = 0.0
+    if dynamic_complexity:
+        last_avg_reward = 0.0  # Track previous average for improvement detection
 
-    if not os.path.isdir(outdir):
-        os.makedirs(outdir, exist_ok=True)
-    if show_states:
-        fig, ax = plt.subplots(3,3)
+    # Ensure outdir and logdir are Path objects
+    outdir = Path(outdir)
+    logdir = Path(logdir)
+    
+    # Create directories if they don't exist
+    outdir.mkdir(parents=True, exist_ok=True)
+    logdir.mkdir(parents=True, exist_ok=True)
+    
+    if show:
+        fig, ax = plt.subplots(2, 3, figsize=(15,10))
         plt.ion()
 
     # Train the Network
-    for ep in tqdm(range(n_episodes)):
-        policy_loss = []
-        coverages = []
-        trial_returns = []
-        labeled_neurons = []
-        # run n trials per episode before moving on to the next image.
-        # The best trial is saved if save_snapshots==True.
-        for trial in range(n_trials):
-            obs = env.get_state()
-            ep_return = 0
-            ep_rewards = []
-            training = False
-            for t in count():
-                actor.eval()
-                if steps_done < update_after:
-                    action = torch.randn(3)*3
-                else:
-                    training = True
-                    actor_out = actor(obs.to(DEVICE))
-                    direction_dist = sample_from_output(actor_out.detach().cpu())
-                    action = direction_dist.rsample()[0]
-                    
-                steps_done += 1
-                # take step, get observation and reward, and move index to next streamline
-                next_obs, reward, terminated = env.step(action, training=training)
-
-                ep_return += reward.cpu().item()
-                ep_rewards.append(reward.cpu().item())
-
-                # Store the transition in memory
-                memory.push(obs.cpu(), action.cpu(), next_obs.cpu(), reward.cpu(), terminated)
-                
-                if steps_done >= update_after:
-                    if steps_done % update_every == 0:
-                        # Perform updates once there is sufficient transitions saved.
-                        actor.train()
-                        for j in range(updates_per_step):
-                            if isinstance(memory, ReplayBuffer):
-                                obs, actions, next_obs, rewards, dones = memory.sample(batch_size, transform=True)
-                                td_error = update_Q(actor, Q1, Q1_target, Q2, Q2_target,
-                                                    obs, actions, rewards, next_obs, dones,
-                                                    Q1_optimizer, Q2_optimizer, gamma,
-                                                    log_alpha, weights=None)
-                            elif isinstance(memory, PrioritizedReplayBuffer):
-                                obs, actions, next_obs, rewards, dones, weights, tree_idxs = memory.sample(batch_size, transform=True)
-                                td_error = update_Q(actor, Q1, Q1_target, Q2, Q2_target,
-                                                    obs, actions, rewards, next_obs, dones,
-                                                    Q1_optimizer, Q2_optimizer, gamma,
-                                                    log_alpha, weights=weights)
-                                memory.update_priorities(tree_idxs, td_error.cpu().numpy())                    
-                            else:
-                                raise RuntimeError("Unknown memory buffer")
-                                
-                            # Perform one step of optimization on the policy network
-                            loss = update_actor(obs, actor, actor_optimizer, Q1, Q2, log_alpha,
-                                         log_alpha_optimizer, target_entropy)
-                            policy_loss.append(loss)
-                            # update target networks
-                            target_update(Q1, Q2, Q1_target, Q2_target, tau)
-
-                        
-                if terminated:
-                    if save_snapshots:
-                        labeled_neuron = env.img.data[-1].detach().cpu() > 0.3 
-                        true_neuron = torch.linalg.norm(env.true_density.data[-1].detach().cpu(), dim=0) > 0.94
-                        TP = torch.sum(torch.logical_and(labeled_neuron, true_neuron))
-                        tot = torch.sum(true_neuron)
-                        coverages.append(TP/tot)
-                        labeled_neurons.append(env.img.data[-1].detach().clone().cpu())
-                        trial_returns.append(ep_return)
-                    
-                    ep_returns.append(ep_return)
-                    if len(policy_loss) > 0:
-                        episode_avg_loss = sum(policy_loss)/len(policy_loss) 
-                    else:
-                        episode_avg_loss = 0
-                    if show_states:
-                        try:
-                            shell = get_ipython().__class__.__name__ # type: ignore
-                            if shell:
-                                show_state(env, fig) #, returns=ep_returns, rewards=ep_rewards, policy_loss=policy_loss)
-                                print(f"num branches: {len(env.finished_paths)}")
-                        except NameError:
-                            csv_file_path = os.path.join(outdir, f"{name}_{date}_log.csv")
-                            file_exists = os.path.isfile(csv_file_path)
-                            with open(csv_file_path, "a", newline='') as f:
-                                writer = csv.writer(f)
-                                if not file_exists:
-                                    writer.writerow(['episode', 'image_file', 'num_branches', 'episode_return', 'episode_avg_policy_loss'])
-                                writer.writerow([
-                                    ep,
-                                    env.img_files[env.img_idx].split('/')[-1],
-                                    len(env.finished_paths),
-                                    ep_return,
-                                    episode_avg_loss
-                                ])
-                    env.reset(move_to_next=False)
-                    break
-            
-                # if not terminated, move to the next state
-                obs = env.get_state() # the head of the next streamline
+    # Detect if running in a terminal or redirected (like with nohup)
+    use_progress_bar = sys.stdout.isatty()
+    for ep in tqdm(range(n_episodes), dynamic_ncols=True, leave=True, file=sys.stdout, mininterval=1.0, disable=not use_progress_bar):
+        # Print episode progress when tqdm is disabled (e.g., with nohup)
+        if not use_progress_bar:
+            print(f"Starting episode {ep + 1}/{n_episodes}", flush=True)
         
-        if save_snapshots:
-            value, index = torch.max(torch.stack(coverages), dim=0)
-            coverage = value.item()
-            index = int(index)
-            best_return = torch.tensor(trial_returns)[index].item()
-            labeled_neuron = labeled_neurons[index]
-            paths_dir = os.path.join(outdir, f"episode_snapshots_{name}_{date}/")
-            if not os.path.exists(paths_dir):
-                os.makedirs(paths_dir)
+        env.reset()
+        policy_loss = []
+        obs = env.get_state()
+        ep_return = 0
+        for t in count():
+            # Determine if we have enough samples to start learning updates
+            learning_started = steps_done >= update_after
+            
+            if not learning_started:
+                action = torch.randn(3)*3
+            else:
+                actor_out = actor(obs.to(DEVICE))
+                direction_dist = sample_from_output(actor_out.detach().cpu())
+                action = direction_dist.rsample()[0]
+                
+            steps_done += 1
+            # take step, get observation and reward, and move index to next streamline
+            next_obs, reward, terminated, truncated, info = env.step(action, training=learning_started)
 
-            np.savez_compressed(os.path.join(paths_dir, f"ep_snapshot_{ep}.npz"),
-                    name=env.img_files[env.img_idx].split('/')[-1],
-                    labeled_neuron=labeled_neuron.numpy(),
-                    coverage=np.float32(coverage),
-                    best_return=best_return)
+            ep_return += reward.cpu().item()
+
+            # Show state after every step
+            if show_live:
+                try:
+                    shell = get_ipython().__class__.__name__  # type: ignore
+                    if shell:
+                        show_state(env, fig, live=True, reward=reward.cpu().item())
+                    if pause_after_step:
+                        try:
+                            print("Press Enter to continue to the next step (or 'q' to quit)...", flush=True)
+                            user_input = input().strip()
+                            if user_input.lower() == 'q':
+                                print("Quitting training.", flush=True)
+                                return
+                        except EOFError:
+                            pass
+                except NameError:
+                    pass
+
+            reward_cache.append(reward.cpu().item())
+            moving_avg_reward = sum(reward_cache) / len(reward_cache)
+
+            # Store the transition in memory
+            memory.push(obs.cpu(), action.cpu(), next_obs.cpu(), reward.cpu(), terminated)
+            
+            if learning_started and steps_done % update_every == 0:
+                # Perform updates once there is sufficient transitions saved.
+                for j in range(updates_per_step):
+                    if isinstance(memory, ReplayBuffer):
+                        batch_obs, batch_actions, batch_next_obs, batch_rewards, batch_dones = memory.sample(batch_size, transform=True)
+                        td_error = update_Q(actor, Q1, Q1_target, Q2, Q2_target,
+                                            batch_obs, batch_actions, batch_rewards, batch_next_obs, batch_dones,
+                                            Q1_optimizer, Q2_optimizer, gamma,
+                                            log_alpha, weights=None)
+                    elif isinstance(memory, PrioritizedReplayBuffer):
+                        batch_obs, batch_actions, batch_next_obs, batch_rewards, batch_dones, weights, tree_idxs = memory.sample(batch_size, transform=True)
+                        td_error = update_Q(actor, Q1, Q1_target, Q2, Q2_target,
+                                            batch_obs, batch_actions, batch_rewards, batch_next_obs, batch_dones,
+                                            Q1_optimizer, Q2_optimizer, gamma,
+                                            log_alpha, weights=weights)
+                        memory.update_priorities(tree_idxs, td_error.cpu().numpy())                    
+                    else:
+                        raise RuntimeError("Unknown memory buffer")
+                        
+                    # Perform one step of optimization on the policy network
+                    loss = update_actor(batch_obs, actor, actor_optimizer, Q1, Q2, log_alpha,
+                                 log_alpha_optimizer, target_entropy)
+                    policy_loss.append(loss)
+                    # update target networks
+                    target_update(Q1, Q2, Q1_target, Q2_target, tau)
+
+                    
+            if info["terminate_episode"]:
+                ep_returns.append(ep_return)
+                
+                if dynamic_complexity:
+                    # Check if model is improving based on recent step rewards (at least 50 rewards for stable comparison)
+                    if ep >= 50: # start updating complexity after 50 episodes
+                        improvement = moving_avg_reward > max(0.0, last_avg_reward)
+                        if improvement:
+                            current_complexity = env.dataloader.complexity
+                            if current_complexity < 1.0:
+                                new_complexity = min(current_complexity + 0.05, 1.0)  # Cap complexity at 1.0
+                                print(f"Improvement detected. Increasing complexity to {new_complexity:.2f}", flush=True)
+                                env.dataloader.set_complexity(new_complexity)
+                                if new_complexity > 0.33 and env.branching == False:
+                                    print("Enabling branching in environment.", flush=True)
+                                    env.branching = True
+                        # Update the last average for next comparison
+                        last_avg_reward = moving_avg_reward
+                
+                if len(policy_loss) > 0:
+                    episode_avg_loss = sum(policy_loss)/len(policy_loss) 
+                else:
+                    episode_avg_loss = 0
+                if show:
+                    try:
+                        shell = get_ipython().__class__.__name__ # type: ignore
+                        if shell:
+                            show_state(env, fig)
+                            print(f"num branches: {len(env.finished_paths)}", flush=True)
+                            print(f"reward min/max: {np.min(reward_cache):.2f}/{np.max(reward_cache):.2f} moving avg: {moving_avg_reward:.2f}", flush=True)
+                            if pause_after_episode:
+                                try:
+                                    print("Press Enter to continue to the next episode (or 'q' to quit)...", flush=True)
+                                    user_input = input().strip()
+                                    if user_input.lower() == 'q':
+                                        print("Quitting training.", flush=True)
+                                        return
+                                except EOFError:
+                                    pass
+                    except NameError:
+                        csv_file_path = logdir / f"{name}_{date}_log.csv"
+                        file_exists = csv_file_path.exists()
+                        with open(csv_file_path, "a", newline='') as f:
+                            writer = csv.writer(f)
+                            if not file_exists:
+                                writer.writerow(['episode', 'image_file', 'num_branches', 'episode_return', 'episode_avg_policy_loss', 'moving_avg_reward'])
+                            writer.writerow([
+                                ep,
+                                env.current_neuron_info["neuron_name"],
+                                len(env.finished_paths),
+                                ep_return,
+                                episode_avg_loss,
+                                moving_avg_reward
+                            ])
+                break
+
+            # if episode does not terminate, move to the next state
+            obs = env.get_state() # the head of the next streamline
+        
         # save model after at least 500 steps 
         if steps_done // 500 > last_save:
             model_dicts = {
@@ -461,9 +536,8 @@ def train(env,
             "log_alpha_optimizer_state_dict": log_alpha_optimizer.state_dict(),
             "steps_done": steps_done
             }
-            torch.save(model_dicts, os.path.join(outdir, f"model_state_dicts_{name}_{date}.pt"))
+            torch.save(model_dicts, outdir / f"model_state_dicts_{name}_{date}.pt")
             last_save = steps_done // 500
-        env.reset()
 
     return
 
@@ -498,18 +572,25 @@ def inference(env, actor, outdir, Q_net=None, n_trials=1, show=True, show_live=T
         # find image indices that are not yet processed
         # get a list of image names that are already processed
         processed_image_names = [re.split(r'_\d\d-\d\d-\d\d_inference.npz', f)[0] for f in os.listdir(outdir) if f.endswith('.npz')]
-        img_indices = [i for i, f in enumerate(env.img_files) if f.split('/')[-1] not in processed_image_names]
+        image_names = [entry["neuron_name"] for entry in env.dataloader.dataset]
+        img_indices = [i for i, f in enumerate(image_names) if f.split('/')[-1] not in processed_image_names]
     else:
-        img_indices = [i for i in range(env.img_idx, len(env.img_files))]
+        img_indices = [i for i in range(env.dataloader.current_idx, len(env.dataloader.dataset))]
 
     if n_trials < 1:
         raise ValueError("n_trials must be at least 1")
     elif n_trials > 1 and Q_net is None:
         raise ValueError("Q_net must be provided if n_trials > 1")
 
-    for i in tqdm(range(len(img_indices))):
-        env.img_idx = (img_indices[i] - 1) % len(env.img_files) # -1 because the index is incremented when the environment resets
-        env.reset()
+    # Detect if running in a terminal or redirected (like with nohup)
+    use_progress_bar = sys.stdout.isatty()
+    for i in tqdm(range(len(img_indices)), dynamic_ncols=True, leave=True, file=sys.stdout, mininterval=1.0, disable=not use_progress_bar):
+        # Print inference progress when tqdm is disabled (e.g., with nohup)
+        if not use_progress_bar:
+            print(f"Processing image {i + 1}/{len(img_indices)}", flush=True)
+            
+        img_idx = img_indices[i] % len(env.dataloader.dataset) # -1 because the index is incremented when the environment resets
+        env.reset(dataset_index=img_idx)
         coverages = []
         estimated_returns = []
         labeled_neurons = []
@@ -528,7 +609,7 @@ def inference(env, actor, outdir, Q_net=None, n_trials=1, show=True, show_live=T
                     else:
                         action = direction_dist.mean[0]
 
-                next_obs, reward, terminated = env.step(action)
+                next_obs, reward, terminated, truncated, info = env.step(action, training=True)
                 if Q_net is not None:
                     current_state = torch.cat((obs.to(DEVICE), torch.ones((obs.shape[0], 1, obs.shape[2], obs.shape[3], obs.shape[4]),device=DEVICE)*action[None,:,None,None,None].to(DEVICE)), dim=1)
                     q_val = Q_net(current_state)[:,0]
@@ -543,12 +624,12 @@ def inference(env, actor, outdir, Q_net=None, n_trials=1, show=True, show_live=T
                     except NameError:
                         pass
 
-                if terminated:
+                if info["terminate_episode"]:
                     labeled_neuron = env.img.data[-1].detach().cpu() > 0.3 
-                    true_neuron = env.true_density.data[-1].detach().cpu() > 0.94
-                    TP = torch.sum(torch.logical_and(labeled_neuron, true_neuron))
-                    tot = torch.sum(true_neuron)
-                    coverages.append(TP/tot)
+                    # true_neuron = env.true_density.data[-1].detach().cpu() > 0.94
+                    # TP = torch.sum(torch.logical_and(labeled_neuron, true_neuron))
+                    # tot = torch.sum(true_neuron)
+                    # coverages.append(TP/tot)
                     estimated_returns.append(estimated_return)
                     labeled_neurons.append(env.img.data[-1].detach().clone().cpu())
                     trial_paths.append([path.detach().cpu().numpy().tolist() for path in env.finished_paths if isinstance(path, torch.Tensor) and len(path) > 3])
@@ -562,11 +643,15 @@ def inference(env, actor, outdir, Q_net=None, n_trials=1, show=True, show_live=T
                                 print(f"num long paths: {len(trial_paths[-1])}")
                                 if Q_net is not None:
                                     print(f"estimated return: {estimated_return:.2f}")
-                                print(f"coverage: {coverages[-1]:.2f}")
+                                # print(f"coverage: {coverages[-1]:.2f}")
                                 try:
-                                    input("Press Enter to continue to the next episode...")
+                                    print("Press Enter to continue to the next episode (or 'q' to quit)...", flush=True)
+                                    user_input = input().strip()
+                                    if user_input.lower() == 'q':
+                                        print("Quitting training.", flush=True)
+                                        return
                                 except EOFError:
-                                    pass
+                                    pass       
                         except NameError:
                             pass
                     env.reset(move_to_next=False)
@@ -574,20 +659,20 @@ def inference(env, actor, outdir, Q_net=None, n_trials=1, show=True, show_live=T
 
                 obs = env.get_state()
 
-        value = np.max(estimated_returns)
-        index = np.argmax(estimated_returns)
-        estimated_return = value.item()
-        index = int(index)
-        labeled_neuron = labeled_neurons[index]
-        name = env.img_files[env.img_idx].split('/')[-1].split('.')[0]
-        if not os.path.exists(outdir):
-            os.makedirs(outdir)
-        # Convert paths to a serializable format
-        paths_to_save = trial_paths[index]
-        labeled_neuron_np = labeled_neuron.numpy()
-
-        # Using numpy's compressed format
         if save_paths:
+            value = np.max(estimated_returns)
+            index = np.argmax(estimated_returns)
+            estimated_return = value.item()
+            index = int(index)
+            labeled_neuron = labeled_neurons[index]
+            name = env.current_neuron_info["neuron_name"]
+            if not os.path.exists(outdir):
+                os.makedirs(outdir)
+            # Convert paths to a serializable format
+            paths_to_save = trial_paths[index]
+            labeled_neuron_np = labeled_neuron.numpy()
+
+            # Using numpy's compressed format
             np.savez_compressed(os.path.join(outdir, f"{name}_{date}_inference.npz"),
                                 labeled_neuron=labeled_neuron_np,
                                 coverages=coverages,

@@ -160,19 +160,17 @@ def setup(
             del tif_img
 
             if save_section_labels_:
-                labels = draw.draw_section_labels(sections, shape=shape, width=5.0)
+                renderer = draw.NeuronRenderer()
+                labels = renderer.draw_section_labels(sections, shape=shape, width=5.0)
                 section_labels_out.parent.mkdir(parents=True, exist_ok=True)
                 tf.imwrite(section_labels_out, labels.data.numpy(), compression='zlib')
                 with open(section_graph_out, 'w') as f:
                     json.dump(section_graph, f, indent=4)
 
             if save_density_:
-                segments = []
-                for section in sections.values():
-                    segments.append(section)
-                segments = np.concatenate(segments)
-
-                density = draw.draw_neuron(segments, shape=shape, width=3.0, noise=0.0, rgb=False)
+                renderer = draw.NeuronRenderer()
+                config = draw.DrawingConfig(width=3.0, rgb=False)
+                density = renderer.draw_neuron(sections, shape=shape, config=config)
                 density_out.parent.mkdir(parents=True, exist_ok=True)
                 tf.imwrite(density_out, density.data.numpy(), compression='zlib')
 

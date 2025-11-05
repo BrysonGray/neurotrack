@@ -1,0 +1,21 @@
+{   
+    "out": "/home/brysongray/data/neurotrack_data/simulated_neurons/de-novo/curves_with_artifacts_grayscale_b-1/",
+    "count": 1000,
+    "size": 121,
+    "length": 60,
+    "stepsize": 3.0,
+    "width": 3,
+    "noise": 0.20,
+    "random_noise": 1,
+    "random_len": 1,
+    "random_width": 1,
+    "kappa": 15.0,
+    "random_start": 1,
+    "binary": 0,
+    "rgb": 0,
+    "branches": 1,
+    "random_contrast": 0,
+    "dropout": 1,
+    "random_brightness": 1,
+    "seed": 7
+}

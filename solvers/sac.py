@@ -410,7 +410,7 @@ def train(env,
             steps_done += 1
             # take step, get observation and reward, and move index to next streamline
             next_obs, reward, terminated, truncated, info = env.step(action, training=learning_started)
-            target_vector = info['target_vector'] # TODO: what if the target vector is None?
+            target_vector = info['target_vector']
 
             ep_return += reward.cpu().item()
 

@@ -351,8 +351,8 @@ class NeuronTrackingEnvironment:
                     truncated = True
 
                     target_points = _compute_target_point(self.paths[self.head_id][-2], self.unvisited_tree, self.step_size, edge_list=self.edge_list, id_to_idx=self.id_to_idx)
-                    #TODO: What if the unvisited tree is empty?
-                    reward, target_vector = _distance_reward(self.paths[self.head_id][-1], target_points, max_distance=env.radius)
+                    #If unvisited tree is empty, reward will be max_distance^2 and target_vector will be nans
+                    reward, target_vector = _distance_reward(self.paths[self.head_id][-1], target_points, max_distance=self.radius)
                     info['target_vector'] = target_vector
 
                     # terminate path
@@ -361,7 +361,7 @@ class NeuronTrackingEnvironment:
                 else:
                     # get reward
                     target_points = _compute_target_point(self.paths[self.head_id][-2], self.unvisited_tree, self.step_size, edge_list=self.edge_list, id_to_idx=self.id_to_idx)
-                    reward, target_vector = _distance_reward(self.paths[self.head_id][-1], target_points, max_distance=env.radius)
+                    reward, target_vector = _distance_reward(self.paths[self.head_id][-1], target_points, max_distance=self.radius)
                     info['target_vector'] = target_vector
 
                     # update visited edges

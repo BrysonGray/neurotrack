@@ -509,7 +509,7 @@ def _compute_target_point(current_pos: Union[torch.Tensor, np.ndarray], swc_list
     return torch.stack(targets)
 
 
-def _distance_reward(current_position: Union[torch.Tensor, np.ndarray], target_positions: Union[torch.Tensor, np.ndarray], max_distance: float = None) -> Tuple[torch.Tensor, Union[torch.Tensor, None]]:
+def _distance_reward(current_position: Union[torch.Tensor, np.ndarray], target_positions: Union[torch.Tensor, np.ndarray], max_distance: float = None) -> Tuple[torch.Tensor, torch.Tensor]:
     """
     Compute a reward based on the distance between the current position and the target position.
 
@@ -526,15 +526,15 @@ def _distance_reward(current_position: Union[torch.Tensor, np.ndarray], target_p
     -------
     reward : float
         The computed reward (negative squared distance).
-    target_vector : (1,3) torch.Tensor or None
-        The vector from current position to the closest target position, or None if no targets.
+    target_vector : (1,3) torch.Tensor
+        The vector from current position to the closest target position, returns nans if no targets.
     """
 
     tp = ensure_tensor(target_positions, dtype=torch.float32)
     cp = ensure_tensor(current_position, dtype=torch.float32, device=tp.device)
     if tp.numel() == 0:
         # Assume a distance of patch radius away
-        return torch.tensor([-289.0], dtype=torch.float32), None  # -17^2
+        return torch.tensor([-289.0], dtype=torch.float32), torch.full((1, 3), float('nan'), dtype=torch.float32)  # -17^2
 
     tp = tp.view(-1, 3)
     # Vectorized min squared distance over termination points for this path

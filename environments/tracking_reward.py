@@ -534,8 +534,7 @@ def _distance_reward(current_position: Union[torch.Tensor, np.ndarray], target_p
         # Assume a distance of patch radius away
         return torch.tensor([-289.0], dtype=torch.float32)  # -17^2
     tp = tp.view(-1, 3)
-    dists_sq = torch.sum((tp - cp.unsqueeze(0)) ** 2, dim=1)
-    dist_sq = torch.min(dists_sq)
+    dist_sq = (tp - cp.unsqueeze(0) ** 2).sum(dim=1).min()
     if max_distance is not None:
         dist_sq = torch.minimum(dist_sq, torch.tensor(max_distance ** 2, dtype=torch.float32, device=dist_sq.device))
     reward = -dist_sq

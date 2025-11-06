@@ -19,7 +19,7 @@ sys.path.append(str(parent_dir))
 from environments.sac_tracking_env import Environment
 from neurotrack.data.neuron_data import Dataset, DataLoader, DataGenerator, DrawingComplexityConfig
 # from environments.neuron_tracking_environment import NeuronTrackingEnvironment
-from environments.neuron_tracking_environment_v2 import NeuronTrackingEnvironment
+from environments.neuron_tracking_environment import NeuronTrackingEnvironment
 from memory.buffer import PrioritizedReplayBuffer
 from models.resblock import ResidualBlock3D
 from models.resnet import ResNet3D

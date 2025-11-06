@@ -2,7 +2,7 @@
     "data_dir": "/home/brysongray/neurotrack/simple_data/",
     "outdir": "/home/brysongray/data/neurotrack_data/inference_outputs/dynamic_complexity_inference_output/",
     "name": "dynamic_complexity",
-    "sac_weights": "/home/brysongray/data/neurotrack_data/model_weights/sac_weights/simple_data_outputs/model_state_dicts_simple_data_11-04-25.pt",
+    "sac_weights": "/home/brysongray/data/neurotrack_data/model_weights/sac_weights/simple_data_outputs/model_state_dicts_simple_data_11-05-25.pt",
     "step_size": 2.0,
     "step_width": 3.0,
     "section_masking": 0,

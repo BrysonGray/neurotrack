@@ -23,7 +23,7 @@ sys.path.append(str(parent_dir))
 from data_prep import load
 from data_prep.image import Image
 from environments import env_utils
-from environments.tracking_reward import (
+from environments.tracking_reward_v2 import (
     _get_nearest_node, _get_termination_nodes, _init_visited,
     _compute_target_point, _distance_reward, _add_to_visited, remove_visited
 )
@@ -317,7 +317,8 @@ class NeuronTrackingEnvironment:
         with torch.no_grad():
             terminated = False # Path termination flag
             truncated = False # Path truncation flag
-            info = {'terminate_episode': False}
+            info = {'terminate_episode': False,
+                    'target_vector': None}
 
             direction = action
             new_position = self.paths[self.head_id][-1] + direction
@@ -329,13 +330,11 @@ class NeuronTrackingEnvironment:
                 # Terminate the branch, but the episode may continue.
                 # Reward is negative squared distance to nearest termination point.
                 tp = self.termination_points[self.head_id]
-                # Vectorized min squared distance over termination points for this path
-                d2_min = ((tp - new_position) ** 2).sum(dim=1).min()
-                reward = (-d2_min) # / (1 - self.gamma) TODO: is this division necessary?
-                reward = reward.to(dtype=torch.float32).unsqueeze(0)
-                observation = self.get_state(terminate=True)
+                reward, target_vector = _distance_reward(self.paths[self.head_id][-1], tp, max_distance=env.radius)
+                info['target_vector'] = target_vector
                 # terminate path
                 info['terminate_episode'] = self._terminate_path(training)
+                observation = self.get_state(terminate=True)
             
             else: # Take step
                 # Add new position to path
@@ -351,12 +350,10 @@ class NeuronTrackingEnvironment:
                 if status in ["out_of_mask", "too_long"]:  # Truncate path
                     truncated = True
 
-                    # Get reward
-                    if status == "out_of_mask":
-                        reward = torch.tensor([-289.0], dtype=torch.float32)  # -17^2
-                    else:  # too_long. reward is negative squared distance to target
-                        target_points = _compute_target_point(self.paths[self.head_id][-2], self.unvisited_tree, self.step_size, edge_list=self.edge_list, id_to_idx=self.id_to_idx)
-                        reward = _distance_reward(self.paths[self.head_id][-1], target_points)
+                    target_points = _compute_target_point(self.paths[self.head_id][-2], self.unvisited_tree, self.step_size, edge_list=self.edge_list, id_to_idx=self.id_to_idx)
+                    #TODO: What if the unvisited tree is empty?
+                    reward, target_vector = _distance_reward(self.paths[self.head_id][-1], target_points, max_distance=env.radius)
+                    info['target_vector'] = target_vector
 
                     # terminate path
                     info['terminate_episode'] = self._terminate_path(training)
@@ -364,7 +361,8 @@ class NeuronTrackingEnvironment:
                 else:
                     # get reward
                     target_points = _compute_target_point(self.paths[self.head_id][-2], self.unvisited_tree, self.step_size, edge_list=self.edge_list, id_to_idx=self.id_to_idx)
-                    reward = _distance_reward(self.paths[self.head_id][-1], target_points)
+                    reward, target_vector = _distance_reward(self.paths[self.head_id][-1], target_points, max_distance=env.radius)
+                    info['target_vector'] = target_vector
 
                     # update visited edges
                     self.visited = _add_to_visited(self.paths[self.head_id][-2], self.paths[self.head_id][-1], self.unvisited_tree, self.visited, edge_list=self.edge_list, id_to_idx=self.id_to_idx)

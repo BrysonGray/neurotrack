@@ -23,6 +23,10 @@ sys.path.append(str(parent_dir))
 from data_prep import load
 from data_prep.image import Image
 from environments import env_utils
+from environments.tracking_reward import (
+    _get_nearest_node, _get_termination_nodes, _init_visited,
+    _compute_target_point, _distance_reward, _add_to_visited, remove_visited
+)
 from neurotrack.data.neuron_data import Dataset, DataLoader, DataGenerator
 
 DEVICE = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -38,10 +42,9 @@ class NeuronTrackingEnvironment:
     """
     
     def __init__(self, dataloader: DataLoader,
-                 radius: int = 17, step_size: float = 2.0, step_width: float = 4.0,
-                 max_len: int = 10000, max_paths: int = 1000, alpha: float = 1.0,
-                 beta: float = 0.2, friction: float = 0.0, branching: bool = False,
-                 repeat_starts: bool = False, section_masking: bool = False, classifier=None):
+                 radius: int = 17, step_size: float = 4.0, step_width: float = 4.0,
+                 max_len: int = 10000, max_paths: int = 1000, friction: float = 0.0,
+                 gamma=0.99, branching: bool = False, repeat_starts: bool = False, section_masking: bool = False, classifier=None):
         """
         Initialize the enhanced SAC tracking environment.
         
@@ -81,8 +84,7 @@ class NeuronTrackingEnvironment:
         self.step_width = step_width
         self.max_len = max_len
         self.max_paths = max_paths
-        self.alpha = alpha
-        self.beta = beta
+        self.gamma = gamma
         self.friction = friction
         self.branching = branching
         self.repeat_starts = repeat_starts
@@ -91,15 +93,19 @@ class NeuronTrackingEnvironment:
         
         # Initialize other attributes that will be set when neuron data is loaded
         self.img = None
-        self.true_density = None
+        self.neuron_mask = None
         self.seeds = []
         self.paths = []
         self.roots = []
-        self.path_labels = []
-        self.prev_children = []
         self.finished_paths = []
+        self.termination_points = [] # list of lists of termination nodes for each path
+        self.visited = {}
+        self.id_to_idx = {}
+        self.edge_list = {}
+        self.full_tree = None
+        self.unvisited_tree = None
         self.head_id = 0
-    
+
     def _process_file_paths(self, file_data: Dict) -> Dict:
         """
         Process file paths from dataloader.sample() into neuron data format.
@@ -164,36 +170,41 @@ class NeuronTrackingEnvironment:
         self.img = Image(img_tensor)
         
         # Setup reward mask as true density
-        reward_tensor = neuron_data['reward_mask']
-        self.true_density = Image(reward_tensor)
-        
+        self.neuron_mask = neuron_data['reward_mask']
+        if self.neuron_mask.ndim == 4:
+            self.neuron_mask = self.neuron_mask[0]  # Remove channel dimension if present
+
         # Generate seeds from subtree endpoints/branch points
-        subtree = neuron_data['subtree']
-        edge_list = load.undirected_edge_list(subtree)
-        
+        subtree = torch.tensor(neuron_data['subtree']) # remember subtree is in x,y,z order
+        self.edge_list = load.undirected_edge_list(subtree)
+        self.full_tree = subtree
+        self.full_tree[:, 2:5] = self.full_tree[:, 2:5].flip(dims=(1,))  # Convert to z, y, x order
+        self.unvisited_tree = self.full_tree.clone()
+        self.id_to_idx = {int(node_id): idx for idx, node_id in enumerate(self.unvisited_tree[:, 0].tolist())}
+
         # Find endpoints and branch points as seeds
-        n_endpoints = sum(1 for neighbors in edge_list.values() if len(neighbors) == 1)
-        seeds = []
-        for node_id, neighbors in edge_list.items():
-            if len(seeds) >= n_endpoints//2:  # Limit number of seeds to half the endpoints
-                break
-            if len(neighbors) == 1:  # Endpoints only
-                node = next(row for row in subtree if row[0] == node_id)
-                seeds.append([int(node[4]), int(node[3]), int(node[2])])  # z, y, x to match image coords
-        
+        end_nodes = [k for k, v in self.edge_list.items() if len(v) == 1]
+        n_seeds = len(end_nodes) // 2 # Limit number of seeds to half the endpoints and a maximum of 10
+        n_seeds = min(n_seeds, 10)
+        mask = torch.isin(self.full_tree[:,0], torch.tensor(end_nodes))
+        seeds = self.full_tree[mask][:n_seeds, 2:5]
+
         # If no seeds found, raise an error
-        if not seeds:
-            raise ValueError(f"No valid seed points found in subtree. Edge list: {edge_list}")
+        if len(seeds) == 0:
+            raise ValueError(f"No valid seed points found in subtree. Edge list: {self.edge_list}")
         
-        self.seeds = seeds[:min(10, len(seeds))]  # Limit to 10 seeds
-        
-        # Initialize paths and other state variables
-        self.paths = [torch.tensor(seed).float().unsqueeze(0) for seed in self.seeds]
-        self.roots = [torch.tensor(seed).float() for seed in self.seeds]
-        self.path_labels = [0] * len(self.paths)
-        self.prev_children = [[]] * len(self.paths)
-        self.finished_paths = []
-        
+        self.paths = [[p] for p in seeds.unbind(0)]
+        self.roots = list(seeds.unbind(0))
+
+        self.termination_points = []
+        for root in self.roots:
+            nearest_node = _get_nearest_node(root.numpy(), swc_list=self.full_tree, current_section_id=None)
+            termination_nodes = _get_termination_nodes(nearest_node, self.edge_list)
+            mask = torch.isin(self.full_tree[:, 0], torch.tensor(termination_nodes))
+            term_pts = self.full_tree[mask][:, 2:5]
+            self.termination_points.append(term_pts)
+        self.visited = _init_visited(self.full_tree)
+
         # Add channel for path visualization
         if self.img.data.shape[0] == 1:
             self.img.data = torch.cat((
@@ -201,7 +212,6 @@ class NeuronTrackingEnvironment:
                 torch.zeros((1,) + self.img.data.shape[1:], dtype=self.img.data.dtype)
             ), dim=0)
         
-        self.head_id = 0
         if self.paths:
             self.img.draw_point(
                 self.paths[self.head_id][-1], 
@@ -210,32 +220,7 @@ class NeuronTrackingEnvironment:
                 mode="gaussian", 
                 binary=False
             )
-    
-    def _step_prior(self, sigmaf: float = 1.5, sigmab: float = 1.5) -> float:
-        """
-        Calculate the prior probability for the current step based on path smoothness.
-        
-        Parameters:
-        -----------
-        sigmaf : float
-            Standard deviation for forward smoothness penalty
-        sigmab : float  
-            Standard deviation for backward smoothness penalty
-            
-        Returns:
-        --------
-        float
-            Prior probability value
-        """
-        prior = 0.0
-        if len(self.paths[self.head_id]) > 2:  # ignore the prior for the first step
-            q = self.paths[self.head_id][-1]
-            q_ = self.paths[self.head_id][-2]
-            q__ = self.paths[self.head_id][-3]
-            prior = - torch.sum((q - q_)**2).item()/(2*sigmaf**2) - torch.sum((q - 2*q_ + q__)**2).item() / (2*sigmab**2)
-        
-        return prior
-    
+
     def _get_status(self, new_position):
         """
         Determine the status of a proposed new position and whether to terminate the path.
@@ -248,36 +233,150 @@ class NeuronTrackingEnvironment:
         Returns:
         --------
         tuple
-            (terminate_path: bool, status: str) indicating whether to terminate and the reason
+            status: str in {"out_of_image", "out_of_mask", "too_long", "choose_stop", "continue"}
         """
-        status = "step"
-        terminate_path = False
         
         # Check if out of image bounds
-        out_of_image = any([x >= y or x < 0 for x,y in zip(new_position, self.img.data.shape[1:])])
+        bounds = torch.as_tensor(self.img.data.shape[1:], device=new_position.device, dtype=new_position.dtype)
+        out_of_image = (new_position < 0).any() or (new_position >= bounds).any()
         if out_of_image:
-            terminate_path = True
             status = "out_of_image"
         else:
-            # Check for turn around (sharp angle change)
-            turn_around = False
-            if len(self.paths[self.head_id]) > 1:
-                s = torch.stack((self.paths[self.head_id][-1], new_position)) - self.paths[self.head_id][-2:]
-                cos_dist = torch.dot(s[1]/torch.linalg.norm(s[1]), s[0]/torch.linalg.norm(s[0]))
-                angle = torch.arccos(cos_dist)
-                turn_around = angle > 3*np.pi/4
-
-            # Check if path is too long
-            too_long = len(self.paths[self.head_id]) > self.max_len
-
-            if too_long:
-                terminate_path = True
-                status = "too_long"
-            elif turn_around:
-                terminate_path = True
+            # Check for small step (stalling)
+            delta = new_position - self.paths[self.head_id][-1]
+            step_size2 = (delta * delta).sum()
+            stall_threshold2 = 1.0  # squared threshold (1.0^2)
+            stall = step_size2 < stall_threshold2
+            if stall:
                 status = "choose_stop"
+            elif len(self.paths[self.head_id]) > self.max_len: # Check if path is too long
+                status = "too_long"
+            # If new position is out of neuron mask, truncate.
+            elif not self.neuron_mask[new_position[0].int(), new_position[1].int(), new_position[2].int()]:
+                status = "out_of_mask"
+            else:
+                status = "continue"
 
-        return terminate_path, status
+        return status
+
+    def _terminate_path(self, training) -> bool:
+        """
+        Remove current path and move to next path. Determine if episode should terminate.
+
+        Parameters
+        ----------
+        training : bool
+            Whether in training mode (affects branching behavior)
+
+        Returns
+        -------
+        terminate_episode : bool
+            True if there are no remaining paths after termination
+        """
+
+        terminate_episode = False
+        # Convert list of points to stacked tensor once when finalizing the path
+        finished_path = torch.stack(self.paths.pop(self.head_id), dim=0)
+        self.finished_paths.append(finished_path)
+        self.termination_points.pop(self.head_id)
+        # Check for max branches
+        if len(self.finished_paths) > self.max_paths:
+            terminate_episode = True
+        elif training and self.repeat_starts and len(self.finished_paths[-1]) > 4:
+            # If the path took more than three steps, add a new path at the same root
+            self.paths.append([self.roots[self.head_id]])
+            self.roots.append(self.roots[self.head_id])
+        elif len(self.paths) == 0:
+            terminate_episode = True
+        if not terminate_episode: # Move to next path
+            self.head_id = (self.head_id + 1) % len(self.paths)
+
+        return terminate_episode
+    
+    def step(self, action: torch.Tensor, verbose: bool = False, training: bool = False) -> Tuple[torch.Tensor, torch.Tensor, bool]:
+        """
+        Perform a single step in the environment.
+        
+        Parameters:
+        -----------
+        action : torch.Tensor
+            The action to be taken, representing the direction of movement
+        verbose : bool
+            If True, additional information will be printed
+        training : bool
+            Whether in training mode (affects branching behavior)
+            
+        Returns:
+        --------
+        tuple
+            (observation, reward, terminated, truncated, info) - the new state, reward, termination flag, truncation flag, and additional information
+        """
+        if self.img is None:
+            raise ValueError("No neuron data loaded. Call reset() first.")
+        
+        with torch.no_grad():
+            terminated = False # Path termination flag
+            truncated = False # Path truncation flag
+            info = {'terminate_episode': False}
+
+            direction = action
+            new_position = self.paths[self.head_id][-1] + direction
+
+            status = self._get_status(new_position)
+
+            if status in ["out_of_image", "choose_stop"]: # then terminate path
+                terminated = True
+                # Terminate the branch, but the episode may continue.
+                # Reward is negative squared distance to nearest termination point.
+                tp = self.termination_points[self.head_id]
+                # Vectorized min squared distance over termination points for this path
+                d2_min = ((tp - new_position) ** 2).sum(dim=1).min()
+                reward = (-d2_min) # / (1 - self.gamma) TODO: is this division necessary?
+                reward = reward.to(dtype=torch.float32).unsqueeze(0)
+                observation = self.get_state(terminate=True)
+                # terminate path
+                info['terminate_episode'] = self._terminate_path(training)
+            
+            else: # Take step
+                # Add new position to path
+                self.paths[self.head_id].append(new_position)
+                
+                # Draw the segment on the state input image
+                segment = torch.stack(self.paths[self.head_id][-2:], dim=0)
+                self.img.draw_line_segment(segment, width=self.step_width, channel=-1, mask=False)
+
+                # get new observation
+                observation = self.get_state()
+
+                if status in ["out_of_mask", "too_long"]:  # Truncate path
+                    truncated = True
+
+                    # Get reward
+                    if status == "out_of_mask":
+                        reward = torch.tensor([-289.0], dtype=torch.float32)  # -17^2
+                    else:  # too_long. reward is negative squared distance to target
+                        target_points = _compute_target_point(self.paths[self.head_id][-2], self.unvisited_tree, self.step_size, edge_list=self.edge_list, id_to_idx=self.id_to_idx)
+                        reward = _distance_reward(self.paths[self.head_id][-1], target_points)
+
+                    # terminate path
+                    info['terminate_episode'] = self._terminate_path(training)
+
+                else:
+                    # get reward
+                    target_points = _compute_target_point(self.paths[self.head_id][-2], self.unvisited_tree, self.step_size, edge_list=self.edge_list, id_to_idx=self.id_to_idx)
+                    reward = _distance_reward(self.paths[self.head_id][-1], target_points)
+
+                    # update visited edges
+                    self.visited = _add_to_visited(self.paths[self.head_id][-2], self.paths[self.head_id][-1], self.unvisited_tree, self.visited, edge_list=self.edge_list, id_to_idx=self.id_to_idx)
+                    self.unvisited_tree, self.visited, self.edge_list = remove_visited(self.unvisited_tree, self.visited, self.edge_list, id_to_idx=self.id_to_idx)
+                    if self.unvisited_tree.shape[0] > 0:
+                        self.id_to_idx = {int(node_id): idx for idx, node_id in enumerate(self.unvisited_tree[:, 0].tolist())}
+                    else:
+                        self.id_to_idx = {}
+
+
+        return observation, reward, terminated, truncated, info
+
     
     def reset(self, move_to_next: bool = True, dataset_index=None):
         """
@@ -289,6 +388,22 @@ class NeuronTrackingEnvironment:
             Deprecated parameter, kept for compatibility. Does nothing.
             New neuron data is automatically sampled from the dataloader.
         """
+
+        # Clear attributes that will be set when neuron data is loaded
+        self.img = None
+        self.neuron_mask = None
+        self.seeds = []
+        self.paths = []
+        self.roots = []
+        self.finished_paths = []
+        self.termination_points = [] # list of lists of termination nodes for each path
+        self.visited = {}
+        self.id_to_idx = {}
+        self.edge_list = {}
+        self.full_tree = None
+        self.unvisited_tree = None
+        self.head_id = 0
+
         if move_to_next:
             # Sample new neuron data from dataloader
             if dataset_index is not None:
@@ -310,112 +425,25 @@ class NeuronTrackingEnvironment:
         # Setup environment with new neuron data
         self._setup_environment(neuron_data)
     
+
     def get_state(self, terminate=False):
         """Get the state for the current step at streamline 'head_id'."""
         if self.img is None:
             raise ValueError("No neuron data loaded. Call reset() first.")
             
-        if terminate:
-            patch = torch.zeros((self.img.data.shape[0],)+(2*self.radius + 1,)*3)
-        else:
-            center = self.paths[self.head_id][-1]
-            patch, _ = self.img.crop(center, self.radius, pad=True, value=0.0)
-            patch = patch.clone()
-            if patch.dtype == torch.uint8:
-                patch = patch / torch.tensor(255.0, dtype=torch.float32)
+        with torch.no_grad():
+            if terminate:
+                patch = torch.zeros((self.img.data.shape[0],)+(2*self.radius + 1,)*3)
+            else:
+                center = self.paths[self.head_id][-1]
+                patch, _ = self.img.crop(center, self.radius, pad=True, value=0.0)
+                patch = patch.clone()
+                if patch.dtype == torch.uint8:
+                    patch = patch / 255.0
 
         return patch[None]
-    
-    def step(self, action, verbose=False, training=True):
-        """
-        Perform a single step in the environment.
-        
-        Parameters:
-        -----------
-        action : torch.Tensor
-            The action to be taken, representing the direction of movement
-        verbose : bool
-            If True, additional information will be printed
-        training : bool
-            Whether in training mode (affects branching behavior)
-            
-        Returns:
-        --------
-        tuple
-            (observation, reward, terminated) - the new state, reward, and termination flag
-        """
-        if self.img is None:
-            raise ValueError("No neuron data loaded. Call reset() first.")
-        
-        terminate_path = False
-        terminated = False
 
-        direction = action
-        new_position = self.paths[self.head_id][-1] + direction
 
-        terminate_path, status = self._get_status(new_position)
-
-        if terminate_path:
-            reward = self.get_reward(status, verbose=verbose)
-            observation = self.get_state(terminate=True)
-            
-            # Remove the path from 'paths' and add it to 'finished_paths'
-            self.finished_paths.append(self.paths.pop(self.head_id).cpu())
-            self.path_labels.pop(self.head_id)
-
-            # Check for max branches
-            if len(self.finished_paths) > self.max_paths:
-                terminated = True
-            elif training and self.repeat_starts and len(self.finished_paths[-1]) > 4:
-                # If the path took more than three steps, add a new path at the same root
-                self.paths.append(self.roots[self.head_id][None])
-                self.roots.append(self.roots[self.head_id])
-                self.path_labels.append(0)
-            elif len(self.paths) == 0:
-                terminated = True
-
-            if not terminated:
-                self.head_id = (self.head_id + 1) % len(self.paths)
-
-        else:  # Take a step
-            # Add new position to path
-            self.paths[self.head_id] = torch.cat((self.paths[self.head_id], new_position[None]))
-            
-            # Draw the segment on the state input image
-            segment = self.paths[self.head_id][-2:, :3]
-            old_patch, new_patch = self.img.draw_line_segment(segment, width=self.step_width, channel=-1, mask=False)
-            if self.img.data.dtype == torch.uint8:
-                old_patch = old_patch / torch.tensor(255.0, dtype=torch.float32)
-                new_patch = new_patch / torch.tensor(255.0, dtype=torch.float32)
-                
-            # Get reward
-            segment_vec = segment[1] - segment[0]
-            L = int(torch.abs(segment_vec).max().item())  # Radius is the whole line length
-            overhang = int(2*self.step_width)  # Include space beyond the end of the line
-            patch_radius = L + overhang
-            center = segment[0]
-            density_patch, _ = self.true_density.crop(center, patch_radius, interp=False, pad=False)
-
-            # For now, use simple density without section masking
-            # TODO: Add section masking support if needed
-            true_patch_masked = density_patch
-
-            step_accuracy = -env_utils.density_error_change(true_patch_masked[0], old_patch, new_patch)
-            reward = self.get_reward(status, step_accuracy, verbose)
-
-            observation = self.get_state()
-
-            # Create new branches during training
-            if training and self.branching:
-                distances = torch.linalg.norm(torch.stack(self.roots) - new_position, dim=1)
-                if not torch.any(distances < 12.0):
-                    self.paths.append(new_position[None])
-                    self.path_labels.append(0)
-                    self.prev_children.append([])
-                    self.roots.append(new_position)
-
-        return observation, reward, terminated
-    
     def get_reward(self, category: Literal["step", "out_of_image", "out_of_mask", "too_long", "choose_stop", "bifurcate"], 
                    step_accuracy: float = 0.0, verbose: bool = False) -> torch.Tensor:
         """
@@ -469,9 +497,8 @@ class NeuronTrackingEnvironment:
             raise NameError(f"category: {category} was not recognized.")
 
         return torch.tensor([reward], dtype=torch.float32)
+    
 
-
-# Convenience function to create a complete setup
 def create_neuron_tracking_environment(data_dir: str, 
                                      complexity: float = 0.0,
                                      rng_seed: int = 0, 
@@ -529,6 +556,6 @@ if __name__ == "__main__":
     env.reset()
     
     # Environment is now ready for training/inference
-    print(f"Loaded neuron: {env.current_neuron_data['metadata']['neuron_name']}")
+    print(f"Loaded neuron: {env.current_neuron_info['neuron_name']}")
     print(f"Image shape: {env.img.data.shape}")
     print(f"Number of seeds: {len(env.seeds)}")

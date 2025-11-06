@@ -509,7 +509,7 @@ def _compute_target_point(current_pos: Union[torch.Tensor, np.ndarray], swc_list
     return torch.stack(targets)
 
 
-def _distance_reward(current_position: Union[torch.Tensor, np.ndarray], target_position: Union[torch.Tensor, np.ndarray], max_distance: float = None) -> float:
+def _distance_reward(current_position: Union[torch.Tensor, np.ndarray], target_positions: Union[torch.Tensor, np.ndarray], max_distance: float = None) -> Tuple[torch.Tensor, Union[torch.Tensor, None]]:
     """
     Compute a reward based on the distance between the current position and the target position.
 
@@ -524,22 +524,31 @@ def _distance_reward(current_position: Union[torch.Tensor, np.ndarray], target_p
 
     Returns
     -------
-    float
+    reward : float
         The computed reward (negative squared distance).
+    target_vector : (1,3) torch.Tensor or None
+        The vector from current position to the closest target position, or None if no targets.
     """
-    tp = ensure_tensor(target_position, dtype=torch.float32)
-    cp = ensure_tensor(current_position, dtype=torch.float32, device=tp.device)
 
+    tp = ensure_tensor(target_positions, dtype=torch.float32)
+    cp = ensure_tensor(current_position, dtype=torch.float32, device=tp.device)
     if tp.numel() == 0:
         # Assume a distance of patch radius away
-        return torch.tensor([-289.0], dtype=torch.float32)  # -17^2
+        return torch.tensor([-289.0], dtype=torch.float32), None  # -17^2
+
     tp = tp.view(-1, 3)
-    dists_sq = torch.sum((tp - cp.unsqueeze(0)) ** 2, dim=1)
-    dist_sq = torch.min(dists_sq)
+    # Vectorized min squared distance over termination points for this path
+    target_vecs = tp - cp.unsqueeze(0)
+    dist_sq = (target_vecs * target_vecs).sum(dim=1)
+    min_idx = torch.argmin(dist_sq)
+    target_vector = target_vecs[min_idx]
+    target_vector = target_vector.unsqueeze(0)
+    d2_min = dist_sq[min_idx]
     if max_distance is not None:
-        dist_sq = torch.minimum(dist_sq, torch.tensor(max_distance ** 2, dtype=torch.float32, device=dist_sq.device))
-    reward = -dist_sq
-    return reward.unsqueeze(0)
+        d2_min = torch.minimum(d2_min, torch.tensor(max_distance ** 2, dtype=torch.float32, device=d2_min.device))
+    reward = -d2_min.to(dtype=torch.float32).unsqueeze(0)
+
+    return reward, target_vector
 
 
 def _find_path_between_nodes(start_node: int, end_node: int, edge_list: Dict[int, list]) -> list:

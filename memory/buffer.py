@@ -1,4 +1,8 @@
+"""
+This module implements a replay buffer and a prioritized replay buffer for storing and sampling.
 
+Version 2 (v2) refactors the buffer to store target vectors rather than rewards so that the reward gradient can be calculated during the actor update step.
+"""
 import random
 import torch
 import numpy as np
@@ -30,6 +34,8 @@ class ReplayBuffer():
         Tensor to store next observations.
     rewards : torch.Tensor
         Tensor to store rewards.
+    target_vectors : torch.Tensor
+        Tensor to store target vectors.
     dones : torch.Tensor
         Tensor to store done flags.
     idx : int
@@ -46,18 +52,20 @@ class ReplayBuffer():
         self.actions = torch.empty((capacity, *action_shape), dtype=torch.float32, device='cpu')
         self.next_obs = torch.empty((capacity, *obs_shape), dtype=torch.float32, device='cpu')
         self.rewards = torch.empty((capacity, 1), dtype=torch.float32, device='cpu')
+        self.target_vectors = torch.empty((capacity, *action_shape), dtype=torch.float32, device='cpu')
         self.dones = torch.empty((capacity, 1), dtype=torch.bool, device='cpu')
 
         self.idx = 0
         self.full = False
         self.capacity = capacity
     
-    def push(self, obs, action, next_obs, reward, done):
+    def push(self, obs, action, next_obs, reward, target_vector, done):
         """Save a transition to replay memory"""
         self.obs[self.idx] = obs
         self.actions[self.idx] = action
         self.next_obs[self.idx] = next_obs
         self.rewards[self.idx] = reward
+        self.target_vectors[self.idx] = target_vector
         self.dones[self.idx] = done
 
         self.idx = (self.idx + 1) % self.capacity
@@ -75,6 +83,7 @@ class ReplayBuffer():
         actions = self.actions[idxs].to(device=DEVICE)
         next_obs = self.next_obs[idxs].to(device=DEVICE)
         rewards = self.rewards[idxs].to(device=DEVICE)
+        target_vectors = self.target_vectors[idxs].to(device=DEVICE)
         dones = self.dones[idxs].to(device=DEVICE)
 
         if transform:
@@ -83,20 +92,24 @@ class ReplayBuffer():
             next_obs = next_obs.permute([0, 1, *perm])
             i,j,k = [x.item() - 2 for x in perm]
             actions = torch.stack((actions[:,i], actions[:,j], actions[:,k]), dim=1)
+            target_vectors = torch.stack((target_vectors[:,i], target_vectors[:,j], target_vectors[:,k]), dim=1)
             if torch.rand(1)>0.5:
                 obs = obs.flip(-1)
                 next_obs = next_obs.flip(-1)
                 actions[:,-1] = -1*actions[:,-1]
+                target_vectors[:,-1] = -1*target_vectors[:,-1]
             if torch.rand(1)>0.5:
                 obs = obs.flip(-2)
                 next_obs = next_obs.flip(-2)
                 actions[:,-2] = -1*actions[:,-2]
+                target_vectors[:,-2] = -1*target_vectors[:,-2]
             if torch.rand(1)>0.5:
                 obs = obs.flip(-3)
                 next_obs = next_obs.flip(-3)
                 actions[:,-3] = -1*actions[:,-3]
+                target_vectors[:,-3] = -1*target_vectors[:,-3]
 
-        return obs, actions, next_obs, rewards, dones
+        return obs, actions, next_obs, rewards, target_vectors, dones
     
     def __len__(self):
         return self.capacity if self.full else self.idx
@@ -142,6 +155,8 @@ class PrioritizedReplayBuffer:
         A tensor to store next observations.
     rewards : torch.Tensor
         A tensor to store rewards.
+    target_vectors : torch.Tensor
+        A tensor to store target vectors.
     dones : torch.Tensor
         A tensor to store done flags.
     idx : int
@@ -163,13 +178,14 @@ class PrioritizedReplayBuffer:
         self.actions = torch.empty((capacity, *action_shape), dtype=torch.float32, device='cpu')
         self.next_obs = torch.empty((capacity, *obs_shape), dtype=torch.float32, device='cpu')
         self.rewards = torch.empty((capacity, 1), dtype=torch.float32, device='cpu')
+        self.target_vectors = torch.empty((capacity, *action_shape), dtype=torch.float32, device='cpu')
         self.dones = torch.empty((capacity, 1), dtype=torch.bool, device='cpu')
 
         self.idx = 0
         self.full = False
         self.capacity = capacity
     
-    def push(self, obs, action, next_obs, reward, done):
+    def push(self, obs, action, next_obs, reward, target_vector, done):
         """
         Add a new experience to the buffer.
         Parameters
@@ -182,6 +198,8 @@ class PrioritizedReplayBuffer:
             The next observation after taking the action.
         reward : float
             The reward received after taking the action.
+        target_vector : object
+            The target vector associated with the transition.
         done : bool
             Whether the episode has ended.
         """
@@ -192,6 +210,7 @@ class PrioritizedReplayBuffer:
         self.actions[self.idx] = action
         self.next_obs[self.idx] = next_obs
         self.rewards[self.idx] = reward
+        self.target_vectors[self.idx] = target_vector
         self.dones[self.idx] = done
 
         self.idx = (self.idx + 1) % self.capacity
@@ -219,6 +238,8 @@ class PrioritizedReplayBuffer:
             The next observations of the sampled transitions.
         rewards : torch.Tensor
             The rewards of the sampled transitions.
+        target_vectors : torch.Tensor
+            The target vectors of the sampled transitions.
         dones : torch.Tensor
             The done flags of the sampled transitions.
         weights : torch.Tensor
@@ -266,6 +287,7 @@ class PrioritizedReplayBuffer:
         actions = self.actions[sample_idxs].to(DEVICE)
         next_obs = self.next_obs[sample_idxs].to(DEVICE)
         rewards = self.rewards[sample_idxs].to(DEVICE)
+        target_vectors = self.target_vectors[sample_idxs].to(DEVICE)
         dones = self.dones[sample_idxs].to(DEVICE)
 
         if transform:
@@ -274,20 +296,24 @@ class PrioritizedReplayBuffer:
                 next_obs = next_obs.permute([0, 1, *perm])
                 i,j,k = [x.item() - 2 for x in perm]
                 actions = torch.stack((actions[:,i], actions[:,j], actions[:,k]), dim=1)
+                target_vectors = torch.stack((target_vectors[:,i], target_vectors[:,j], target_vectors[:,k]), dim=1)
                 if torch.rand(1)>0.5:
                     obs = obs.flip(-1)
                     next_obs = next_obs.flip(-1)
                     actions[:,-1] = -1*actions[:,-1]
+                    target_vectors[:,-1] = -1*target_vectors[:,-1]
                 if torch.rand(1)>0.5:
                     obs = obs.flip(-2)
                     next_obs = next_obs.flip(-2)
                     actions[:,-2] = -1*actions[:,-2]
+                    target_vectors[:,-2] = -1*target_vectors[:,-2]
                 if torch.rand(1)>0.5:
                     obs = obs.flip(-3)
                     next_obs = next_obs.flip(-3)
                     actions[:,-3] = -1*actions[:,-3]
+                    target_vectors[:,-3] = -1*target_vectors[:,-3]
 
-        return obs, actions, next_obs, rewards, dones, weights, tree_idxs
+        return obs, actions, next_obs, rewards, target_vectors, dones, weights, tree_idxs
     
 
     def update_priorities(self, data_idxs, priorities):

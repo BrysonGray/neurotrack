@@ -3,6 +3,8 @@
 This module implements a Soft Actor-Critic (SAC) algorithm for training a reinforcement learning agent
 to perform tractography. The main components include functions for sampling from the actor's output,
 updating the Q-networks and actor, performing target network updates, and training the agent.
+
+Version 2 (v2) includes changes to actor step to use the reward gradient.
 """
 
 import csv
@@ -408,6 +410,7 @@ def train(env,
             steps_done += 1
             # take step, get observation and reward, and move index to next streamline
             next_obs, reward, terminated, truncated, info = env.step(action, training=learning_started)
+            target_vector = info['target_vector'] # TODO: what if the target vector is None?
 
             ep_return += reward.cpu().item()
 
@@ -433,19 +436,19 @@ def train(env,
             moving_avg_reward = sum(reward_cache) / len(reward_cache)
 
             # Store the transition in memory
-            memory.push(obs.cpu(), action.cpu(), next_obs.cpu(), reward.cpu(), terminated)
+            memory.push(obs.cpu(), action.cpu(), next_obs.cpu(), reward.cpu(), target_vector, terminated)
             
             if learning_started and steps_done % update_every == 0:
                 # Perform updates once there is sufficient transitions saved.
                 for j in range(updates_per_step):
                     if isinstance(memory, ReplayBuffer):
-                        batch_obs, batch_actions, batch_next_obs, batch_rewards, batch_dones = memory.sample(batch_size, transform=True)
+                        batch_obs, batch_actions, batch_next_obs, batch_rewards, batch_target_vecs, batch_dones = memory.sample(batch_size, transform=True)
                         td_error = update_Q(actor, Q1, Q1_target, Q2, Q2_target,
                                             batch_obs, batch_actions, batch_rewards, batch_next_obs, batch_dones,
                                             Q1_optimizer, Q2_optimizer, gamma,
                                             log_alpha, weights=None)
                     elif isinstance(memory, PrioritizedReplayBuffer):
-                        batch_obs, batch_actions, batch_next_obs, batch_rewards, batch_dones, weights, tree_idxs = memory.sample(batch_size, transform=True)
+                        batch_obs, batch_actions, batch_next_obs, batch_rewards, batch_target_vecs, batch_dones, weights, tree_idxs = memory.sample(batch_size, transform=True)
                         td_error = update_Q(actor, Q1, Q1_target, Q2, Q2_target,
                                             batch_obs, batch_actions, batch_rewards, batch_next_obs, batch_dones,
                                             Q1_optimizer, Q2_optimizer, gamma,

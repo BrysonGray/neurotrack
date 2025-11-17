@@ -132,8 +132,10 @@ dmypy.json
 ._.DS_Store
 .DS_Store
 
-# Training data and model weights
+# Training data, model weights, and log files
 *.pt
 *.csv
 *.tif
 *.swc
+*.gif
+

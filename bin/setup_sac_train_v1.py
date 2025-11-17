@@ -56,7 +56,7 @@ def setup(
         use_symlinks: Whether to use symlinks for output files.
         remove_soma: Whether to remove soma from SWC.
     """
-    if remove_soma:
+    if remove_soma and swc_dir is not None:
         for swc_file in list(Path(swc_dir).rglob("*.swc")):
             swc_list = load.swc(swc_file)
             swc_list, seeds = tree.remove_soma(swc_list, max_radius=7.0)
@@ -69,9 +69,9 @@ def setup(
     complexity_config = DrawingComplexityConfig()
     rng = np.random.default_rng(rng_seed)
     data_generator = DataGenerator(cache_dir=output_dir, complexity_config=complexity_config, rng=rng)
-    data_generator.generate_data(output_dir, subtrees_per_swc=subtrees_per_swc, complexity_range=complexity_range, swc_dir=swc_dir, img_dir=image_dir, dataset_size=dataset_size)
+    data_generator.generate_data(subtrees_per_swc=subtrees_per_swc, complexity_range=complexity_range, swc_dir=swc_dir, img_dir=image_dir, dataset_size=dataset_size)
 
-    if remove_soma:
+    if remove_soma and swc_dir is not None:
         # remove temporary directory
         shutil.rmtree(temp_swc_dir)
 

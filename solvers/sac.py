@@ -24,6 +24,7 @@ parent_dir = script_path.parent.parent
 sys.path.append(str(parent_dir))
 from memory.buffer import ReplayBuffer, PrioritizedReplayBuffer
 from plot.tracking_interface import show_state
+from plot.trace_gif import trace_gif
 import ipywidgets as widgets
 from IPython.display import display
 
@@ -368,7 +369,7 @@ def train(env,
     reward_cache = deque(maxlen=10000)
     moving_avg_reward = 0.0
     if dynamic_complexity:
-        last_avg_reward = 0.0  # Track previous average for improvement detection
+        eps_since_last_increase = 0
 
     # Ensure outdir and logdir are Path objects
     outdir = Path(outdir)
@@ -460,26 +461,24 @@ def train(env,
                     policy_loss.append(loss)
                     # update target networks
                     target_update(Q1, Q2, Q1_target, Q2_target, tau)
-
                     
             if info["terminate_episode"]:
                 ep_returns.append(ep_return)
+                eps_since_last_increase += 1
                 
                 if dynamic_complexity:
                     # Check if model is improving based on recent step rewards (at least 50 rewards for stable comparison)
-                    if ep >= 50: # start updating complexity after 50 episodes
-                        improvement = moving_avg_reward > max(0.0, last_avg_reward)
-                        if improvement:
-                            current_complexity = env.dataloader.complexity
-                            if current_complexity < 1.0:
-                                new_complexity = min(current_complexity + 0.05, 1.0)  # Cap complexity at 1.0
-                                print(f"Improvement detected. Increasing complexity to {new_complexity:.2f}", flush=True)
-                                env.dataloader.set_complexity(new_complexity)
-                                if new_complexity > 0.33 and env.branching == False:
-                                    print("Enabling branching in environment.", flush=True)
-                                    env.branching = True
-                        # Update the last average for next comparison
-                        last_avg_reward = moving_avg_reward
+                    if eps_since_last_increase >= 10000: # Start updating complexity after 100 episodes and space out increases by at least 100 episodes.
+                        # improvement = moving_avg_reward > last_avg_reward
+                        eps_since_last_increase = 0
+                        current_complexity = env.dataloader.complexity
+                        if current_complexity < 1.0:
+                            new_complexity = min(current_complexity + 0.05, 1.0)  # Cap complexity at 1.0
+                            print(f"Increasing complexity to {new_complexity:.2f}", flush=True)
+                            env.dataloader.set_complexity(new_complexity)
+                            if new_complexity > 0.33 and env.branching == False:
+                                print("Enabling branching in environment.", flush=True)
+                                env.branching = True
                 
                 if len(policy_loss) > 0:
                     episode_avg_loss = sum(policy_loss)/len(policy_loss) 
@@ -507,15 +506,22 @@ def train(env,
                         with open(csv_file_path, "a", newline='') as f:
                             writer = csv.writer(f)
                             if not file_exists:
-                                writer.writerow(['episode', 'image_file', 'num_branches', 'episode_return', 'episode_avg_policy_loss', 'moving_avg_reward'])
+                                writer.writerow(['episode', 'image_file', 'num_branches', 'episode_return', 'episode_avg_policy_loss', 'moving_avg_reward', 'complexity'])
+                            num_branches = len(env.finished_paths) - len(env.roots)
                             writer.writerow([
                                 ep,
                                 env.current_neuron_info["neuron_name"],
-                                len(env.finished_paths),
+                                num_branches,
                                 ep_return,
                                 episode_avg_loss,
-                                moving_avg_reward
+                                moving_avg_reward,
+                                env.dataloader.complexity
                             ])
+                        if ep % 1000 == 0:
+                            trace_gif(env.img.data[:-1].cpu(), env.finished_paths, step_width=env.step_width, 
+                                    output_path=logdir / f"{name}_{date}_gifs/{name}_{date}_episode_{ep}_image_{env.current_neuron_info['neuron_name'].split('/')[-1].split('.')[0]}_trace.gif",
+                                    n_frames=20)
+                
                 break
 
             # if episode does not terminate, move to the next state

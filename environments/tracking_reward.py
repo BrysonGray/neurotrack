@@ -652,36 +652,9 @@ def _compute_target_point(current_pos: Union[torch.Tensor, np.ndarray], swc_list
 #     return reward, target_vector
 
 
-def distance_reward(current_position: torch.Tensor, target_position: torch.Tensor, terminated: bool = False, gamma: float = 0.99) -> float:
-    """
-    Compute a reward based on the distance between the current position and the target position, or between the current position and the nearest target position given multiple targets.
-
-    Parameters
-    ----------
-    current_position : (3,) or (1,3) torch.Tensor
-        The current position (x, y, z).
-    target_position : (3,) or (N,3) torch.Tensor
-        The target position(s) (x, y, z).
-    terminated : bool, optional
-        Whether the episode has terminated. If True, scale the reward by 1 / (1 - gamma).
-    gamma : float, optional
-        The discount factor used if terminated is True.
-    """
-
-    current_position = current_position.view(-1, 3)
-    target_position = target_position.view(-1, 3)
-    
-    error_vec = target_position - current_position
-    min_sq_dist = torch.min(torch.sum(error_vec ** 2, dim=1))
-    reward = -min_sq_dist.to(dtype=torch.float32).unsqueeze(0)
-    if terminated:
-        reward = reward * 1 / (1 - gamma)
-    return reward
-
-
 def distance_reward(step: torch.Tensor, target_step: torch.Tensor, terminated: bool = False, gamma: float = 0.99) -> float:
     """
-    Compute a reward based on the distance between the current position and the target position.
+    Compute a reward based on the difference between the current step and the target step.
 
     Parameters
     ----------

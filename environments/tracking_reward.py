@@ -381,9 +381,49 @@ def _get_nearest_point(point: Union[torch.Tensor, np.ndarray], swc_list: Union[t
     return closest_points[min_idx], (nearest_node, neighbors[min_idx])
 
 
-def _get_termination_nodes(current_node: int, edge_list: Dict[int, list], visited=None, include_start=False) -> list:
+# def _get_termination_nodes(current_node: int, edge_list: Dict[int, list], visited=None, include_start=False) -> list:
+#     """
+#     Recursively find all termination nodes from a section.
+    
+#     Parameters:
+#     -----------
+#     current_node : int
+#         The current node ID.
+#     edge_list : dict
+#         Undirected edge list from load.undirected_edge_list()
+#     sections : dict
+#         Sections dictionary from get_section_nodes()
+#     visited : set, optional
+#         Set of visited nodes to avoid cycles. Defaults to None.
+#     include_start : bool, optional
+#         Whether to include the start node if it is a termination node. Defaults to False.
+        
+#     Returns:
+#     --------
+#     list
+#         List of termination nodes
+#     """
+#     termination_nodes = []
+#     if visited is None:
+#         visited = set()
+#     visited.add(current_node)
+#     neighbors = edge_list[current_node]
+#     neighbors = [n for n in neighbors if n not in visited]
+#     if include_start and len(neighbors) == 1:
+#         termination_nodes.append(current_node)
+#         termination_nodes.extend(_get_termination_nodes(neighbors[0], edge_list, visited))
+#     elif not neighbors: # this is a termination node
+#         termination_nodes.append(current_node)
+#     else:
+#         for neighbor in neighbors:
+#             termination_nodes.extend(_get_termination_nodes(neighbor, edge_list, visited))
+    
+#     return termination_nodes
+
+def _get_termination_nodes(current_node: int, edge_list: Dict[int, list], visited=None, include_start: bool = False, max_depth: int = 1000000) -> list:
     """
-    Recursively find all termination nodes from a section.
+    Find termination nodes from a section using an iterative DFS with a recursion depth limit.
+
     
     Parameters:
     -----------
@@ -391,37 +431,72 @@ def _get_termination_nodes(current_node: int, edge_list: Dict[int, list], visite
         The current node ID.
     edge_list : dict
         Undirected edge list from load.undirected_edge_list()
-    sections : dict
-        Sections dictionary from get_section_nodes()
     visited : set, optional
         Set of visited nodes to avoid cycles. Defaults to None.
     include_start : bool, optional
         Whether to include the start node if it is a termination node. Defaults to False.
-        
+    max_depth : int, optional
+        Maximum search depth to prevent unbounded recursion. Defaults to 1000000.
+
     Returns:
     --------
     list
-        List of termination nodes
+        List of termination nodes.
     """
-    termination_nodes = []
     if visited is None:
         visited = set()
-    visited.add(current_node)
-    neighbors = edge_list[current_node]
-    neighbors = [n for n in neighbors if n not in visited]
-    if include_start and len(neighbors) == 1:
-        termination_nodes.append(current_node)
-        termination_nodes.extend(_get_termination_nodes(neighbors[0], edge_list, visited))
-    elif not neighbors: # this is a termination node
-        termination_nodes.append(current_node)
     else:
-        for neighbor in neighbors:
-            termination_nodes.extend(_get_termination_nodes(neighbor, edge_list, visited))
-    
+        visited = set(visited)
+
+    termination_nodes = []
+    seen_terms = set()
+
+    # stack entries: (node, depth)
+    stack = [(current_node, 0)]
+
+    while stack:
+        node, depth = stack.pop()
+        if node in visited:
+            continue
+        # mark visited for traversal
+        visited.add(node)
+
+        neighbors = [n for n in edge_list.get(node, []) if n not in visited]
+
+        # enforce depth limit: treat node as termination if limit reached
+        if depth >= max_depth:
+            if node not in seen_terms:
+                seen_terms.add(node)
+                termination_nodes.append(node)
+            continue
+
+        # handle include_start case similarly to original recursive behaviour
+        if node == current_node and include_start and len(edge_list.get(node, [])) == 1:
+            if node not in seen_terms:
+                seen_terms.add(node)
+                termination_nodes.append(node)
+            # still explore the single neighbor
+            if edge_list.get(node):
+                nb = edge_list[node][0]
+                if nb not in visited:
+                    stack.append((nb, depth + 1))
+            continue
+
+        # if no unvisited neighbors -> termination
+        if not neighbors:
+            if node not in seen_terms:
+                seen_terms.add(node)
+                termination_nodes.append(node)
+            continue
+
+        # otherwise push neighbors for further exploration
+        for nb in neighbors:
+            stack.append((nb, depth + 1))
+
     return termination_nodes
 
 
-def _compute_target_point(current_pos: Union[torch.Tensor, np.ndarray], swc_list: Union[torch.Tensor, list], step_size: float, id_to_idx: Dict[int, int], edge_list: Dict[int, list] = None) -> torch.Tensor:
+def _compute_target_point(current_pos: Union[torch.Tensor, np.ndarray], swc_list: Union[torch.Tensor, list], step_size: float, id_to_idx: Dict[int, int], edge_list: Dict[int, list] = None, terminal_points: torch.Tensor = None) -> torch.Tensor:
     """
     Compute target points, usually one but potentially multiple possible target points, along the neuron structure at a specified distance from the nearest
     neuron point to the current position. Note: This function does not use the visited dictionary. It assumes the given swc_list has been pruned to remove
@@ -444,111 +519,195 @@ def _compute_target_point(current_pos: Union[torch.Tensor, np.ndarray], swc_list
         N x 3 tensor of target point coordinates (x, y, z). Returns empty (0,3) if none.
     """
     swc_t = ensure_tensor(swc_list, dtype=torch.float32)
-    if swc_t.ndim == 0 or swc_t.shape[0] < 2:
-        return torch.empty((0, 3), dtype=torch.float32, device=swc_t.device)
-
     pt = ensure_tensor(current_pos, dtype=torch.float32, device=swc_t.device)
-    if edge_list is None:
-        edge_list = load.undirected_edge_list(swc_t)
-
-    # identify the nearest point on the neuron to the current position
-    nearest_point, nearest_edge = _get_nearest_point(pt, swc_t, edge_list=edge_list, id_to_idx=id_to_idx)
-
-    # check if the nearest point is close to either end of the edge
-    edge_start_pos = swc_t[id_to_idx[int(nearest_edge[0])], 2:5]
-    edge_end_pos = swc_t[id_to_idx[int(nearest_edge[1])], 2:5]
-
-    dist_to_start = torch.linalg.norm(nearest_point - edge_start_pos).item()
-    dist_to_end = torch.linalg.norm(nearest_point - edge_end_pos).item()
-
-    visited_nodes = set()
-    queue = deque()  # (path_nodes: list[int], dist_to_end: float)
-    if dist_to_start < 1.0:
-        queue.append(([nearest_edge[1]], dist_to_end))
-        visited_nodes.add(nearest_edge[0])
-    elif dist_to_end < 1.0:
-        queue.append(([nearest_edge[0]], dist_to_start))
-        visited_nodes.add(nearest_edge[1])
-    else:
-        queue.append(([nearest_edge[0]], dist_to_start))
-        queue.append(([nearest_edge[1]], dist_to_end))
-
-    targets = []
-    while queue:
-        current_path, dist_to_edge_end = queue.popleft()
-        if current_path[-1] in visited_nodes:
-            continue
-        visited_nodes.add(current_path[-1])
-        current_node = current_path[-1]
-        current_node_pos = swc_t[id_to_idx[int(current_node)], 2:5]
-        if dist_to_edge_end >= step_size:
-            if len(current_path) == 1:
-                prev_pos = nearest_point
-            else:
-                prev_node = current_path[-2]
-                prev_pos = swc_t[id_to_idx[int(prev_node)], 2:5]
-            direction = (current_node_pos - prev_pos)
-            seg_len = torch.linalg.norm(direction).item()
-            if seg_len < 1e-8:
-                continue
-            direction = direction / seg_len
-            # step remaining distance along the segment
-            tgt = prev_pos + direction * (step_size - (dist_to_edge_end - seg_len))
-            targets.append(tgt)
+    terminals_exist = False
+    if terminal_points is not None:
+        terminals_exist = terminal_points.numel() > 0
+    if terminals_exist:
+        sq_dists_to_terminals = torch.sum((terminal_points - pt.unsqueeze(0)) ** 2, dim=1)
+        nearest_terminal = terminal_points[torch.argmin(sq_dists_to_terminals)]
+        sq_dist_to_nearest_terminal = torch.min(sq_dists_to_terminals).item()
+    # if the swc_list is empty or has only one point, return the nearest terminal if available
+    if swc_t.ndim == 0 or swc_t.shape[0] < 2:
+        if terminals_exist:
+            targets = nearest_terminal.unsqueeze(0)
         else:
-            neighbors = [n for n in edge_list[current_node] if n not in visited_nodes and n != -1]
-            if not neighbors:
-                targets.append(current_node_pos)
-            for neighbor in neighbors:
-                nb_pos = swc_t[id_to_idx[int(neighbor)], 2:5]
-                step = torch.linalg.norm(nb_pos - current_node_pos).item()
-                queue.append((current_path + [neighbor], dist_to_edge_end + step))
+            targets = torch.empty((0, 3), dtype=torch.float32, device=swc_t.device)
+    # Otherwise identify the nearest point on the neuron to the current position.
+    else:
+        if edge_list is None:
+            edge_list = load.undirected_edge_list(swc_t)
 
-    if len(targets) == 0:
-        return torch.empty((0, 3), dtype=torch.float32, device=swc_t.device)
-    return torch.stack(targets)
+        nearest_point, nearest_edge = _get_nearest_point(pt, swc_t, edge_list=edge_list, id_to_idx=id_to_idx)
+        # If the nearest terminal point is closer than the nearest point on the neuron, set the target to the nearest terminal point.
+        sq_dist_to_nearest_point = 0.0
+        if terminals_exist:
+            sq_dist_to_nearest_point = torch.sum((nearest_point - pt) ** 2).item()
+        if terminals_exist and sq_dist_to_nearest_terminal < sq_dist_to_nearest_point:
+            targets = nearest_terminal.unsqueeze(0)
+        # Otherwise, step along the neuron structure from the nearest point to find the target point(s).
+        else:
+            # check if the nearest point is close to either end of the edge
+            edge_start_pos = swc_t[id_to_idx[int(nearest_edge[0])], 2:5]
+            edge_end_pos = swc_t[id_to_idx[int(nearest_edge[1])], 2:5]
+
+            dist_to_start = torch.linalg.norm(nearest_point - edge_start_pos).item()
+            dist_to_end = torch.linalg.norm(nearest_point - edge_end_pos).item()
+
+            visited_nodes = set()
+            queue = deque()  # (path_nodes: list[int], dist_to_end: float)
+            if dist_to_start < 1.0:
+                queue.append(([nearest_edge[1]], dist_to_end))
+                visited_nodes.add(nearest_edge[0])
+            elif dist_to_end < 1.0:
+                queue.append(([nearest_edge[0]], dist_to_start))
+                visited_nodes.add(nearest_edge[1])
+            else:
+                queue.append(([nearest_edge[0]], dist_to_start))
+                queue.append(([nearest_edge[1]], dist_to_end))
+
+            targets = []
+            while queue:
+                current_path, dist_to_edge_end = queue.popleft()
+                if current_path[-1] in visited_nodes:
+                    continue
+                visited_nodes.add(current_path[-1])
+                current_node = current_path[-1]
+                current_node_pos = swc_t[id_to_idx[int(current_node)], 2:5]
+                if dist_to_edge_end >= step_size:
+                    if len(current_path) == 1:
+                        prev_pos = nearest_point
+                    else:
+                        prev_node = current_path[-2]
+                        prev_pos = swc_t[id_to_idx[int(prev_node)], 2:5]
+                    direction = (current_node_pos - prev_pos)
+                    seg_len = torch.linalg.norm(direction).item()
+                    if seg_len < 1e-8:
+                        continue
+                    direction = direction / seg_len
+                    # step remaining distance along the segment
+                    tgt = prev_pos + direction * (step_size - (dist_to_edge_end - seg_len))
+                    targets.append(tgt)
+                else:
+                    neighbors = [n for n in edge_list[current_node] if n not in visited_nodes and n != -1]
+                    if not neighbors:
+                        targets.append(current_node_pos)
+                    for neighbor in neighbors:
+                        nb_pos = swc_t[id_to_idx[int(neighbor)], 2:5]
+                        step = torch.linalg.norm(nb_pos - current_node_pos).item()
+                        queue.append((current_path + [neighbor], dist_to_edge_end + step))
+
+            if len(targets) == 0:
+                targets = torch.empty((0, 3), dtype=torch.float32, device=swc_t.device)
+            else:
+                targets = torch.stack(targets)
+    return targets
 
 
-def _distance_reward(current_position: Union[torch.Tensor, np.ndarray], target_positions: Union[torch.Tensor, np.ndarray], max_distance: float = None) -> Tuple[torch.Tensor, torch.Tensor]:
+# def _distance_reward(current_position: Union[torch.Tensor, np.ndarray], target_position: Union[torch.Tensor, np.ndarray], max_distance: float = None, terminated: bool = False, gamma: float = 0.99) -> float:
+#     """
+#     Compute a reward based on the distance between the current position and the target position.
+
+#     Parameters
+#     ----------
+#     current_position : (3,) torch.Tensor or array
+#         The current position (x, y, z).
+#     target_position : (N,3) torch.Tensor or array
+#         The target positions (x, y, z).
+#     max_distance : float, optional
+#         If provided, clamp the distance to at most this value before squaring.
+#     terminated : bool, optional
+#         Whether the episode has terminated. If True, scale the reward by 1 / (1 - gamma).
+#     gamma : float, optional
+#         The discount factor used if terminated is True.
+
+#     Returns
+#     -------
+#     reward : float
+#         The computed reward (negative squared distance).
+#     target_vector : (1,3) torch.Tensor
+#         The vector from current position to the closest target position, returns nans if no targets.
+#     """
+
+#     tp = ensure_tensor(target_position, dtype=torch.float32)
+#     cp = ensure_tensor(current_position, dtype=torch.float32, device=tp.device)
+#     if tp.numel() == 0:
+#         # Assume a distance of patch radius away
+#         return torch.tensor([-289.0], dtype=torch.float32), torch.full((1, 3), float('nan'), dtype=torch.float32)  # -17^2
+
+#     tp = tp.view(-1, 3)
+#     # Vectorized min squared distance over termination points for this path
+#     error_vecs = tp - cp.unsqueeze(0)
+#     dist_sq = (target_vecs * target_vecs).sum(dim=1)
+#     min_idx = torch.argmin(dist_sq)
+#     target_vector = target_vecs[min_idx]
+#     target_vector = target_vector.unsqueeze(0)
+#     d2_min = dist_sq[min_idx]
+#     if max_distance is not None:
+#         d2_min = torch.minimum(d2_min, torch.tensor(max_distance ** 2, dtype=torch.float32, device=d2_min.device))
+#     reward = -d2_min.to(dtype=torch.float32).unsqueeze(0)
+#     if terminated:
+#         reward = reward * 1 / (1 - gamma)
+
+#     return reward, target_vector
+
+
+def distance_reward(current_position: torch.Tensor, target_position: torch.Tensor, terminated: bool = False, gamma: float = 0.99) -> float:
+    """
+    Compute a reward based on the distance between the current position and the target position, or between the current position and the nearest target position given multiple targets.
+
+    Parameters
+    ----------
+    current_position : (3,) or (1,3) torch.Tensor
+        The current position (x, y, z).
+    target_position : (3,) or (N,3) torch.Tensor
+        The target position(s) (x, y, z).
+    terminated : bool, optional
+        Whether the episode has terminated. If True, scale the reward by 1 / (1 - gamma).
+    gamma : float, optional
+        The discount factor used if terminated is True.
+    """
+
+    current_position = current_position.view(-1, 3)
+    target_position = target_position.view(-1, 3)
+    
+    error_vec = target_position - current_position
+    min_sq_dist = torch.min(torch.sum(error_vec ** 2, dim=1))
+    reward = -min_sq_dist.to(dtype=torch.float32).unsqueeze(0)
+    if terminated:
+        reward = reward * 1 / (1 - gamma)
+    return reward
+
+
+def distance_reward(step: torch.Tensor, target_step: torch.Tensor, terminated: bool = False, gamma: float = 0.99) -> float:
     """
     Compute a reward based on the distance between the current position and the target position.
 
     Parameters
     ----------
-    current_position : (3,) torch.Tensor or array
-        The current position (x, y, z).
-    target_position : (N,3) torch.Tensor or array
-        The target positions (x, y, z).
-    max_distance : float, optional
-        If provided, clamp the distance to at most this value before squaring.
-
+    step : (3,) or (N,3) torch.Tensor
+        The current step (x, y, z).
+    target_step : (3,) or (N,3) torch.Tensor
+        The target step(s) (x, y, z).
+    terminated : bool, optional
+        Whether the episode has terminated. If True, scale the reward by 1 / (1 - gamma).
+    gamma : float, optional
+        The discount factor used if terminated is True.
     Returns
     -------
-    reward : float
+    reward: (N,) torch.Tensor
         The computed reward (negative squared distance).
-    target_vector : (1,3) torch.Tensor
-        The vector from current position to the closest target position, returns nans if no targets.
     """
+    target_step = target_step.view(-1, 3)
+    step = step.view(-1, 3)
 
-    tp = ensure_tensor(target_positions, dtype=torch.float32)
-    cp = ensure_tensor(current_position, dtype=torch.float32, device=tp.device)
-    if tp.numel() == 0:
-        # Assume a distance of patch radius away
-        return torch.tensor([-289.0], dtype=torch.float32), torch.full((1, 3), float('nan'), dtype=torch.float32)  # -17^2
+    error_vec = target_step - step
+    sq_dist = torch.sum(error_vec ** 2, dim=1)
+    reward = -sq_dist.to(dtype=torch.float32)
+    if terminated:
+        reward = reward * 1 / (1 - gamma)
 
-    tp = tp.view(-1, 3)
-    # Vectorized min squared distance over termination points for this path
-    target_vecs = tp - cp.unsqueeze(0)
-    dist_sq = (target_vecs * target_vecs).sum(dim=1)
-    min_idx = torch.argmin(dist_sq)
-    target_vector = target_vecs[min_idx]
-    target_vector = target_vector.unsqueeze(0)
-    d2_min = dist_sq[min_idx]
-    if max_distance is not None:
-        d2_min = torch.minimum(d2_min, torch.tensor(max_distance ** 2, dtype=torch.float32, device=d2_min.device))
-    reward = -d2_min.to(dtype=torch.float32).unsqueeze(0)
-
-    return reward, target_vector
+    return reward
 
 
 def _find_path_between_nodes(start_node: int, end_node: int, edge_list: Dict[int, list]) -> list:
@@ -792,9 +951,9 @@ def _add_to_visited(start_point: Union[torch.Tensor, np.ndarray], end_point: Uni
     return visited
 
 
-def remove_visited(swc_list: Union[np.ndarray, list], visited: Dict[Tuple[int, int], float], edge_list: Dict[Tuple[int, int], float], id_to_idx: Dict[int, int]) -> Tuple[np.ndarray, Dict[Tuple[int, int], float]]:
+def remove_visited(swc_list: Union[np.ndarray, torch.Tensor], visited: Dict[Tuple[int, int], float], edge_list: Dict[Tuple[int, int], float], id_to_idx: Dict[int, int]) -> Tuple[np.ndarray, Dict[Tuple[int, int], float]]:
 
-    swc_list = np.array(swc_list)
+    swc_list = ensure_tensor(swc_list, dtype=torch.float32)
     if not swc_list.any():
         return swc_list, visited, edge_list
     
@@ -814,14 +973,14 @@ def remove_visited(swc_list: Union[np.ndarray, list], visited: Dict[Tuple[int, i
             keep_idx = id_to_idx[keep_node_id]
             other_idx = id_to_idx[other_node_id]          
             # create a new node at the appropriate position along the edge
-            node1_pos = np.array(swc_list[id_to_idx[edge[0]], 2:5])
-            node2_pos = np.array(swc_list[id_to_idx[edge[1]], 2:5])
+            node1_pos = swc_list[id_to_idx[edge[0]], 2:5]
+            node2_pos = swc_list[id_to_idx[edge[1]], 2:5]
             # if coverage is positive, new node is at coverage fraction along the edge from node1 to node2
             # if coverage is negative, new node is at (1 + coverage) fraction along the edge from node1 to node2
             frac = coverage if coverage > 0 else (1 + coverage)
             new_node_pos = node1_pos + (node2_pos - node1_pos) * frac
 
-            new_node_id = max(swc_list[:, 0]) + 1 # every new node gets a new unique id
+            new_node_id = int(max(swc_list[:, 0])) + 1 # every new node gets a new unique id
             # Its parent is either the node to keep or -1 if the node to keep is its child.
             if swc_list[keep_idx, 6] == other_node_id:
                 new_node_parent = -1
@@ -839,7 +998,7 @@ def remove_visited(swc_list: Union[np.ndarray, list], visited: Dict[Tuple[int, i
                                  new_node_parent])
             
             # replace the node in the swc_list
-            swc_list = np.concatenate([swc_list, new_node.reshape(1, -1)])
+            swc_list = torch.cat([swc_list, new_node.reshape(1, -1)])
             nodes_to_keep.add(new_node_id)
             # update the visited dictionary to reflect the new edge
             new_edge = (edge[to_keep], new_node_id)
@@ -864,6 +1023,11 @@ def remove_visited(swc_list: Union[np.ndarray, list], visited: Dict[Tuple[int, i
             if not edge_list[edge[1]]:
                 del edge_list[edge[1]]
     # remove nodes from swc_list
-    new_swc_list = np.array([node for node in swc_list if node[0] in nodes_to_keep])
+    new_swc_list = [node for node in swc_list if int(node[0]) in nodes_to_keep]
+    if new_swc_list:
+        new_swc_list = torch.stack(new_swc_list)
+    else:
+        new_swc_list = torch.empty((0, swc_list.shape[1]), dtype=swc_list.dtype, device=swc_list.device)
+    # new_swc_list = torch.stack([swc_list[id_to_idx[n]] for n in nodes_to_keep])
 
     return new_swc_list, visited, edge_list

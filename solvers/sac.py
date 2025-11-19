@@ -26,6 +26,8 @@ parent_dir = script_path.parent.parent
 sys.path.append(str(parent_dir))
 from memory.buffer import ReplayBuffer, PrioritizedReplayBuffer
 from plot.tracking_interface import show_state
+from plot.trace_gif import trace_gif
+from environments.tracking_reward import distance_reward
 import ipywidgets as widgets
 from IPython.display import display
 
@@ -67,7 +69,7 @@ def sample_from_output(out, random=False):
 
 
 def update_Q(actor, Q1, Q1_target, Q2, Q2_target,
-             obs, actions, rewards, next_obs, dones,
+             obs, actions, next_target_vecs, next_obs, dones,
              Q1_optimizer, Q2_optimizer, gamma,
              log_alpha, weights=None):
     """
@@ -89,8 +91,8 @@ def update_Q(actor, Q1, Q1_target, Q2, Q2_target,
         The current observations.
     actions : torch.Tensor
         The actions taken.
-    rewards : torch.Tensor
-        The rewards received.
+    next_target_vecs : torch.Tensor
+        The target vectors at the next states.
     next_obs : torch.Tensor
         The next observations.
     dones : torch.Tensor
@@ -115,7 +117,7 @@ def update_Q(actor, Q1, Q1_target, Q2, Q2_target,
     # compute targets
     with torch.no_grad():
         # sample next actions from the current policy
-        actor_out = actor(next_obs) # set steps_done to start_steps so that this samples from the current policy
+        actor_out = actor(next_obs)
         direction_dist = sample_from_output(actor_out.detach().cpu())
         next_directions = direction_dist.rsample()
         logprobs = direction_dist.log_prob(next_directions)
@@ -124,9 +126,11 @@ def update_Q(actor, Q1, Q1_target, Q2, Q2_target,
         # get target q-values
         next_states = torch.cat((next_obs, torch.ones((next_obs.shape[0], 1, next_obs.shape[2], next_obs.shape[3], next_obs.shape[4]), 
                                             device=DEVICE)*next_directions[:,:,None,None,None]), dim=1)
-        Q1_target_vals = Q1_target(next_states) # vector of q-values for each choice
-        Q2_target_vals = Q2_target(next_states)
-        targets = rewards + gamma * torch.logical_not(dones) * (torch.minimum(Q1_target_vals, Q2_target_vals) - log_alpha.exp() * logprobs[:,None])
+
+        next_rewards = distance_reward(next_directions, next_target_vecs, terminated=dones, gamma=gamma)
+        Q1_target_vals = Q1_target(next_states) - next_rewards # vector of q-values for each choice
+        Q2_target_vals = Q2_target(next_states) - next_rewards
+        targets = gamma * torch.logical_not(dones) * (torch.minimum(Q1_target_vals, Q2_target_vals) - log_alpha.exp() * logprobs[:,None])
         
         # Check for NaN values in intermediate computations
         if torch.isnan(logprobs).any():
@@ -178,7 +182,9 @@ def update_Q(actor, Q1, Q1_target, Q2, Q2_target,
     return td_error
 
 
-def update_actor(obs, actor, actor_optimizer, Q1, Q2, log_alpha, log_alpha_optimizer, target_entropy):
+def update_actor(obs, target_vecs, dones, gamma, actor,
+                 actor_optimizer, Q1, Q2, log_alpha,
+                 log_alpha_optimizer, target_entropy):
     """
     Update the actor network and the temperature parameter in the Soft Actor-Critic (SAC) algorithm.
 
@@ -186,6 +192,8 @@ def update_actor(obs, actor, actor_optimizer, Q1, Q2, log_alpha, log_alpha_optim
     ----------
     obs : torch.Tensor
         The observations from the environment.
+    target_vecs : torch.Tensor
+        The target vectors from the environment.
     actor : torch.nn.Module
         The actor network.
     actor_optimizer : torch.optim.Optimizer
@@ -214,12 +222,14 @@ def update_actor(obs, actor, actor_optimizer, Q1, Q2, log_alpha, log_alpha_optim
     logprobs = direction_dist.log_prob(directions)
     directions = directions.to(DEVICE)
     logprobs = logprobs.to(DEVICE)
+    # compute rewards
+    rewards = distance_reward(directions, target_vecs, terminated=dones, gamma=gamma)
     # get expected Q-vals
     current_state = torch.cat((obs, torch.ones((obs.shape[0], 1, obs.shape[2], obs.shape[3], obs.shape[4]),device=DEVICE)*directions[:,:,None,None,None]), dim=1)
     Q1_vals = Q1(current_state)[:,0]
     Q2_vals = Q2(current_state)[:,0]
     # entropy regularized Q values
-    loss = -torch.mean(torch.minimum(Q1_vals, Q2_vals) - log_alpha.exp().detach() * logprobs[:,None]) # The loss function is multiplied by -1 to do gradient ascent instead of decent.
+    loss = -torch.mean(torch.minimum(Q1_vals, Q2_vals) + rewards - log_alpha.exp().detach() * logprobs[:,None]) # The loss function is multiplied by -1 to do gradient ascent instead of decent.
     actor_optimizer.zero_grad()
     loss.backward()
     actor_optimizer.step()
@@ -370,7 +380,7 @@ def train(env,
     reward_cache = deque(maxlen=10000)
     moving_avg_reward = 0.0
     if dynamic_complexity:
-        last_avg_reward = 0.0  # Track previous average for improvement detection
+        eps_since_last_increase = 0
 
     # Ensure outdir and logdir are Path objects
     outdir = Path(outdir)
@@ -410,7 +420,10 @@ def train(env,
             steps_done += 1
             # take step, get observation and reward, and move index to next streamline
             next_obs, reward, terminated, truncated, info = env.step(action, training=learning_started)
-            target_vector = info['target_vector']
+            current_target_vector = info['current_target_vector']
+            next_target_vector = info['next_target_vector'] # this will be None only if path terminates
+            if next_target_vector is None:
+                next_target_vector = current_target_vector
 
             ep_return += reward.cpu().item()
 
@@ -436,30 +449,31 @@ def train(env,
             moving_avg_reward = sum(reward_cache) / len(reward_cache)
 
             # Store the transition in memory
-            memory.push(obs.cpu(), action.cpu(), next_obs.cpu(), reward.cpu(), target_vector, terminated)
+            memory.push(obs.cpu(), action.cpu(), next_obs.cpu(), reward.cpu(), current_target_vector.cpu(), next_target_vector.cpu(), terminated)
             
             if learning_started and steps_done % update_every == 0:
                 # Perform updates once there is sufficient transitions saved.
                 for j in range(updates_per_step):
                     if isinstance(memory, ReplayBuffer):
-                        batch_obs, batch_actions, batch_next_obs, batch_rewards, batch_target_vecs, batch_dones = memory.sample(batch_size, transform=True)
+                        batch_obs, batch_actions, batch_next_obs, batch_rewards, batch_target_vecs, batch_next_target_vecs, batch_dones = memory.sample(batch_size, transform=True)
                         td_error = update_Q(actor, Q1, Q1_target, Q2, Q2_target,
-                                            batch_obs, batch_actions, batch_rewards, batch_next_obs, batch_dones,
-                                            Q1_optimizer, Q2_optimizer, gamma,
-                                            log_alpha, weights=None)
+                                            batch_obs, batch_actions, batch_next_target_vecs,
+                                            batch_next_obs, batch_dones, Q1_optimizer,
+                                            Q2_optimizer, gamma, log_alpha, weights=None)
                     elif isinstance(memory, PrioritizedReplayBuffer):
-                        batch_obs, batch_actions, batch_next_obs, batch_rewards, batch_target_vecs, batch_dones, weights, tree_idxs = memory.sample(batch_size, transform=True)
+                        batch_obs, batch_actions, batch_next_obs, batch_rewards, batch_target_vecs, batch_next_target_vecs, batch_dones, weights, tree_idxs = memory.sample(batch_size, transform=True)
                         td_error = update_Q(actor, Q1, Q1_target, Q2, Q2_target,
-                                            batch_obs, batch_actions, batch_rewards, batch_next_obs, batch_dones,
-                                            Q1_optimizer, Q2_optimizer, gamma,
-                                            log_alpha, weights=weights)
+                                            batch_obs, batch_actions, batch_next_target_vecs,
+                                            batch_next_obs, batch_dones, Q1_optimizer,
+                                            Q2_optimizer, gamma, log_alpha, weights=weights)
                         memory.update_priorities(tree_idxs, td_error.cpu().numpy())                    
                     else:
                         raise RuntimeError("Unknown memory buffer")
                         
                     # Perform one step of optimization on the policy network
-                    loss = update_actor(batch_obs, actor, actor_optimizer, Q1, Q2, log_alpha,
-                                 log_alpha_optimizer, target_entropy)
+                    loss = update_actor(batch_obs, batch_target_vecs, batch_dones, gamma,
+                                        actor, actor_optimizer, Q1, Q2, log_alpha,
+                                        log_alpha_optimizer, target_entropy)
                     policy_loss.append(loss)
                     # update target networks
                     target_update(Q1, Q2, Q1_target, Q2_target, tau)
@@ -467,22 +481,21 @@ def train(env,
                     
             if info["terminate_episode"]:
                 ep_returns.append(ep_return)
+                eps_since_last_increase += 1
                 
                 if dynamic_complexity:
                     # Check if model is improving based on recent step rewards (at least 50 rewards for stable comparison)
-                    if ep >= 50: # start updating complexity after 50 episodes
-                        improvement = moving_avg_reward > max(0.0, last_avg_reward)
-                        if improvement:
-                            current_complexity = env.dataloader.complexity
-                            if current_complexity < 1.0:
-                                new_complexity = min(current_complexity + 0.05, 1.0)  # Cap complexity at 1.0
-                                print(f"Improvement detected. Increasing complexity to {new_complexity:.2f}", flush=True)
-                                env.dataloader.set_complexity(new_complexity)
-                                if new_complexity > 0.33 and env.branching == False:
-                                    print("Enabling branching in environment.", flush=True)
-                                    env.branching = True
-                        # Update the last average for next comparison
-                        last_avg_reward = moving_avg_reward
+                    if eps_since_last_increase >= 10000: # Start updating complexity after 100 episodes and space out increases by at least 100 episodes.
+                        # improvement = moving_avg_reward > last_avg_reward
+                        eps_since_last_increase = 0
+                        current_complexity = env.dataloader.complexity
+                        if current_complexity < 1.0:
+                            new_complexity = min(current_complexity + 0.05, 1.0)  # Cap complexity at 1.0
+                            print(f"Increasing complexity to {new_complexity:.2f}", flush=True)
+                            env.dataloader.set_complexity(new_complexity)
+                            if new_complexity > 0.33 and env.branching == False:
+                                print("Enabling branching in environment.", flush=True)
+                                env.branching = True
                 
                 if len(policy_loss) > 0:
                     episode_avg_loss = sum(policy_loss)/len(policy_loss) 
@@ -510,15 +523,22 @@ def train(env,
                         with open(csv_file_path, "a", newline='') as f:
                             writer = csv.writer(f)
                             if not file_exists:
-                                writer.writerow(['episode', 'image_file', 'num_branches', 'episode_return', 'episode_avg_policy_loss', 'moving_avg_reward'])
+                                writer.writerow(['episode', 'image_file', 'num_branches', 'episode_return', 'episode_avg_policy_loss', 'moving_avg_reward', 'complexity'])
+                            num_branches = len(env.finished_paths) - len(env.roots)
                             writer.writerow([
                                 ep,
                                 env.current_neuron_info["neuron_name"],
+                                num_branches,
                                 len(env.finished_paths),
                                 ep_return,
                                 episode_avg_loss,
-                                moving_avg_reward
+                                moving_avg_reward,
+                                env.dataloader.complexity
                             ])
+                        if ep % 1000 == 0:
+                            trace_gif(env.img.data[:-1].cpu(), env.finished_paths, step_width=env.step_width,
+                                    output_path=logdir / f"{name}_{date}_gifs/{name}_{date}_episode_{ep}_image_{env.current_neuron_info['neuron_name'].split('/')[-1].split('.')[0]}_trace.gif",
+                                    n_frames=20)                                                                            
                 break
 
             # if episode does not terminate, move to the next state

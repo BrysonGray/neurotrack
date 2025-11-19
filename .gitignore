@@ -137,3 +137,5 @@ dmypy.json
 *.csv
 *.tif
 *.swc
+*.gif
+nohup.out

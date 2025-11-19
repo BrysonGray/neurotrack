@@ -195,7 +195,7 @@ def main():
         if "actor_optimizer_state_dict" in state_dicts:
             actor_optimizer.load_state_dict(state_dicts["actor_optimizer_state_dict"])
 
-    memory = PrioritizedReplayBuffer(100000, obs_shape=(in_channels,input_size,input_size,input_size), action_shape=(3,), alpha=0.8)
+    memory = PrioritizedReplayBuffer(10000, obs_shape=(in_channels,input_size,input_size,input_size), action_shape=(3,), alpha=0.8)
 
     logdir = script_path.parent.parent / "logs" / name
     os.makedirs(logdir, exist_ok=True)

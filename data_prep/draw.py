@@ -1,8 +1,5 @@
 """
-Refactored draw.py - Simplified and more readable neuron drawing functionality.
-
-This module provides clean interfaces for drawing neuron structures with clear
-separation of concerns and improved readability.
+Neuron drawing and rendering utilities.
 """
 
 import numpy as np

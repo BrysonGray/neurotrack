@@ -33,23 +33,21 @@ def trace_gif(image: torch.Tensor, paths: List[torch.Tensor], step_width: float,
 
     img = Image(image)
     frames = []
+    # path = torch.cat(paths, dim=0)
+    n_segments = sum(len(p)-1 for p in paths)
+    if n_segments < 1:
+        return
+    else:
+        segments_per_frame = math.ceil(n_segments / n_frames) if n_frames > 0 else n_segments
+        segments_drawn = 0
     for path in paths:
-        if len(path) == 0:
-            continue
-        elif len(path) == 1: # TODO: handle single point paths
-            # # single point path, draw a point
-            # img.draw_point(path[0], radius=step_width, channel=-1, mode="gaussian", binary=False)
-            # data = img.data.clone().cpu()
-            # frames.append(_compose_frame_from_image_tensor(data))
-            continue
-        else:    
-            segments = torch.stack((path[:-1], path[1:]), dim=1)  # (N-1, 2, 3)
-            # divide segments into n_frames segments
-            segment_groups = torch.chunk(segments, n_frames, dim=0)
-            for segment_group in segment_groups:
-                for segment in segment_group:
-                    img.draw_line_segment(segment, width=step_width, channel=-1, mask=False)
-
+        segments = torch.stack((path[:-1], path[1:]), dim=1)  # (N-1, 2, 3)
+        for segment in segments:
+            img.draw_line_segment(segment, width=step_width, channel=-1, mask=False)
+            segments_drawn += 1
+            if (segments_drawn % segments_per_frame != 0 and segments_drawn != n_segments):
+                continue
+            else:
                 # compose a 2D RGB frame from current 3D image tensor
                 data = img.data.clone().cpu()
                 frames.append(_compose_frame_from_image_tensor(data))

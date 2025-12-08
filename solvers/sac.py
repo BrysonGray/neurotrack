@@ -128,8 +128,8 @@ def update_Q(actor, Q1, Q1_target, Q2, Q2_target,
                                             device=DEVICE)*next_directions[:,:,None,None,None]), dim=1)
 
         next_rewards = distance_reward(next_directions, next_target_vecs, terminated=dones, gamma=gamma)
-        Q1_target_vals = Q1_target(next_states) - next_rewards # vector of q-values for each choice
-        Q2_target_vals = Q2_target(next_states) - next_rewards
+        Q1_target_vals = Q1_target(next_states) - next_rewards.unsqueeze(-1) # vector of q-values for each choice
+        Q2_target_vals = Q2_target(next_states) - next_rewards.unsqueeze(-1)
         targets = gamma * torch.logical_not(dones) * (torch.minimum(Q1_target_vals, Q2_target_vals) - log_alpha.exp() * logprobs[:,None])
         
         # Check for NaN values in intermediate computations
@@ -184,7 +184,7 @@ def update_Q(actor, Q1, Q1_target, Q2, Q2_target,
 
 def update_actor(obs, target_vecs, dones, gamma, actor,
                  actor_optimizer, Q1, Q2, log_alpha,
-                 log_alpha_optimizer, target_entropy):
+                 log_alpha_optimizer, target_entropy, update_alpha=True):
     """
     Update the actor network and the temperature parameter in the Soft Actor-Critic (SAC) algorithm.
 
@@ -224,35 +224,40 @@ def update_actor(obs, target_vecs, dones, gamma, actor,
     logprobs = logprobs.to(DEVICE)
     # compute rewards
     rewards = distance_reward(directions, target_vecs, terminated=dones, gamma=gamma)
-    # get expected Q-vals
-    current_state = torch.cat((obs, torch.ones((obs.shape[0], 1, obs.shape[2], obs.shape[3], obs.shape[4]),device=DEVICE)*directions[:,:,None,None,None]), dim=1)
-    Q1_vals = Q1(current_state)[:,0]
-    Q2_vals = Q2(current_state)[:,0]
-    # entropy regularized Q values
-    loss = -torch.mean(torch.minimum(Q1_vals, Q2_vals) + rewards - log_alpha.exp().detach() * logprobs[:,None]) # The loss function is multiplied by -1 to do gradient ascent instead of decent.
+    if gamma > 0:
+        # get expected Q-vals
+        current_state = torch.cat((obs, torch.ones((obs.shape[0], 1, obs.shape[2], obs.shape[3], obs.shape[4]),device=DEVICE)*directions[:,:,None,None,None]), dim=1)
+        Q1_vals = Q1(current_state)[:,0]
+        Q2_vals = Q2(current_state)[:,0]
+        # entropy regularized Q values
+        loss = -torch.mean(torch.minimum(Q1_vals, Q2_vals) + rewards - log_alpha.exp().detach() * logprobs[:,None]) # The loss function is multiplied by -1 to do gradient ascent instead of decent.
+    else:
+        loss = -torch.mean(rewards - log_alpha.exp().detach() * logprobs[:,None])
     actor_optimizer.zero_grad()
     loss.backward()
     actor_optimizer.step()
 
-    log_alpha_optimizer.zero_grad()
-    entropy_term = (-logprobs - target_entropy).detach()
-    
-    # Check for NaN in entropy term
-    if torch.isnan(entropy_term).any():
-        print("WARNING: NaN detected in entropy term for alpha loss!", flush=True)
-        print(f"logprobs has NaN: {torch.isnan(logprobs).any()}", flush=True)
-        print(f"target_entropy: {target_entropy}", flush=True)
-    
-    alpha_loss = log_alpha * entropy_term.mean()
-    
-    # Check for NaN in alpha_loss
-    if torch.isnan(alpha_loss).any():
-        print("WARNING: NaN detected in alpha_loss!", flush=True)
-        print(f"log_alpha: {log_alpha}", flush=True)
-        print(f"entropy_term.mean(): {entropy_term.mean()}", flush=True)
-    
-    alpha_loss.backward()
-    log_alpha_optimizer.step()
+    # update temperature parameter
+    if update_alpha:
+        log_alpha_optimizer.zero_grad()
+        entropy_term = (-logprobs - target_entropy).detach()
+        
+        # Check for NaN in entropy term
+        if torch.isnan(entropy_term).any():
+            print("WARNING: NaN detected in entropy term for alpha loss!", flush=True)
+            print(f"logprobs has NaN: {torch.isnan(logprobs).any()}", flush=True)
+            print(f"target_entropy: {target_entropy}", flush=True)
+        
+        alpha_loss = log_alpha * entropy_term.mean()
+        
+        # Check for NaN in alpha_loss
+        if torch.isnan(alpha_loss).any():
+            print("WARNING: NaN detected in alpha_loss!", flush=True)
+            print(f"log_alpha: {log_alpha}", flush=True)
+            print(f"entropy_term.mean(): {entropy_term.mean()}", flush=True)
+        
+        alpha_loss.backward()
+        log_alpha_optimizer.step()
 
     return loss.item()
 
@@ -305,6 +310,7 @@ def train(env,
           updates_per_step=1,
           update_every=1,
           n_episodes=50,
+          update_alpha=True,
           dynamic_complexity=True,
           show=True,
           pause_after_episode=False,
@@ -373,14 +379,16 @@ def train(env,
         Whether to pause after each step (default is False).
     """
 
+    COMPLEXITY_INCREASE_FREQUENCY = 300  # Incease complexity after this many episodes
+    COMPLEXITY_INCREMENT = 0.2  # Amount to increase complexity by
+    SAVE_GIF_FREQUENCY = 250  # Save GIF after this many episodes
+
     steps_done = 0
     last_save = 0
     ep_returns = []
     
     reward_cache = deque(maxlen=10000)
     moving_avg_reward = 0.0
-    if dynamic_complexity:
-        eps_since_last_increase = 0
 
     # Ensure outdir and logdir are Path objects
     outdir = Path(outdir)
@@ -456,46 +464,54 @@ def train(env,
                 for j in range(updates_per_step):
                     if isinstance(memory, ReplayBuffer):
                         batch_obs, batch_actions, batch_next_obs, batch_rewards, batch_target_vecs, batch_next_target_vecs, batch_dones = memory.sample(batch_size, transform=True)
-                        td_error = update_Q(actor, Q1, Q1_target, Q2, Q2_target,
-                                            batch_obs, batch_actions, batch_next_target_vecs,
-                                            batch_next_obs, batch_dones, Q1_optimizer,
-                                            Q2_optimizer, gamma, log_alpha, weights=None)
+                        if gamma > 0: # skip Q updates if gamma is 0
+                            td_error = update_Q(actor, Q1, Q1_target, Q2, Q2_target,
+                                                batch_obs, batch_actions, batch_next_target_vecs,
+                                                batch_next_obs, batch_dones, Q1_optimizer,
+                                                Q2_optimizer, gamma, log_alpha, weights=None)
                     elif isinstance(memory, PrioritizedReplayBuffer):
                         batch_obs, batch_actions, batch_next_obs, batch_rewards, batch_target_vecs, batch_next_target_vecs, batch_dones, weights, tree_idxs = memory.sample(batch_size, transform=True)
-                        td_error = update_Q(actor, Q1, Q1_target, Q2, Q2_target,
-                                            batch_obs, batch_actions, batch_next_target_vecs,
-                                            batch_next_obs, batch_dones, Q1_optimizer,
-                                            Q2_optimizer, gamma, log_alpha, weights=weights)
-                        memory.update_priorities(tree_idxs, td_error.cpu().numpy())                    
+                        if gamma > 0:
+                            td_error = update_Q(actor, Q1, Q1_target, Q2, Q2_target,
+                                                batch_obs, batch_actions, batch_next_target_vecs,
+                                                batch_next_obs, batch_dones, Q1_optimizer,
+                                                Q2_optimizer, gamma, log_alpha, weights=weights)
+                            memory.update_priorities(tree_idxs, td_error.cpu().numpy())                    
                     else:
                         raise RuntimeError("Unknown memory buffer")
                         
                     # Perform one step of optimization on the policy network
                     loss = update_actor(batch_obs, batch_target_vecs, batch_dones, gamma,
                                         actor, actor_optimizer, Q1, Q2, log_alpha,
-                                        log_alpha_optimizer, target_entropy)
+                                        log_alpha_optimizer, target_entropy, update_alpha=update_alpha)
                     policy_loss.append(loss)
                     # update target networks
-                    target_update(Q1, Q2, Q1_target, Q2_target, tau)
+                    # target_update(Q1, Q2, Q1_target, Q2_target, tau)
 
                     
             if info["terminate_episode"]:
                 ep_returns.append(ep_return)
-                eps_since_last_increase += 1
                 
                 if dynamic_complexity:
-                    # Check if model is improving based on recent step rewards (at least 50 rewards for stable comparison)
-                    if eps_since_last_increase >= 10000: # Start updating complexity after 100 episodes and space out increases by at least 100 episodes.
-                        # improvement = moving_avg_reward > last_avg_reward
-                        eps_since_last_increase = 0
+                    if ep > 0 and ep % COMPLEXITY_INCREASE_FREQUENCY == 0: 
                         current_complexity = env.dataloader.complexity
-                        if current_complexity < 1.0:
-                            new_complexity = min(current_complexity + 0.05, 1.0)  # Cap complexity at 1.0
-                            print(f"Increasing complexity to {new_complexity:.2f}", flush=True)
-                            env.dataloader.set_complexity(new_complexity)
-                            if new_complexity > 0.33 and env.branching == False:
+                        current_morphology = env.dataloader.morphology
+                        # First increase morphology filter if not at "any", then increase complexity.
+                        if current_morphology != "any":
+                            next_morphology = {"simple": "moderate", "moderate": "complex", "complex": "any"}[current_morphology]
+                            num_images_with_morophology = env.dataloader.dataset.get_complexity_distribution()['morphology_distribution'].get(next_morphology, 0)
+                            if next_morphology != "any" and num_images_with_morophology < 100:
+                                print(f"Not enough images with morphology '{next_morphology}' ({num_images_with_morophology} found). Setting morphology to 'any' instead.", flush=True)
+                                next_morphology = "any"
+                            env.dataloader.set_morphology(next_morphology)
+                            print(f"Setting morphology filter to: {next_morphology}", flush=True)
+                            if next_morphology == "moderate":
                                 print("Enabling branching in environment.", flush=True)
                                 env.branching = True
+                        elif current_complexity < 1.0:
+                            new_complexity = min(current_complexity + COMPLEXITY_INCREMENT, 1.0)  # Cap complexity at 1.0
+                            print(f"Increasing complexity to {new_complexity:.2f}", flush=True)
+                            env.dataloader.set_complexity(new_complexity)
                 
                 if len(policy_loss) > 0:
                     episode_avg_loss = sum(policy_loss)/len(policy_loss) 
@@ -535,10 +551,10 @@ def train(env,
                                 moving_avg_reward,
                                 env.dataloader.complexity
                             ])
-                        if ep % 1000 == 0:
+                        if ep % SAVE_GIF_FREQUENCY == 0:
                             trace_gif(env.img.data[:-1].cpu(), env.finished_paths, step_width=env.step_width,
                                     output_path=logdir / f"{name}_{date}_gifs/{name}_{date}_episode_{ep}_image_{env.current_neuron_info['neuron_name'].split('/')[-1].split('.')[0]}_trace.gif",
-                                    n_frames=20)                                                                            
+                                    n_frames=100)                                                                            
                 break
 
             # if episode does not terminate, move to the next state

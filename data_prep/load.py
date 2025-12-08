@@ -188,6 +188,10 @@ def undirected_edge_list(swc_list):
         if line[6] not in node_ids:
             continue
         graph.append([int(line[0]), int(line[6])])
+    
+    if len(graph) == 0:
+        return edge_list
+
     graph = np.array(graph)
     # Make graph undirected
     graph = np.vstack([graph, graph[:, ::-1]])

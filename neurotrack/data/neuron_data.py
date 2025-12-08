@@ -17,7 +17,7 @@ from pathlib import Path
 import sys
 import tifffile as tf
 import torch
-from typing import Dict, List, Tuple, Optional, Union
+from typing import Dict, List, Tuple, Optional, Union, Literal
 import warnings
 from dataclasses import dataclass
 
@@ -38,7 +38,7 @@ class DrawingComplexityConfig:
     foreground_mean_range: Tuple[float, float] = (0.5, 1.0)
     foreground_std_range: Tuple[float, float] = (0.0, 0.35)
     # Background parameters
-    background_mean_range: Tuple[float, float] = (0.0, 0.02)
+    background_mean_range: Tuple[float, float] = (0.0, 0.1)
     background_std_range: Tuple[float, float] = (0.0, 0.04)
     # Spatial noise parameters
     spatial_noise_amplitude_range: Tuple[float, float] = (0.0, 1.0)
@@ -198,7 +198,7 @@ class DataLoader:
     DataLoader that samples neurons based on their complexity with adjustable sampling priority.
     """
     
-    def __init__(self, dataset: Dataset, complexity: float = 0.0, rng=None):
+    def __init__(self, dataset: Dataset, complexity: float = 0.0, morphology: Literal["simple", "moderate", "complex", "full", "any"] = "any", stochastic_complexity=True, rng=None):
         """
         Initialize DataLoader.
         
@@ -214,7 +214,10 @@ class DataLoader:
         """
         self.dataset = dataset
         self.complexity = complexity
+        self.morphology = morphology
+        self.stochastic_complexity = stochastic_complexity
         self.current_idx = 0
+        self.COMPLEXITY_DECAY_RATE = 8.0  # Rate of exponential decay for complexity weighting
         self.rng = rng or np.random.default_rng()
         self._update_sampling_weights()
     
@@ -229,11 +232,16 @@ class DataLoader:
             # Combine artifact level and morphology complexity
             complexity = entry['complexity']
             
-            # Weight based on how close the neuron complexity is to target complexity
-            weight = np.exp(-8*abs(complexity - self.complexity)) # exponential decay
+            if self.stochastic_complexity:
+                # Weight based on how close the neuron complexity is to target complexity
+                weight = np.exp(-self.COMPLEXITY_DECAY_RATE * abs(complexity - self.complexity)) # exponential decay
+            else:
+                # if self.complexity == complexity:
+                if np.isclose(self.complexity, complexity):
+                    weight = 1.0
+                else:
+                    weight = 0.0
 
-            # Ensure positive weights
-            weight = max(1e-4, weight)
             weights.append(weight)
         
         # Normalize weights
@@ -245,16 +253,40 @@ class DataLoader:
         self.complexity = max(0.0, min(1.0, complexity))
         self._update_sampling_weights()
     
+    def set_morphology(self, morphology: Literal["simple", "moderate", "complex", "full", "any"]):
+        """Set morphology filter for sampling."""
+
+        if morphology not in ["simple", "moderate", "complex", "full", "any"]:
+            warnings.warn(f"Invalid morphology '{morphology}', setting to 'any'")
+            morphology = "any"
+
+        self.morphology = morphology
+    
     def sample(self) -> Dict:
         """Sample a neuron based on current complexity weights."""
         if len(self.dataset) == 0:
             raise ValueError("Dataset is empty")
         
+        # filter for morphology if needed
+        if self.morphology != "any":
+            filtered_indices = [i for i, entry in enumerate(self.dataset.entries) if entry.get('morphology') == self.morphology]
+            if not filtered_indices:
+                raise ValueError(f"No entries found with morphology '{self.morphology}'")
+        else:
+            filtered_indices = list(range(len(self.dataset)))
+        
         if not self.weights:
             # Fallback to uniform sampling
-            idx = self.rng.integers(0, len(self.dataset))
+            idx = self.rng.choice(filtered_indices)
         else:
-            idx = self.rng.choice(len(self.dataset), p=self.weights)
+            # Adjust weights for filtered indices
+            filtered_weights = [self.weights[i] for i in filtered_indices]
+            total_weight = sum(filtered_weights)
+            if total_weight > 0:
+                filtered_weights = [w / total_weight for w in filtered_weights]
+            else:
+                filtered_weights = None  # fallback to uniform if all weights are zero
+            idx = self.rng.choice(filtered_indices, p=filtered_weights)
         self.current_idx = idx
         
         return self.dataset[idx]
@@ -478,7 +510,8 @@ class DataGenerator:
         Crop image around subtree coordinates and shift subtree coordinates.
         """
         # Get coordinates from subtree
-        coords = np.array([(node[2], node[3], node[4]) for node in subtree])
+        subtree_array = np.array(subtree)
+        coords = subtree_array[:, 2:5]  # x, y, z columns
         
         # Calculate bounding box with padding
         min_coords = np.min(coords, axis=0) - padding
@@ -561,6 +594,8 @@ class DataGenerator:
     
     def generate_data(self, subtrees_per_swc: int = 1, 
                      complexity_range: Tuple[float, float] = (0.0, 1.0),
+                     n_steps: int = 6,
+                     morphology: Literal["simple", "moderate", "complex", "full", "any"] = "any",
                      swc_dir: Optional[str] = None, img_dir: Optional[str] = None,
                      dataset_size: int = 100, output_dir: Optional[str] = None) -> Dict:
         """
@@ -572,6 +607,10 @@ class DataGenerator:
             Number of subtrees to generate per SWC file (or per synthetic neuron)
         complexity_range : Tuple[float, float]
             Range of complexity values to sample from (min, max)
+        n_steps : int
+            Number of steps in which to divide complexity range for sampling.
+        morphology : Literal["simple", "moderate", "complex", "full", "any"]
+            Morphology complexity level to filter neurons. "any" means no filtering.
         swc_dir : str, optional
             Directory containing SWC files to process. If None, synthetic data will be generated.
         img_dir : str, optional
@@ -656,7 +695,8 @@ class DataGenerator:
         
         print(f"Processing {len(data_items)} {'SWC files' if not use_synthetic else 'synthetic neurons'}...")
         
-        for item in data_items:
+        complexity_values = np.linspace(complexity_range[0], complexity_range[1], n_steps)
+        for i, item in enumerate(data_items):
             if not use_synthetic and img_dir:
                 swc_file, img_path = item
                 item_name = swc_file.stem
@@ -672,15 +712,26 @@ class DataGenerator:
             
             try:
                 # Sample complexity from range
-                complexity = self.rng.uniform(*complexity_range)
-                config = self.complexity_config.interpolate_config(complexity)
+                # complexity = self.rng.uniform(*complexity_range)
+                # complexity = complexity_values[i // (len(data_items) // n_steps)]
+                # config = self.complexity_config.interpolate_config(complexity)
                 
                 # Determine subtree extraction mode and set complexity parameters
-                subtree_mode = self._complexity_to_mode(complexity)
-                morphology = self._complexity_to_category(complexity)
-                target_path_len = 50.0 + {"no_branch": 100.0,
-                                           "one_branch": 500.0,
-                                           "any_branch": 5000.0}[subtree_mode] * complexity
+                # morphology = self._complexity_to_category(complexity)
+                if morphology == "any":
+                    morphology_ = self.rng.choice(["simple", "moderate", "complex"])
+                else:
+                    morphology_ = morphology
+                subtree_mode = {"simple": "no_branch",
+                                "moderate": "one_branch",
+                                "complex": "any_branch",
+                                "full": "any_branch"}[morphology_]
+                # target_path_len = 50.0 + {"no_branch": 100.0,
+                #                            "one_branch": 500.0,
+                #                            "any_branch": 5000.0}[subtree_mode] * complexity
+                target_path_len = {"no_branch": 100.0,
+                                    "one_branch": 500.0,
+                                    "any_branch": 5000.0}[subtree_mode]
                 
                 if use_synthetic:
                     # Generate synthetic SWC data
@@ -702,77 +753,174 @@ class DataGenerator:
                     )
                     img_tensor = None
                     subtrees = [swc_list]  # Always 1 subtree per synthetic SWC
-                    padding = 0
                 else:
                     # Load files from disk
                     swc_list, img_tensor = self.load_files(str(swc_file), img_path)
                 
-                    if morphology == "full":
+                    if morphology_ == "full":
                         subtrees = [swc_list]  # Use full neuron
                         padding = 10  # Padding only for full neurons
                     else:
                         # Extract subtrees from loaded SWC
-                        subtrees = self.get_subtrees(swc_list, target_path_len, subtrees_per_swc, mode=subtree_mode)
-                        padding = 0  # No padding for subtrees
+                        if img_tensor is None:
+                            subtrees = self.get_subtrees(swc_list, target_path_len, subtrees_per_swc, mode=subtree_mode)
+                        else:
+                            subtrees = []
+                            morphologies = []
+                            box_size = 200.0
+                            swc_array = np.array(swc_list)
+                            centers = swc_array[np.random.choice(np.arange(len(swc_array)), size=subtrees_per_swc, replace=False)]
+                            for center in centers:
+                                center_point = center[2:5]
+                                in_box_mask = np.all(
+                                    (swc_array[:, 2:5] >= (center_point - box_size/2)) &
+                                    (swc_array[:, 2:5] <= (center_point + box_size/2)),
+                                    axis=1
+                                )
+                                subtree = swc_array[in_box_mask].tolist()
+                                subtree_edge_list = load.undirected_edge_list(subtree)
+                                # only keep tree connected to the center node
+                                center_node = center[0]
+                                visited = set()
+                                to_visit = [center_node]
+                                while to_visit:
+                                    node = to_visit.pop()
+                                    if node not in visited:
+                                        visited.add(node)
+                                        neighbors = subtree_edge_list.get(node, [])
+                                        to_visit.extend(neighbors)
+                                subtree = [node for node in subtree if node[0] in visited]
+                                # get number of branches
+                                num_branches = sum(1 for neighbors in subtree_edge_list.values() if len(neighbors) > 2)
+                                morphology_ = "simple" if num_branches == 0 else "moderate" if num_branches == 1 else "complex"
+                                subtrees.append(subtree)
+                                morphologies.append(morphology_)
+                                padding = 0  # No padding for subtrees extracted from image
                 
                 # Process and save each subtree individually to avoid memory issues
                 for i, subtree in enumerate(subtrees):
-                    # Create unique prefix for this file and subtree
-                    file_prefix = f"{item_name}_subtree_{i:02d}"
-                    if file_prefix in existing_neuron_names:
-                        # try incrementing i until unique
-                        j = 1
-                        while f"{item_name}_subtree_{i+j:02d}" in existing_neuron_names:
-                            j += 1
-                        file_prefix = f"{item_name}_subtree_{i+j:02d}"
-                        existing_neuron_names.add(file_prefix)
-                        print(f"Adjusted file prefix to avoid duplicate: {file_prefix}")
-                    
                     # Generate data for this single subtree
                     if img_tensor is not None:
+
+                        # Create unique prefix for this file and subtree
+                        file_prefix = f"{item_name}_subtree_{i:02d}"
+                        if file_prefix in existing_neuron_names:
+                            # try incrementing i until unique
+                            j = 1
+                            while f"{item_name}_subtree_{i+j:02d}" in existing_neuron_names:
+                                j += 1
+                            file_prefix = f"{item_name}_subtree_{i+j:02d}"
+                            print(f"Adjusted file prefix to avoid duplicate: {file_prefix}")
+                        existing_neuron_names.add(file_prefix)
+
                         # Use real image - crop around subtree
                         cropped_image, shifted_subtree = self.crop_around_subtree(img_tensor, subtree, padding=padding)
+                        if padding == 0:
+                            # pad after cropping
+                            # pad image with random noise based on image stats
+                            pad = 10
+                            img_mean = float(torch.mean(cropped_image.float()))
+                            img_std = float(torch.std(cropped_image.float()))
+                            if img_std == 0.0:
+                                img_std = 1e-6
+
+                            device = cropped_image.device
+                            dtype = cropped_image.dtype
+
+                            # Compute padded shape (assumes cropped_image shape is [C, Z, Y, X])
+                            padded_shape = list(cropped_image.shape)
+                            for dim in range(1, len(padded_shape)):
+                                padded_shape[dim] += 2 * pad
+                            padded_shape = tuple(padded_shape)
+
+                            # Create noise in float on the correct device, clamp and cast once
+                            noise = torch.normal(mean=img_mean, std=img_std, size=padded_shape, device=device)
+                            if dtype == torch.uint8:
+                                noise = noise.clamp(0, 255).to(dtype)
+                            else:
+                                noise = noise.clamp(0.0, 1.0).to(dtype)
+
+                            # Copy original image into the center of the noisy padded tensor (in-place)
+                            z0, y0, x0 = pad, pad, pad
+                            z1 = z0 + cropped_image.shape[1]
+                            y1 = y0 + cropped_image.shape[2]
+                            x1 = x0 + cropped_image.shape[3]
+                            noise[:, z0:z1, y0:y1, x0:x1] = cropped_image
+                            cropped_image = noise
+
+                            # Shift subtree coordinates accordingly
+                            shifted_subtree = np.array(shifted_subtree)
+                            shifted_subtree[:, 2:5] = shifted_subtree[:, 2:5] + pad
+
                         reward_mask = self.generate_reward_mask(shifted_subtree, cropped_image.shape[1:], width=35.0) # TODO: mask width from config
                         
                         result = {
                             'image': cropped_image,
-                            'subtree': shifted_subtree,
+                            'subtree': shifted_subtree.tolist(),
                             'reward_mask': reward_mask
                         }
                         # Since real images have natural artifacts, the complexity only reflects morphology
                         # Adjust complexity to reflect this.
-                        complexity = 0.75 + 0.25 * complexity
+                        complexity = 1.0
+
+                        # Save immediately to free memory
+                        self.save_data(result, str(output_dir_path), prefix=file_prefix)
+                        total_subtrees += 1
+
+                        # Track entry for CSV - one row per subtree
+                        if "morphologies" in locals():
+                            morphology_ = morphologies[i]
+                        processed_entries.append({
+                            'neuron_name': file_prefix,
+                            'complexity': complexity,
+                            'morphology': morphology_
+                        })
                     else:
                         # Simulate image from subtree
                         # Estimate shape from subtree coordinates
-                        coords = np.array(subtree)[:, 2:5]                
+                        subtree = np.array(subtree)
+                        coords = subtree[:, 2:5]                
                         shape_estimate = tuple(int(x) + 20 for x in np.ptp(coords, axis=0))[::-1] # Reverse for z,y,x
 
                         # shift coords
-                        subtree = np.array(subtree)
                         subtree[:, 2:5] = subtree[:, 2:5] - coords.min(axis=0) + 10.0
                         subtree = subtree.tolist()
+                        for complexity in complexity_values:
 
-                        simulated_image = self.simulate_neuron_image(subtree, shape_estimate, config=config)
-                        # reward_mask = self.generate_reward_mask(subtree, shape_estimate, width=float(config.width))
-                        reward_mask = self.generate_reward_mask(subtree, shape_estimate, width=35.0)
-                        
-                        result = {
-                            'image': simulated_image,
-                            'subtree': subtree,
-                            'reward_mask': reward_mask
-                        }
+                            # Create unique prefix for this file and subtree
+                            file_prefix = f"{item_name}_subtree_{i:02d}"
+                            if file_prefix in existing_neuron_names:
+                                # try incrementing i until unique
+                                j = 1
+                                while f"{item_name}_subtree_{i+j:02d}" in existing_neuron_names:
+                                    j += 1
+                                file_prefix = f"{item_name}_subtree_{i+j:02d}"
+                                print(f"Adjusted file prefix to avoid duplicate: {file_prefix}")
+                            existing_neuron_names.add(file_prefix)
+
+                            config = self.complexity_config.interpolate_config(complexity)
+                            simulated_image = self.simulate_neuron_image(subtree, shape_estimate, config=config)
+                            # reward_mask = self.generate_reward_mask(subtree, shape_estimate, width=float(config.width))
+                            reward_mask = self.generate_reward_mask(subtree, shape_estimate, width=35.0)
+                            
+                            result = {
+                                'image': simulated_image,
+                                'subtree': subtree,
+                                'reward_mask': reward_mask
+                            }
                     
-                    # Save immediately to free memory
-                    self.save_data(result, str(output_dir_path), prefix=file_prefix)
-                    total_subtrees += 1
+                            # Save immediately to free memory
+                            self.save_data(result, str(output_dir_path), prefix=file_prefix)
+                            total_subtrees += 1
                     
-                    # Track entry for CSV - one row per subtree
-                    processed_entries.append({
-                        'neuron_name': file_prefix,
-                        'complexity': complexity,
-                        'morphology': morphology
-                    })
+                            # Track entry for CSV - one row per subtree
+                            if "morphologies" in locals():
+                                morphology_ = morphologies[i]
+                            processed_entries.append({
+                                'neuron_name': file_prefix,
+                                'complexity': complexity,
+                                'morphology': morphology_
+                            })
                     
                     # Clear result to free memory
                     del result
@@ -820,14 +968,14 @@ class DataGenerator:
         else:
             return "full"
     
-    def _complexity_to_mode(self, complexity: float) -> str:
-        """Convert numeric complexity to subtree extraction mode."""
-        if complexity < 0.33:
-            return "no_branch"
-        elif complexity < 0.67:
-            return "one_branch"
-        else:
-            return "any_branch"
+    # def _complexity_to_mode(self, complexity: float) -> str:
+    #     """Convert numeric complexity to subtree extraction mode."""
+    #     if complexity < 0.33:
+    #         return "no_branch"
+    #     elif complexity < 0.67:
+    #         return "one_branch"
+    #     else:
+    #         return "any_branch"
     
     def save_data(self, data: Dict, save_dir: str, prefix: str = "neuron_data"):
         """Save only image, subtree, and reward mask to disk."""

@@ -187,7 +187,8 @@ class PrioritizedReplayBuffer:
         self.actions = torch.empty((capacity, *action_shape), dtype=torch.float32, device='cpu')
         self.next_obs = torch.empty((capacity, *obs_shape), dtype=torch.float32, device='cpu')
         self.rewards = torch.empty((capacity, 1), dtype=torch.float32, device='cpu')
-        self.target_vectors = torch.empty((capacity, *action_shape), dtype=torch.float32, device='cpu')
+        self.current_target_vectors = torch.empty((capacity, *action_shape), dtype=torch.float32, device='cpu')
+        self.next_target_vectors = torch.empty((capacity, *action_shape), dtype=torch.float32, device='cpu')
         self.dones = torch.empty((capacity, 1), dtype=torch.bool, device='cpu')
 
         self.idx = 0

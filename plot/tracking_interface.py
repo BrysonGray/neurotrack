@@ -182,7 +182,7 @@ def show_state(env, fig, live=False, ep_return=None, reward=None, policy_loss=No
 
     if env.paths:
         # Draw red box around current position with size env.radius x env.radius
-        pos = env.paths[env.head_id][-1]
+        pos = env.paths[0][-1]
         y = int(round(pos[1].item()))  # axis-1 (rows)
         x = int(round(pos[2].item()))  # axis-2 (cols)
         r = int(env.radius)
@@ -217,7 +217,7 @@ def show_state(env, fig, live=False, ep_return=None, reward=None, policy_loss=No
             ax_right_bottom.axis('off')
 
             # Bottom-right: overlay path_obs on cropped true_density MIP
-            center = env.paths[env.head_id][-1]
+            center = env.paths[0][-1]
             density_patch = env.true_density.crop(center, env.radius, interp=False)[0]
             if density_patch.dtype == torch.uint8:
                 density_patch = density_patch.float() / 255.0
@@ -229,13 +229,13 @@ def show_state(env, fig, live=False, ep_return=None, reward=None, policy_loss=No
 
             # # Optionally mask out competing sections
             # if env.section_masking:
-            #     current_label = env.path_labels[env.head_id]
+            #     current_label = env.path_labels[0]
             #     if current_label != 0:
             #         labels_patch, _ = env.section_labels.crop(center, env.radius, interp=False, pad=False)
             #         labels_patch = labels_patch[0]
             #         # Create mask using vectorized operations
             #         section_mask = torch.zeros_like(density_ch, dtype=torch.bool)
-            #         prev_children = env.prev_children[env.head_id]
+            #         prev_children = env.prev_children[0]
             #         graph_current = env.graph[current_label]
             #         section_ids = [current_label] + [x for x in graph_current if x not in prev_children]
             #         for id in section_ids:

@@ -100,11 +100,13 @@ def main():
     n_episodes = params["n_episodes"] if "n_episodes" in params else 100
     init_temperature = params["init_temperature"] if "init_temperature" in params else 0.005
     target_entropy = params["target_entropy"] if "target_entropy" in params else 0.0
+    update_alpha = params["update_alpha"] if "update_alpha" in params else True
     repeat_starts = params["repeat_starts"] if "repeat_starts" in params else True
     section_masking = params["section_masking"] if "section_masking" in params else False
     branching = params["branching"] if "branching" in params else 0
     rng_seed = params["rng_seed"] if "rng_seed" in params else 1
     start_complexity = params["start_complexity"] if "start_complexity" in params else 0.0
+    start_morphology = params["start_morphology"] if "start_morphology" in params else "simple"
     patch_radius = 17
     in_channels = 2
 
@@ -122,7 +124,7 @@ def main():
     # Create dataset
     dataset = Dataset(data_dir=data_dir, rng=rng)
     # Create dataloader
-    dataloader = DataLoader(dataset=dataset, complexity=start_complexity, rng=rng)
+    dataloader = DataLoader(dataset=dataset, complexity=start_complexity, morphology=start_morphology, stochastic_complexity=True, rng=rng)
 
     # Create environment
     # alpha and beta removed to test new environment reward structure
@@ -140,7 +142,6 @@ def main():
     )
     
     input_size = 2*patch_radius+1
-    init_temperature = 0.005
     actor = ConvNet(chin=in_channels, chout=4)
     actor = actor.to(device=DEVICE,dtype=dtype)
 
@@ -202,7 +203,7 @@ def main():
     sac.train(env, actor, Q1, Q2, Q1_target, Q2_target, log_alpha,
           actor_optimizer, Q1_optimizer, Q2_optimizer, log_alpha_optimizer,
           memory, target_entropy, batch_size, gamma, tau, outdir, logdir,
-          name, show=True, pause_after_episode=False, show_live=False,
+          name, update_alpha=update_alpha, show=True, pause_after_episode=False, show_live=False,
           update_after=256, updates_per_step=1, update_every=1, n_episodes=n_episodes)
     
     print("Done!")

@@ -79,6 +79,8 @@
 </section>
 <section id="module-memory.buffer">
 <span id="memory-buffer-module"></span><h2>memory.buffer module<a class="headerlink" href="#module-memory.buffer" title="Link to this heading"></a></h2>
+<p>This module implements a replay buffer and a prioritized replay buffer for storing and sampling.</p>
+<p>Version 2 (v2) refactors the buffer to store target vectors rather than rewards so that the reward gradient can be calculated during the actor update step.</p>
 <dl class="py class">
 <dt class="sig sig-object py" id="memory.buffer.PrioritizedReplayBuffer">
 <em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">memory.buffer.</span></span><span class="sig-name descname"><span class="pre">PrioritizedReplayBuffer</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">capacity</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">obs_shape</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">action_shape</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">eps</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">0.01</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">alpha</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">0.1</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">beta</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">0.1</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#memory.buffer.PrioritizedReplayBuffer" title="Link to this definition"></a></dt>
@@ -197,6 +199,17 @@ Reference: <a class="reference external" href="https://github.com/Howuhh/priorit
 </dd></dl>
 
 <dl class="py attribute">
+<dt class="sig sig-object py" id="memory.buffer.PrioritizedReplayBuffer.target_vectors">
+<span class="sig-name descname"><span class="pre">target_vectors</span></span><a class="headerlink" href="#memory.buffer.PrioritizedReplayBuffer.target_vectors" title="Link to this definition"></a></dt>
+<dd><p>A tensor to store target vectors.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>torch.Tensor</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py attribute">
 <dt class="sig sig-object py" id="memory.buffer.PrioritizedReplayBuffer.dones">
 <span class="sig-name descname"><span class="pre">dones</span></span><a class="headerlink" href="#memory.buffer.PrioritizedReplayBuffer.dones" title="Link to this definition"></a></dt>
 <dd><p>A tensor to store done flags.</p>
@@ -242,7 +255,7 @@ Reference: <a class="reference external" href="https://github.com/Howuhh/priorit
 
 <dl class="py method">
 <dt class="sig sig-object py" id="memory.buffer.PrioritizedReplayBuffer.push">
-<span class="sig-name descname"><span class="pre">push</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">obs</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">action</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">next_obs</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">reward</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">done</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#memory.buffer.PrioritizedReplayBuffer.push" title="Link to this definition"></a></dt>
+<span class="sig-name descname"><span class="pre">push</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">obs</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">action</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">next_obs</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">reward</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">current_target_vector</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">next_target_vector</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">done</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#memory.buffer.PrioritizedReplayBuffer.push" title="Link to this definition"></a></dt>
 <dd><p>Add a new experience to the buffer.
 :param obs: The current observation.
 :type obs: object
@@ -252,6 +265,10 @@ Reference: <a class="reference external" href="https://github.com/Howuhh/priorit
 :type next_obs: object
 :param reward: The reward received after taking the action.
 :type reward: float
+:param current_target_vectors: The current target vector associated with the transition.
+:type current_target_vectors: object
+:param next_target_vectors: The next target vector associated with the transition.
+:type next_target_vectors: object
 :param done: Whether the episode has ended.
 :type done: bool</p>
 </dd></dl>
@@ -273,6 +290,8 @@ Reference: <a class="reference external" href="https://github.com/Howuhh/priorit
 <li><p><strong>actions</strong> (<em>torch.Tensor</em>) – The actions of the sampled transitions.</p></li>
 <li><p><strong>next_obs</strong> (<em>torch.Tensor</em>) – The next observations of the sampled transitions.</p></li>
 <li><p><strong>rewards</strong> (<em>torch.Tensor</em>) – The rewards of the sampled transitions.</p></li>
+<li><p><strong>current_target_vectors</strong> (<em>torch.Tensor</em>) – The current target vectors of the sampled transitions.</p></li>
+<li><p><strong>next_target_vectors</strong> (<em>torch.Tensor</em>) – The next target vectors of the sampled transitions.</p></li>
 <li><p><strong>dones</strong> (<em>torch.Tensor</em>) – The done flags of the sampled transitions.</p></li>
 <li><p><strong>weights</strong> (<em>torch.Tensor</em>) – The importance sampling weights of the sampled transitions.</p></li>
 <li><p><strong>tree_idxs</strong> (<em>list of int</em>) – The indices of the sampled transitions in the priority tree.</p></li>
@@ -363,6 +382,28 @@ to prevent edge cases where priority is zero, and alpha is a scaling factor. The
 </dd></dl>
 
 <dl class="py attribute">
+<dt class="sig sig-object py" id="memory.buffer.ReplayBuffer.current_target_vectors">
+<span class="sig-name descname"><span class="pre">current_target_vectors</span></span><a class="headerlink" href="#memory.buffer.ReplayBuffer.current_target_vectors" title="Link to this definition"></a></dt>
+<dd><p>Tensor to store target vectors.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>torch.Tensor</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="memory.buffer.ReplayBuffer.next_target_vectors">
+<span class="sig-name descname"><span class="pre">next_target_vectors</span></span><a class="headerlink" href="#memory.buffer.ReplayBuffer.next_target_vectors" title="Link to this definition"></a></dt>
+<dd><p>Tensor to store next target vectors.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>torch.Tensor</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py attribute">
 <dt class="sig sig-object py" id="memory.buffer.ReplayBuffer.dones">
 <span class="sig-name descname"><span class="pre">dones</span></span><a class="headerlink" href="#memory.buffer.ReplayBuffer.dones" title="Link to this definition"></a></dt>
 <dd><p>Tensor to store done flags.</p>
@@ -408,7 +449,7 @@ to prevent edge cases where priority is zero, and alpha is a scaling factor. The
 
 <dl class="py method">
 <dt class="sig sig-object py" id="memory.buffer.ReplayBuffer.push">
-<span class="sig-name descname"><span class="pre">push</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">obs</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">action</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">next_obs</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">reward</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">done</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#memory.buffer.ReplayBuffer.push" title="Link to this definition"></a></dt>
+<span class="sig-name descname"><span class="pre">push</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">obs</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">action</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">next_obs</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">reward</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">current_target_vector</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">next_target_vector</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">done</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#memory.buffer.ReplayBuffer.push" title="Link to this definition"></a></dt>
 <dd><p>Save a transition to replay memory</p>
 </dd></dl>
 

@@ -851,12 +851,13 @@ class DataGenerator:
                             # Shift subtree coordinates accordingly
                             shifted_subtree = np.array(shifted_subtree)
                             shifted_subtree[:, 2:5] = shifted_subtree[:, 2:5] + pad
+                            shifted_subtree = shifted_subtree.tolist()
 
                         reward_mask = self.generate_reward_mask(shifted_subtree, cropped_image.shape[1:], width=35.0) # TODO: mask width from config
                         
                         result = {
                             'image': cropped_image,
-                            'subtree': shifted_subtree.tolist(),
+                            'subtree': shifted_subtree,
                             'reward_mask': reward_mask
                         }
                         # Since real images have natural artifacts, the complexity only reflects morphology

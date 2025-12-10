@@ -620,3 +620,98 @@ Starting episode 616/1000000
 Starting episode 617/1000000
 Starting episode 618/1000000
 Starting episode 619/1000000
+loading file: /home/brysongray/data/neurotrack_data/gold166/gold166_swc_processed_subset/3_CL-I_MT_X_MYR-GFP_ddaE_MT-mCherry_membrane-GFP.swc
+loading file: /home/brysongray/data/neurotrack_data/gold166/gold166_swc_processed_subset/140921c5.swc
+loading file: /home/brysongray/data/neurotrack_data/gold166/gold166_swc_processed_subset/091201c1.swc
+loading file: /home/brysongray/data/neurotrack_data/gold166/gold166_swc_processed_subset/1_CL-I_X_OREGON_R_ddaE_membrane-GFP.swc
+loading file: /home/brysongray/data/neurotrack_data/gold166/gold166_swc_processed_subset/091204c2.swc
+loading file: /home/brysongray/data/neurotrack_data/gold166/gold166_swc_processed_subset/140921c4.swc
+loading file: /home/brysongray/data/neurotrack_data/gold166/gold166_swc_processed_subset/140921c1.swc
+loading file: /home/brysongray/data/neurotrack_data/gold166/gold166_swc_processed_subset/140921c9.swc
+loading file: /home/brysongray/data/neurotrack_data/gold166/gold166_swc_processed_subset/140921c14.swc
+loading file: /home/brysongray/data/neurotrack_data/gold166/gold166_swc_processed_subset/2_CL-III_X_Myr-GFP_v'pda_MT-mCherry_membrane-GFP_A_1024.swc
+loading file: /home/brysongray/data/neurotrack_data/gold166/gold166_swc_processed_subset/140921c3.swc
+loading file: /home/brysongray/data/neurotrack_data/gold166/gold166_swc_processed_subset/080926a.swc
+loading file: /home/brysongray/data/neurotrack_data/gold166/gold166_swc_processed_subset/140918c7.swc
+loading file: /home/brysongray/data/neurotrack_data/gold166/gold166_swc_processed_subset/091202c2.swc
+loading file: /home/brysongray/data/neurotrack_data/gold166/gold166_swc_processed_subset/140918c9.swc
+loading file: /home/brysongray/data/neurotrack_data/gold166/gold166_swc_processed_subset/2_CL-I_Membrane-GFP_X_F-Actin-Red_ddaD_Membrane-GFP_F-Actin-Red.swc
+loading file: /home/brysongray/data/neurotrack_data/gold166/gold166_swc_processed_subset/3_CL-I_MT_X_MYR-GFP_ddaD_MT-mCherry_membrane-GFP.swc
+loading file: /home/brysongray/data/neurotrack_data/gold166/gold166_swc_processed_subset/2_CL-I_Membrane-GFP_X_F-Actin-Red_ddaE_Membrane-GFP_F-Actin-Red.swc
+loading file: /home/brysongray/data/neurotrack_data/gold166/gold166_swc_processed_subset/140921c12.swc
+loading file: /home/brysongray/data/neurotrack_data/gold166/gold166_swc_processed_subset/140918c3.swc
+loading file: /home/brysongray/data/neurotrack_data/gold166/gold166_swc_processed_subset/100110c4.swc
+loading file: /home/brysongray/data/neurotrack_data/gold166/gold166_swc_processed_subset/091226c2.swc
+loading file: /home/brysongray/data/neurotrack_data/gold166/gold166_swc_processed_subset/140921c6.swc
+loading file: /home/brysongray/data/neurotrack_data/gold166/gold166_swc_processed_subset/1_CL-I_X_OREGON_R_ddaD_membrane-GFP.swc
+loading file: /home/brysongray/data/neurotrack_data/gold166/gold166_swc_processed_subset/140918c8.swc
+loading file: /home/brysongray/data/neurotrack_data/gold166/gold166_swc_processed_subset/140921c16.swc
+loading file: /home/brysongray/data/neurotrack_data/gold166/gold166_swc_processed_subset/3_CL-III_X_LifeActRuby_vpda_membrane-GFP_actin-LifeActRuby.swc
+loading file: /home/brysongray/data/neurotrack_data/gold166/gold166_swc_processed_subset/100108c3.swc
+loading file: /home/brysongray/data/neurotrack_data/gold166/gold166_swc_processed_subset/110203c3.swc
+loading file: /home/brysongray/data/neurotrack_data/gold166/gold166_swc_processed_subset/1_CL-III_X_LifeActRuby_vpda_membrane-GFP_actin-LifeActRuby.swc
+Processing 30 SWC files...
+loading file: ../inference_dir/temp_swc/3_CL-I_MT_X_MYR-GFP_ddaE_MT-mCherry_membrane-GFP.swc
+Failed to process 3_CL-I_MT_X_MYR-GFP_ddaE_MT-mCherry_membrane-GFP: 'list' object has no attribute 'tolist'
+loading file: ../inference_dir/temp_swc/140921c5.swc
+Failed to process 140921c5: 'list' object has no attribute 'tolist'
+loading file: ../inference_dir/temp_swc/091201c1.swc
+Failed to process 091201c1: 'list' object has no attribute 'tolist'
+loading file: ../inference_dir/temp_swc/1_CL-I_X_OREGON_R_ddaE_membrane-GFP.swc
+Failed to process 1_CL-I_X_OREGON_R_ddaE_membrane-GFP: 'list' object has no attribute 'tolist'
+loading file: ../inference_dir/temp_swc/091204c2.swc
+Failed to process 091204c2: 'list' object has no attribute 'tolist'
+loading file: ../inference_dir/temp_swc/140921c4.swc
+Failed to process 140921c4: 'list' object has no attribute 'tolist'
+loading file: ../inference_dir/temp_swc/140921c1.swc
+Failed to process 140921c1: 'list' object has no attribute 'tolist'
+loading file: ../inference_dir/temp_swc/140921c9.swc
+Failed to process 140921c9: 'list' object has no attribute 'tolist'
+loading file: ../inference_dir/temp_swc/140921c14.swc
+Failed to process 140921c14: 'list' object has no attribute 'tolist'
+loading file: ../inference_dir/temp_swc/2_CL-III_X_Myr-GFP_v'pda_MT-mCherry_membrane-GFP_A_1024.swc
+Failed to process 2_CL-III_X_Myr-GFP_v'pda_MT-mCherry_membrane-GFP_A_1024: 'list' object has no attribute 'tolist'
+loading file: ../inference_dir/temp_swc/140921c3.swc
+Failed to process 140921c3: 'list' object has no attribute 'tolist'
+loading file: ../inference_dir/temp_swc/080926a.swc
+Failed to process 080926a: 'list' object has no attribute 'tolist'
+loading file: ../inference_dir/temp_swc/140918c7.swc
+Failed to process 140918c7: 'list' object has no attribute 'tolist'
+loading file: ../inference_dir/temp_swc/091202c2.swc
+Failed to process 091202c2: 'list' object has no attribute 'tolist'
+loading file: ../inference_dir/temp_swc/140918c9.swc
+Failed to process 140918c9: 'list' object has no attribute 'tolist'
+loading file: ../inference_dir/temp_swc/2_CL-I_Membrane-GFP_X_F-Actin-Red_ddaD_Membrane-GFP_F-Actin-Red.swc
+Failed to process 2_CL-I_Membrane-GFP_X_F-Actin-Red_ddaD_Membrane-GFP_F-Actin-Red: 'list' object has no attribute 'tolist'
+loading file: ../inference_dir/temp_swc/3_CL-I_MT_X_MYR-GFP_ddaD_MT-mCherry_membrane-GFP.swc
+Failed to process 3_CL-I_MT_X_MYR-GFP_ddaD_MT-mCherry_membrane-GFP: 'list' object has no attribute 'tolist'
+loading file: ../inference_dir/temp_swc/2_CL-I_Membrane-GFP_X_F-Actin-Red_ddaE_Membrane-GFP_F-Actin-Red.swc
+Failed to process 2_CL-I_Membrane-GFP_X_F-Actin-Red_ddaE_Membrane-GFP_F-Actin-Red: 'list' object has no attribute 'tolist'
+loading file: ../inference_dir/temp_swc/140921c12.swc
+Failed to process 140921c12: 'list' object has no attribute 'tolist'
+loading file: ../inference_dir/temp_swc/140918c3.swc
+Failed to process 140918c3: 'list' object has no attribute 'tolist'
+loading file: ../inference_dir/temp_swc/100110c4.swc
+Failed to process 100110c4: 'list' object has no attribute 'tolist'
+loading file: ../inference_dir/temp_swc/091226c2.swc
+Failed to process 091226c2: 'list' object has no attribute 'tolist'
+loading file: ../inference_dir/temp_swc/140921c6.swc
+Failed to process 140921c6: 'list' object has no attribute 'tolist'
+loading file: ../inference_dir/temp_swc/1_CL-I_X_OREGON_R_ddaD_membrane-GFP.swc
+Failed to process 1_CL-I_X_OREGON_R_ddaD_membrane-GFP: 'list' object has no attribute 'tolist'
+loading file: ../inference_dir/temp_swc/140918c8.swc
+Failed to process 140918c8: 'list' object has no attribute 'tolist'
+loading file: ../inference_dir/temp_swc/140921c16.swc
+Failed to process 140921c16: 'list' object has no attribute 'tolist'
+loading file: ../inference_dir/temp_swc/3_CL-III_X_LifeActRuby_vpda_membrane-GFP_actin-LifeActRuby.swc
+Failed to process 3_CL-III_X_LifeActRuby_vpda_membrane-GFP_actin-LifeActRuby: 'list' object has no attribute 'tolist'
+loading file: ../inference_dir/temp_swc/100108c3.swc
+Failed to process 100108c3: 'list' object has no attribute 'tolist'
+loading file: ../inference_dir/temp_swc/110203c3.swc
+Failed to process 110203c3: 'list' object has no attribute 'tolist'
+loading file: ../inference_dir/temp_swc/1_CL-III_X_LifeActRuby_vpda_membrane-GFP_actin-LifeActRuby.swc
+Failed to process 1_CL-III_X_LifeActRuby_vpda_membrane-GFP_actin-LifeActRuby: 'list' object has no attribute 'tolist'
+
+Processing complete!
+Total subtrees generated: 0
+Results saved to: ../inference_dir

@@ -25,6 +25,7 @@ def parse_args():
     parser.add_argument("--remove_soma", action="store_true", help="Remove soma from SWC.")
     parser.add_argument("--rng_seed", type=int, default=1, help="Random seed for data generator.")
     parser.add_argument("--complexity_range", type=float, nargs=2, default=(0.0, 1.0), help="Range of drawing complexities to use.")
+    parser.add_argument("--morphology", type=str, default="all", help="Complexity of neuron morphology to generate (e.g., 'simple', 'moderate', 'complex', 'full', or 'all').")
     parser.add_argument("--subtrees_per_swc", type=int, default=1, help="Number of subtrees to draw per SWC.")
     parser.add_argument("--dataset_size", type=int, default=100, help="Number of synthetic neurons to generate if no SWC directory is provided.")
     return parser.parse_args()
@@ -37,6 +38,7 @@ def setup(
     remove_soma,
     rng_seed,
     complexity_range=(0.0, 1.0),
+    morphology="all",
     subtrees_per_swc=1,
     dataset_size=100
 ):
@@ -69,14 +71,14 @@ def setup(
     complexity_config = DrawingComplexityConfig()
     rng = np.random.default_rng(rng_seed)
     data_generator = DataGenerator(cache_dir=output_dir, complexity_config=complexity_config, rng=rng)
-    data_generator.generate_data(subtrees_per_swc=subtrees_per_swc, complexity_range=complexity_range, swc_dir=swc_dir, img_dir=image_dir, dataset_size=dataset_size)
+    data_generator.generate_data(subtrees_per_swc=subtrees_per_swc, complexity_range=complexity_range, morphology=morphology, swc_dir=swc_dir, img_dir=image_dir, dataset_size=dataset_size)
     if remove_soma and swc_dir is not None:
         # remove temporary directory
         shutil.rmtree(temp_swc_dir)
 
 def main():
     args = parse_args()
-    setup(args.image_dir, args.swc_dir, args.output_dir, args.remove_soma, args.rng_seed, args.complexity_range, args.subtrees_per_swc, args.dataset_size)
+    setup(args.image_dir, args.swc_dir, args.output_dir, args.remove_soma, args.rng_seed, args.complexity_range, args.morphology, args.subtrees_per_swc, args.dataset_size)
 
 if __name__ == "__main__":
     main()

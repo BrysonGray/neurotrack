@@ -193,12 +193,39 @@ class NeuronTrackingEnvironment:
         # seeds = self.full_tree[mask][:n_seeds, 2:5]
 
         # only one seed per image
-        sections = tree.restructure_neuron_tree(self.full_tree.cpu(), input_type="swc")
-        # get the root of the longest section
-        longest_section_id = max(sections, key=lambda s: len(sections[s]))
-        longest_section = sections[longest_section_id]
-        seed = longest_section[0]  # Seed is a 3D point (z, y, x)
-        seeds = seed.unsqueeze(0)
+        # sections = tree.restructure_neuron_tree(self.full_tree.cpu(), input_type="swc")
+        # # get the root of the longest section
+        # longest_section_id = max(sections, key=lambda s: len(sections[s]))
+        # longest_section = sections[longest_section_id]
+        # seed = longest_section[0]  # Seed is a 3D point (z, y, x)
+        # seeds = seed.unsqueeze(0)
+
+        # seed is the end point farthest from any branch points.
+        branch_nodes = [k for k, v in self.edge_list.items() if len(v) > 2]
+        end_nodes = [k for k, v in self.edge_list.items() if len(v) == 1]
+        
+        branch_indices = [self.id_to_idx[int(n)] for n in branch_nodes]
+        end_indices = [self.id_to_idx[int(n)] for n in end_nodes]
+        
+        branch_coords = self.full_tree[branch_indices, 2:5]  # shape (M,3)
+        end_coords = self.full_tree[end_indices, 2:5]  # shape (N,3)
+
+        if branch_coords.shape[0] == 0:
+            # if no branch points, just use the first endpoint
+            seeds = end_coords[0].unsqueeze(0)
+        else:
+            # Subsample branch points if there are too many
+            # This approximates the "farthest from any branch" metric
+            compare_coords = branch_coords
+            if branch_coords.shape[0] > 30:
+                indices = torch.randperm(branch_coords.shape[0], device=branch_coords.device)[:30]
+                compare_coords = branch_coords[indices]
+
+            # shape (N, 1, 3) - (1, M, 3) -> (N, M, 3) -> sum sq -> (N, M)
+            dists_sq = torch.sum((end_coords.float().unsqueeze(1) - compare_coords.float().unsqueeze(0)) ** 2, dim=2)
+            min_dists_sq, _ = torch.min(dists_sq, dim=1)  # shape (N,)
+            farthest_end_idx = torch.argmax(min_dists_sq)
+            seeds = end_coords[farthest_end_idx].unsqueeze(0)
 
         # If no seeds found, raise an error
         if len(seeds) == 0:

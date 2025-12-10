@@ -581,7 +581,7 @@ def train(env,
     return
 
 
-def inference(env, actor, outdir, Q_net=None, n_trials=1, show=True, show_live=True, save_paths=False, sync=False, stochastic=False):
+def inference(env, actor, outdir, Q_net=None, n_trials=1, show=True, show_live=False, save_paths=False, sync=False, stochastic=False):
     """
     Perform inference using the given actor in the specified environment.
     

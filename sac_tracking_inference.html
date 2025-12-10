@@ -100,7 +100,7 @@
 </div>
 </div>
 <div class="nbinput nblast docutils container">
-<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[13]:
+<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[3]:
 </pre></div>
 </div>
 <div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="kn">from</span><span class="w"> </span><span class="nn">glob</span><span class="w"> </span><span class="kn">import</span> <span class="n">glob</span>
@@ -140,7 +140,7 @@
 <section id="Instantiate-environment">
 <h2>Instantiate environment<a class="headerlink" href="#Instantiate-environment" title="Link to this heading"></a></h2>
 <div class="nbinput nblast docutils container">
-<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[5]:
+<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[4]:
 </pre></div>
 </div>
 <div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">config_path</span> <span class="o">=</span> <span class="s2">&quot;../configs/sac_inference_dynamic_complexity.json&quot;</span>
@@ -153,22 +153,41 @@
 <span class="n">name</span> <span class="o">=</span> <span class="n">params</span><span class="p">[</span><span class="s2">&quot;name&quot;</span><span class="p">]</span>
 <span class="n">step_size</span> <span class="o">=</span> <span class="n">params</span><span class="p">[</span><span class="s2">&quot;step_size&quot;</span><span class="p">]</span> <span class="k">if</span> <span class="s2">&quot;step_size&quot;</span> <span class="ow">in</span> <span class="n">params</span> <span class="k">else</span> <span class="mf">1.0</span>
 <span class="n">step_width</span> <span class="o">=</span> <span class="n">params</span><span class="p">[</span><span class="s2">&quot;step_width&quot;</span><span class="p">]</span> <span class="k">if</span> <span class="s2">&quot;step_width&quot;</span> <span class="ow">in</span> <span class="n">params</span> <span class="k">else</span> <span class="mf">1.0</span>
+<span class="n">batch_size</span> <span class="o">=</span> <span class="n">params</span><span class="p">[</span><span class="s2">&quot;batchsize&quot;</span><span class="p">]</span> <span class="k">if</span> <span class="s2">&quot;batchsize&quot;</span> <span class="ow">in</span> <span class="n">params</span> <span class="k">else</span> <span class="mi">256</span>
+<span class="n">tau</span> <span class="o">=</span> <span class="n">params</span><span class="p">[</span><span class="s2">&quot;tau&quot;</span><span class="p">]</span> <span class="k">if</span> <span class="s2">&quot;tau&quot;</span> <span class="ow">in</span> <span class="n">params</span> <span class="k">else</span> <span class="mf">0.005</span>
+<span class="n">gamma</span> <span class="o">=</span> <span class="n">params</span><span class="p">[</span><span class="s2">&quot;gamma&quot;</span><span class="p">]</span> <span class="k">if</span> <span class="s2">&quot;gamma&quot;</span> <span class="ow">in</span> <span class="n">params</span> <span class="k">else</span> <span class="mf">0.99</span>
+<span class="n">lr</span> <span class="o">=</span> <span class="n">params</span><span class="p">[</span><span class="s2">&quot;lr&quot;</span><span class="p">]</span> <span class="k">if</span> <span class="s2">&quot;lr&quot;</span> <span class="ow">in</span> <span class="n">params</span> <span class="k">else</span> <span class="mf">0.001</span>
 <span class="n">alpha</span> <span class="o">=</span> <span class="n">params</span><span class="p">[</span><span class="s2">&quot;alpha&quot;</span><span class="p">]</span> <span class="k">if</span> <span class="s2">&quot;alpha&quot;</span> <span class="ow">in</span> <span class="n">params</span> <span class="k">else</span> <span class="mf">1.0</span>
 <span class="n">beta</span> <span class="o">=</span> <span class="n">params</span><span class="p">[</span><span class="s2">&quot;beta&quot;</span><span class="p">]</span> <span class="k">if</span> <span class="s2">&quot;beta&quot;</span> <span class="ow">in</span> <span class="n">params</span> <span class="k">else</span> <span class="mf">1e-3</span>
 <span class="n">friction</span> <span class="o">=</span> <span class="n">params</span><span class="p">[</span><span class="s2">&quot;friction&quot;</span><span class="p">]</span> <span class="k">if</span> <span class="s2">&quot;friction&quot;</span> <span class="ow">in</span> <span class="n">params</span> <span class="k">else</span> <span class="mf">1e-4</span>
+<span class="n">n_episodes</span> <span class="o">=</span> <span class="n">params</span><span class="p">[</span><span class="s2">&quot;n_episodes&quot;</span><span class="p">]</span> <span class="k">if</span> <span class="s2">&quot;n_episodes&quot;</span> <span class="ow">in</span> <span class="n">params</span> <span class="k">else</span> <span class="mi">100</span>
+<span class="n">init_temperature</span> <span class="o">=</span> <span class="n">params</span><span class="p">[</span><span class="s2">&quot;init_temperature&quot;</span><span class="p">]</span> <span class="k">if</span> <span class="s2">&quot;init_temperature&quot;</span> <span class="ow">in</span> <span class="n">params</span> <span class="k">else</span> <span class="mf">0.005</span>
+<span class="n">target_entropy</span> <span class="o">=</span> <span class="n">params</span><span class="p">[</span><span class="s2">&quot;target_entropy&quot;</span><span class="p">]</span> <span class="k">if</span> <span class="s2">&quot;target_entropy&quot;</span> <span class="ow">in</span> <span class="n">params</span> <span class="k">else</span> <span class="mf">0.0</span>
+<span class="n">update_alpha</span> <span class="o">=</span> <span class="n">params</span><span class="p">[</span><span class="s2">&quot;update_alpha&quot;</span><span class="p">]</span> <span class="k">if</span> <span class="s2">&quot;update_alpha&quot;</span> <span class="ow">in</span> <span class="n">params</span> <span class="k">else</span> <span class="kc">True</span>
 <span class="n">repeat_starts</span> <span class="o">=</span> <span class="n">params</span><span class="p">[</span><span class="s2">&quot;repeat_starts&quot;</span><span class="p">]</span> <span class="k">if</span> <span class="s2">&quot;repeat_starts&quot;</span> <span class="ow">in</span> <span class="n">params</span> <span class="k">else</span> <span class="kc">True</span>
 <span class="n">section_masking</span> <span class="o">=</span> <span class="n">params</span><span class="p">[</span><span class="s2">&quot;section_masking&quot;</span><span class="p">]</span> <span class="k">if</span> <span class="s2">&quot;section_masking&quot;</span> <span class="ow">in</span> <span class="n">params</span> <span class="k">else</span> <span class="kc">False</span>
+<span class="n">branching</span> <span class="o">=</span> <span class="n">params</span><span class="p">[</span><span class="s2">&quot;branching&quot;</span><span class="p">]</span> <span class="k">if</span> <span class="s2">&quot;branching&quot;</span> <span class="ow">in</span> <span class="n">params</span> <span class="k">else</span> <span class="mi">0</span>
 <span class="n">rng_seed</span> <span class="o">=</span> <span class="n">params</span><span class="p">[</span><span class="s2">&quot;rng_seed&quot;</span><span class="p">]</span> <span class="k">if</span> <span class="s2">&quot;rng_seed&quot;</span> <span class="ow">in</span> <span class="n">params</span> <span class="k">else</span> <span class="mi">1</span>
 <span class="n">start_complexity</span> <span class="o">=</span> <span class="n">params</span><span class="p">[</span><span class="s2">&quot;start_complexity&quot;</span><span class="p">]</span> <span class="k">if</span> <span class="s2">&quot;start_complexity&quot;</span> <span class="ow">in</span> <span class="n">params</span> <span class="k">else</span> <span class="mf">0.0</span>
-<span class="n">branching</span> <span class="o">=</span> <span class="n">params</span><span class="p">[</span><span class="s2">&quot;branching&quot;</span><span class="p">]</span> <span class="k">if</span> <span class="s2">&quot;branching&quot;</span> <span class="ow">in</span> <span class="n">params</span> <span class="k">else</span> <span class="mi">0</span>
+<span class="n">start_morphology</span> <span class="o">=</span> <span class="n">params</span><span class="p">[</span><span class="s2">&quot;start_morphology&quot;</span><span class="p">]</span> <span class="k">if</span> <span class="s2">&quot;start_morphology&quot;</span> <span class="ow">in</span> <span class="n">params</span> <span class="k">else</span> <span class="s2">&quot;simple&quot;</span>
 <span class="n">patch_radius</span> <span class="o">=</span> <span class="mi">17</span>
 <span class="n">in_channels</span> <span class="o">=</span> <span class="mi">2</span>
+
+<span class="k">if</span> <span class="s2">&quot;classifier_weights&quot;</span> <span class="ow">in</span> <span class="n">params</span><span class="p">:</span>
+    <span class="n">classifier_path</span> <span class="o">=</span> <span class="n">params</span><span class="p">[</span><span class="s2">&quot;classifier_weights&quot;</span><span class="p">]</span>
+    <span class="n">classifier_state_dict</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">classifier_path</span><span class="p">)</span><span class="c1">#, weights_only=True)</span>
+    <span class="n">classifier</span> <span class="o">=</span> <span class="n">ResNet3D</span><span class="p">(</span><span class="n">ResidualBlock3D</span><span class="p">,</span> <span class="p">[</span><span class="mi">3</span><span class="p">,</span> <span class="mi">4</span><span class="p">,</span> <span class="mi">6</span><span class="p">,</span> <span class="mi">3</span><span class="p">],</span> <span class="n">in_channels</span><span class="o">=</span><span class="n">in_channels</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="n">num_classes</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+    <span class="n">classifier</span> <span class="o">=</span> <span class="n">classifier</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">device</span><span class="o">=</span><span class="n">DEVICE</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">dtype</span><span class="p">)</span>
+    <span class="n">classifier</span><span class="o">.</span><span class="n">load_state_dict</span><span class="p">(</span><span class="n">classifier_state_dict</span><span class="p">)</span>
+    <span class="n">classifier</span><span class="o">.</span><span class="n">eval</span><span class="p">()</span>
+<span class="k">else</span><span class="p">:</span>
+    <span class="n">classifier</span> <span class="o">=</span> <span class="kc">None</span>
 
 <span class="n">rng</span> <span class="o">=</span> <span class="n">np</span><span class="o">.</span><span class="n">random</span><span class="o">.</span><span class="n">default_rng</span><span class="p">(</span><span class="n">rng_seed</span><span class="p">)</span>
 <span class="c1"># Create dataset</span>
 <span class="n">dataset</span> <span class="o">=</span> <span class="n">Dataset</span><span class="p">(</span><span class="n">data_dir</span><span class="o">=</span><span class="n">data_dir</span><span class="p">,</span> <span class="n">rng</span><span class="o">=</span><span class="n">rng</span><span class="p">)</span>
 <span class="c1"># Create dataloader</span>
-<span class="n">dataloader</span> <span class="o">=</span> <span class="n">DataLoader</span><span class="p">(</span><span class="n">dataset</span><span class="o">=</span><span class="n">dataset</span><span class="p">,</span> <span class="n">complexity</span><span class="o">=</span><span class="n">start_complexity</span><span class="p">,</span> <span class="n">rng</span><span class="o">=</span><span class="n">rng</span><span class="p">)</span>
+<span class="n">dataloader</span> <span class="o">=</span> <span class="n">DataLoader</span><span class="p">(</span><span class="n">dataset</span><span class="o">=</span><span class="n">dataset</span><span class="p">,</span> <span class="n">complexity</span><span class="o">=</span><span class="n">start_complexity</span><span class="p">,</span> <span class="n">morphology</span><span class="o">=</span><span class="n">start_morphology</span><span class="p">,</span> <span class="n">stochastic_complexity</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">rng</span><span class="o">=</span><span class="n">rng</span><span class="p">)</span>
 
 <span class="c1"># Create environment</span>
 <span class="c1"># alpha and beta removed to test new environment reward structure</span>
@@ -181,30 +200,40 @@
     <span class="n">friction</span><span class="o">=</span><span class="n">friction</span><span class="p">,</span>
     <span class="n">repeat_starts</span><span class="o">=</span><span class="n">repeat_starts</span><span class="p">,</span>
     <span class="n">section_masking</span><span class="o">=</span><span class="n">section_masking</span><span class="p">,</span>
-    <span class="n">branching</span><span class="o">=</span><span class="n">branching</span>
+    <span class="n">branching</span><span class="o">=</span><span class="n">branching</span><span class="p">,</span>
+    <span class="n">classifier</span><span class="o">=</span><span class="n">classifier</span>
 <span class="p">)</span>
 
-<span class="n">env</span><span class="o">.</span><span class="n">reset</span><span class="p">()</span>
-
+<span class="n">input_size</span> <span class="o">=</span> <span class="mi">2</span><span class="o">*</span><span class="n">patch_radius</span><span class="o">+</span><span class="mi">1</span>
 <span class="n">actor</span> <span class="o">=</span> <span class="n">ConvNet</span><span class="p">(</span><span class="n">chin</span><span class="o">=</span><span class="n">in_channels</span><span class="p">,</span> <span class="n">chout</span><span class="o">=</span><span class="mi">4</span><span class="p">)</span>
 <span class="n">actor</span> <span class="o">=</span> <span class="n">actor</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">device</span><span class="o">=</span><span class="n">DEVICE</span><span class="p">,</span><span class="n">dtype</span><span class="o">=</span><span class="n">dtype</span><span class="p">)</span>
 
-<span class="n">Q</span> <span class="o">=</span> <span class="n">ConvNet</span><span class="p">(</span><span class="n">chin</span><span class="o">=</span><span class="n">in_channels</span><span class="o">+</span><span class="mi">3</span><span class="p">,</span><span class="n">chout</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
-<span class="n">Q</span> <span class="o">=</span> <span class="n">Q</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">device</span><span class="o">=</span><span class="n">DEVICE</span><span class="p">,</span><span class="n">dtype</span><span class="o">=</span><span class="n">dtype</span><span class="p">)</span>
+<span class="n">Q1</span> <span class="o">=</span> <span class="n">ConvNet</span><span class="p">(</span><span class="n">chin</span><span class="o">=</span><span class="n">in_channels</span><span class="o">+</span><span class="mi">3</span><span class="p">,</span><span class="n">chout</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+<span class="n">Q1</span> <span class="o">=</span> <span class="n">Q1</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">device</span><span class="o">=</span><span class="n">DEVICE</span><span class="p">,</span><span class="n">dtype</span><span class="o">=</span><span class="n">dtype</span><span class="p">)</span>
+<span class="n">Q2</span> <span class="o">=</span> <span class="n">ConvNet</span><span class="p">(</span><span class="n">chin</span><span class="o">=</span><span class="n">in_channels</span><span class="o">+</span><span class="mi">3</span><span class="p">,</span><span class="n">chout</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+<span class="n">Q2</span> <span class="o">=</span> <span class="n">Q2</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">device</span><span class="o">=</span><span class="n">DEVICE</span><span class="p">,</span><span class="n">dtype</span><span class="o">=</span><span class="n">dtype</span><span class="p">)</span>
+<span class="n">Q1_target</span> <span class="o">=</span> <span class="n">ConvNet</span><span class="p">(</span><span class="n">chin</span><span class="o">=</span><span class="n">in_channels</span><span class="o">+</span><span class="mi">3</span><span class="p">,</span><span class="n">chout</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+<span class="n">Q1_target</span> <span class="o">=</span> <span class="n">Q1_target</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">device</span><span class="o">=</span><span class="n">DEVICE</span><span class="p">,</span><span class="n">dtype</span><span class="o">=</span><span class="n">dtype</span><span class="p">)</span>
+<span class="n">Q2_target</span> <span class="o">=</span> <span class="n">ConvNet</span><span class="p">(</span><span class="n">chin</span><span class="o">=</span><span class="n">in_channels</span><span class="o">+</span><span class="mi">3</span><span class="p">,</span><span class="n">chout</span><span class="o">=</span><span class="mi">1</span><span class="p">)</span>
+<span class="n">Q2_target</span> <span class="o">=</span> <span class="n">Q2_target</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">device</span><span class="o">=</span><span class="n">DEVICE</span><span class="p">,</span><span class="n">dtype</span><span class="o">=</span><span class="n">dtype</span><span class="p">)</span>
+
+<span class="n">log_alpha</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">log</span><span class="p">(</span><span class="n">torch</span><span class="o">.</span><span class="n">tensor</span><span class="p">(</span><span class="n">init_temperature</span><span class="p">)</span><span class="o">.</span><span class="n">to</span><span class="p">(</span><span class="n">DEVICE</span><span class="p">))</span>
+<span class="n">log_alpha</span><span class="o">.</span><span class="n">requires_grad</span> <span class="o">=</span> <span class="kc">True</span>
 
 <span class="k">if</span> <span class="s2">&quot;sac_weights&quot;</span> <span class="ow">in</span> <span class="n">params</span><span class="p">:</span>
     <span class="n">sac_path</span> <span class="o">=</span> <span class="n">params</span><span class="p">[</span><span class="s2">&quot;sac_weights&quot;</span><span class="p">]</span>
     <span class="n">state_dicts</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">load</span><span class="p">(</span><span class="n">sac_path</span><span class="p">)</span><span class="c1">#, weights_only=True)</span>
     <span class="n">actor</span><span class="o">.</span><span class="n">load_state_dict</span><span class="p">(</span><span class="n">state_dicts</span><span class="p">[</span><span class="s2">&quot;policy_state_dict&quot;</span><span class="p">])</span>
-    <span class="n">Q</span><span class="o">.</span><span class="n">load_state_dict</span><span class="p">(</span><span class="n">state_dicts</span><span class="p">[</span><span class="s2">&quot;Q1_state_dict&quot;</span><span class="p">])</span>
+    <span class="n">Q1</span><span class="o">.</span><span class="n">load_state_dict</span><span class="p">(</span><span class="n">state_dicts</span><span class="p">[</span><span class="s2">&quot;Q1_state_dict&quot;</span><span class="p">])</span>
+    <span class="n">Q2</span><span class="o">.</span><span class="n">load_state_dict</span><span class="p">(</span><span class="n">state_dicts</span><span class="p">[</span><span class="s2">&quot;Q2_state_dict&quot;</span><span class="p">])</span>
 <br/></pre></div>
 </div>
 </div>
 <div class="nbinput docutils container">
-<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[6]:
+<div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[5]:
 </pre></div>
 </div>
-<div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">sac</span><span class="o">.</span><span class="n">inference</span><span class="p">(</span><span class="n">env</span><span class="p">,</span> <span class="n">actor</span><span class="p">,</span> <span class="n">outdir</span><span class="p">,</span> <span class="n">Q_net</span><span class="o">=</span><span class="n">Q</span><span class="p">,</span> <span class="n">n_trials</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">save_paths</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">sync</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
+<div class="input_area highlight-ipython3 notranslate"><div class="highlight"><pre><span></span><span class="n">sac</span><span class="o">.</span><span class="n">inference</span><span class="p">(</span><span class="n">env</span><span class="p">,</span> <span class="n">actor</span><span class="p">,</span> <span class="n">outdir</span><span class="p">,</span> <span class="n">Q_net</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">n_trials</span><span class="o">=</span><span class="mi">1</span><span class="p">,</span> <span class="n">show</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">show_live</span><span class="o">=</span><span class="kc">False</span><span class="p">,</span> <span class="n">save_paths</span><span class="o">=</span><span class="kc">True</span><span class="p">,</span> <span class="n">sync</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span>
 </pre></div>
 </div>
 </div>
@@ -212,80 +241,25 @@
 <div class="prompt empty docutils container">
 </div>
 <div class="output_area docutils container">
-<div class="highlight"><pre>
-Processing image 1/253
-</pre></div></div>
+<img alt="_images/sac_tracking_inference_5_0.png" src="_images/sac_tracking_inference_5_0.png" />
+</div>
 </div>
 <div class="nboutput docutils container">
 <div class="prompt empty docutils container">
 </div>
 <div class="output_area docutils container">
 <div class="highlight"><pre>
-<span class="ansi-red-fg">---------------------------------------------------------------------------</span>
-<span class="ansi-red-fg">KeyboardInterrupt</span>                         Traceback (most recent call last)
-Cell <span class="ansi-green-fg">In[6], line 1</span>
-<span class="ansi-green-fg">----&gt; 1</span> <span class="ansi-yellow-bg">sac</span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">.</span><span class="ansi-yellow-bg">inference</span><span class="ansi-yellow-bg">(</span><span class="ansi-yellow-bg">env</span><span class="ansi-yellow-bg">,</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg">actor</span><span class="ansi-yellow-bg">,</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg">outdir</span><span class="ansi-yellow-bg">,</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg">Q_net</span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">=</span><span class="ansi-yellow-bg">Q</span><span class="ansi-yellow-bg">,</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg">n_trials</span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">=</span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">1</span><span class="ansi-yellow-bg">,</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg">save_paths</span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">=</span><span class="ansi-yellow-bg ansi-bold" style="color: rgb(0,135,0)">False</span><span class="ansi-yellow-bg">,</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg">sync</span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">=</span><span class="ansi-yellow-bg ansi-bold" style="color: rgb(0,135,0)">False</span><span class="ansi-yellow-bg">)</span>
-
-File <span class="ansi-green-fg">~/neurotrack/notebooks/../solvers/sac.py:613</span>, in <span class="ansi-cyan-fg">inference</span><span class="ansi-blue-fg">(env, actor, outdir, Q_net, n_trials, show, show_live, save_paths, sync, stochastic)</span>
-<span class="ansi-green-intense-fg ansi-bold">    610</span>         action <span style="color: rgb(98,98,98)">=</span> direction_dist<span style="color: rgb(98,98,98)">.</span>mean[<span style="color: rgb(98,98,98)">0</span>]
-<span class="ansi-green-intense-fg ansi-bold">    612</span> next_obs, reward, terminated, truncated, info <span style="color: rgb(98,98,98)">=</span> env<span style="color: rgb(98,98,98)">.</span>step(action, training<span style="color: rgb(98,98,98)">=</span><span class="ansi-bold" style="color: rgb(0,135,0)">True</span>)
-<span class="ansi-green-fg">--&gt; 613</span> <span class="ansi-bold" style="color: rgb(0,135,0)">if</span> <span class="ansi-yellow-bg">Q_net</span> <span class="ansi-bold" style="color: rgb(175,0,255)">is</span> <span class="ansi-bold" style="color: rgb(175,0,255)">not</span> <span class="ansi-bold" style="color: rgb(0,135,0)">None</span>:
-<span class="ansi-green-intense-fg ansi-bold">    614</span>     current_state <span style="color: rgb(98,98,98)">=</span> torch<span style="color: rgb(98,98,98)">.</span>cat((obs<span style="color: rgb(98,98,98)">.</span>to(DEVICE), torch<span style="color: rgb(98,98,98)">.</span>ones((obs<span style="color: rgb(98,98,98)">.</span>shape[<span style="color: rgb(98,98,98)">0</span>], <span style="color: rgb(98,98,98)">1</span>, obs<span style="color: rgb(98,98,98)">.</span>shape[<span style="color: rgb(98,98,98)">2</span>], obs<span style="color: rgb(98,98,98)">.</span>shape[<span style="color: rgb(98,98,98)">3</span>], obs<span style="color: rgb(98,98,98)">.</span>shape[<span style="color: rgb(98,98,98)">4</span>]),device<span style="color: rgb(98,98,98)">=</span>DEVICE)<span style="color: rgb(98,98,98)">*</span>action[<span class="ansi-bold" style="color: rgb(0,135,0)">None</span>,:,<span class="ansi-bold" style="color: rgb(0,135,0)">None</span>,<span class="ansi-bold" style="color: rgb(0,135,0)">None</span>,<span class="ansi-bold" style="color: rgb(0,135,0)">None</span>]<span style="color: rgb(98,98,98)">.</span>to(DEVICE)), dim<span style="color: rgb(98,98,98)">=</span><span style="color: rgb(98,98,98)">1</span>)
-<span class="ansi-green-intense-fg ansi-bold">    615</span>     q_val <span style="color: rgb(98,98,98)">=</span> Q_net(current_state)[:,<span style="color: rgb(98,98,98)">0</span>]
-
-File <span class="ansi-green-fg">~/neurotrack/notebooks/../solvers/sac.py:613</span>, in <span class="ansi-cyan-fg">inference</span><span class="ansi-blue-fg">(env, actor, outdir, Q_net, n_trials, show, show_live, save_paths, sync, stochastic)</span>
-<span class="ansi-green-intense-fg ansi-bold">    610</span>         action <span style="color: rgb(98,98,98)">=</span> direction_dist<span style="color: rgb(98,98,98)">.</span>mean[<span style="color: rgb(98,98,98)">0</span>]
-<span class="ansi-green-intense-fg ansi-bold">    612</span> next_obs, reward, terminated, truncated, info <span style="color: rgb(98,98,98)">=</span> env<span style="color: rgb(98,98,98)">.</span>step(action, training<span style="color: rgb(98,98,98)">=</span><span class="ansi-bold" style="color: rgb(0,135,0)">True</span>)
-<span class="ansi-green-fg">--&gt; 613</span> <span class="ansi-bold" style="color: rgb(0,135,0)">if</span> <span class="ansi-yellow-bg">Q_net</span> <span class="ansi-bold" style="color: rgb(175,0,255)">is</span> <span class="ansi-bold" style="color: rgb(175,0,255)">not</span> <span class="ansi-bold" style="color: rgb(0,135,0)">None</span>:
-<span class="ansi-green-intense-fg ansi-bold">    614</span>     current_state <span style="color: rgb(98,98,98)">=</span> torch<span style="color: rgb(98,98,98)">.</span>cat((obs<span style="color: rgb(98,98,98)">.</span>to(DEVICE), torch<span style="color: rgb(98,98,98)">.</span>ones((obs<span style="color: rgb(98,98,98)">.</span>shape[<span style="color: rgb(98,98,98)">0</span>], <span style="color: rgb(98,98,98)">1</span>, obs<span style="color: rgb(98,98,98)">.</span>shape[<span style="color: rgb(98,98,98)">2</span>], obs<span style="color: rgb(98,98,98)">.</span>shape[<span style="color: rgb(98,98,98)">3</span>], obs<span style="color: rgb(98,98,98)">.</span>shape[<span style="color: rgb(98,98,98)">4</span>]),device<span style="color: rgb(98,98,98)">=</span>DEVICE)<span style="color: rgb(98,98,98)">*</span>action[<span class="ansi-bold" style="color: rgb(0,135,0)">None</span>,:,<span class="ansi-bold" style="color: rgb(0,135,0)">None</span>,<span class="ansi-bold" style="color: rgb(0,135,0)">None</span>,<span class="ansi-bold" style="color: rgb(0,135,0)">None</span>]<span style="color: rgb(98,98,98)">.</span>to(DEVICE)), dim<span style="color: rgb(98,98,98)">=</span><span style="color: rgb(98,98,98)">1</span>)
-<span class="ansi-green-intense-fg ansi-bold">    615</span>     q_val <span style="color: rgb(98,98,98)">=</span> Q_net(current_state)[:,<span style="color: rgb(98,98,98)">0</span>]
-
-File <span class="ansi-green-fg">_pydevd_bundle\\pydevd_cython.pyx:1697</span>, in <span class="ansi-cyan-fg">_pydevd_bundle.pydevd_cython.SafeCallWrapper.__call__</span><span class="ansi-blue-fg">()</span>
-
-File <span class="ansi-green-fg">_pydevd_bundle\\pydevd_cython.pyx:634</span>, in <span class="ansi-cyan-fg">_pydevd_bundle.pydevd_cython.PyDBFrame.trace_dispatch</span><span class="ansi-blue-fg">()</span>
-
-File <span class="ansi-green-fg">_pydevd_bundle\\pydevd_cython.pyx:1112</span>, in <span class="ansi-cyan-fg">_pydevd_bundle.pydevd_cython.PyDBFrame.trace_dispatch</span><span class="ansi-blue-fg">()</span>
-
-File <span class="ansi-green-fg">_pydevd_bundle\\pydevd_cython.pyx:1090</span>, in <span class="ansi-cyan-fg">_pydevd_bundle.pydevd_cython.PyDBFrame.trace_dispatch</span><span class="ansi-blue-fg">()</span>
-
-File <span class="ansi-green-fg">_pydevd_bundle\\pydevd_cython.pyx:494</span>, in <span class="ansi-cyan-fg">_pydevd_bundle.pydevd_cython.PyDBFrame.do_wait_suspend</span><span class="ansi-blue-fg">()</span>
-
-File <span class="ansi-green-fg">~/anaconda3/envs/tractography/lib/python3.9/site-packages/debugpy/_vendored/pydevd/pydevd.py:2188</span>, in <span class="ansi-cyan-fg">PyDB.do_wait_suspend</span><span class="ansi-blue-fg">(self, thread, frame, event, arg, exception_type)</span>
-<span class="ansi-green-intense-fg ansi-bold">   2185</span>             from_this_thread<span style="color: rgb(98,98,98)">.</span>append(frame_custom_thread_id)
-<span class="ansi-green-intense-fg ansi-bold">   2187</span>     <span class="ansi-bold" style="color: rgb(0,135,0)">with</span> <span style="color: rgb(0,135,0)">self</span><span style="color: rgb(98,98,98)">.</span>_threads_suspended_single_notification<span style="color: rgb(98,98,98)">.</span>notify_thread_suspended(thread_id, thread, stop_reason):
-<span class="ansi-green-fg">-&gt; 2188</span>         keep_suspended <span style="color: rgb(98,98,98)">=</span> <span class="ansi-yellow-bg" style="color: rgb(0,135,0)">self</span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">.</span><span class="ansi-yellow-bg">_do_wait_suspend</span><span class="ansi-yellow-bg">(</span><span class="ansi-yellow-bg">thread</span><span class="ansi-yellow-bg">,</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg">frame</span><span class="ansi-yellow-bg">,</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg">event</span><span class="ansi-yellow-bg">,</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg">arg</span><span class="ansi-yellow-bg">,</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg">trace_suspend_type</span><span class="ansi-yellow-bg">,</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg">from_this_thread</span><span class="ansi-yellow-bg">,</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg">frames_tracker</span><span class="ansi-yellow-bg">)</span>
-<span class="ansi-green-intense-fg ansi-bold">   2190</span> frames_list <span style="color: rgb(98,98,98)">=</span> <span class="ansi-bold" style="color: rgb(0,135,0)">None</span>
-<span class="ansi-green-intense-fg ansi-bold">   2192</span> <span class="ansi-bold" style="color: rgb(0,135,0)">if</span> keep_suspended:
-<span class="ansi-green-intense-fg ansi-bold">   2193</span>     <span style="color: rgb(95,135,135)"># This means that we should pause again after a set next statement.</span>
-
-File <span class="ansi-green-fg">~/anaconda3/envs/tractography/lib/python3.9/site-packages/debugpy/_vendored/pydevd/pydevd.py:2257</span>, in <span class="ansi-cyan-fg">PyDB._do_wait_suspend</span><span class="ansi-blue-fg">(self, thread, frame, event, arg, trace_suspend_type, from_this_thread, frames_tracker)</span>
-<span class="ansi-green-intense-fg ansi-bold">   2254</span>                 queue<span style="color: rgb(98,98,98)">.</span>put(internal_cmd)
-<span class="ansi-green-intense-fg ansi-bold">   2255</span>                 wait_timeout <span style="color: rgb(98,98,98)">=</span> TIMEOUT_FAST
-<span class="ansi-green-fg">-&gt; 2257</span>         <span class="ansi-yellow-bg">notify_event</span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">.</span><span class="ansi-yellow-bg">wait</span><span class="ansi-yellow-bg">(</span><span class="ansi-yellow-bg">wait_timeout</span><span class="ansi-yellow-bg">)</span>
-<span class="ansi-green-intense-fg ansi-bold">   2258</span>         notify_event<span style="color: rgb(98,98,98)">.</span>clear()
-<span class="ansi-green-intense-fg ansi-bold">   2260</span> <span class="ansi-bold" style="color: rgb(0,135,0)">finally</span>:
-
-File <span class="ansi-green-fg">~/anaconda3/envs/tractography/lib/python3.9/threading.py:581</span>, in <span class="ansi-cyan-fg">Event.wait</span><span class="ansi-blue-fg">(self, timeout)</span>
-<span class="ansi-green-intense-fg ansi-bold">    579</span> signaled <span style="color: rgb(98,98,98)">=</span> <span style="color: rgb(0,135,0)">self</span><span style="color: rgb(98,98,98)">.</span>_flag
-<span class="ansi-green-intense-fg ansi-bold">    580</span> <span class="ansi-bold" style="color: rgb(0,135,0)">if</span> <span class="ansi-bold" style="color: rgb(175,0,255)">not</span> signaled:
-<span class="ansi-green-fg">--&gt; 581</span>     signaled <span style="color: rgb(98,98,98)">=</span> <span class="ansi-yellow-bg" style="color: rgb(0,135,0)">self</span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">.</span><span class="ansi-yellow-bg">_cond</span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">.</span><span class="ansi-yellow-bg">wait</span><span class="ansi-yellow-bg">(</span><span class="ansi-yellow-bg">timeout</span><span class="ansi-yellow-bg">)</span>
-<span class="ansi-green-intense-fg ansi-bold">    582</span> <span class="ansi-bold" style="color: rgb(0,135,0)">return</span> signaled
-
-File <span class="ansi-green-fg">~/anaconda3/envs/tractography/lib/python3.9/threading.py:316</span>, in <span class="ansi-cyan-fg">Condition.wait</span><span class="ansi-blue-fg">(self, timeout)</span>
-<span class="ansi-green-intense-fg ansi-bold">    314</span> <span class="ansi-bold" style="color: rgb(0,135,0)">else</span>:
-<span class="ansi-green-intense-fg ansi-bold">    315</span>     <span class="ansi-bold" style="color: rgb(0,135,0)">if</span> timeout <span style="color: rgb(98,98,98)">&gt;</span> <span style="color: rgb(98,98,98)">0</span>:
-<span class="ansi-green-fg">--&gt; 316</span>         gotit <span style="color: rgb(98,98,98)">=</span> <span class="ansi-yellow-bg">waiter</span><span class="ansi-yellow-bg" style="color: rgb(98,98,98)">.</span><span class="ansi-yellow-bg">acquire</span><span class="ansi-yellow-bg">(</span><span class="ansi-yellow-bg ansi-bold" style="color: rgb(0,135,0)">True</span><span class="ansi-yellow-bg">,</span><span class="ansi-yellow-bg"> </span><span class="ansi-yellow-bg">timeout</span><span class="ansi-yellow-bg">)</span>
-<span class="ansi-green-intense-fg ansi-bold">    317</span>     <span class="ansi-bold" style="color: rgb(0,135,0)">else</span>:
-<span class="ansi-green-intense-fg ansi-bold">    318</span>         gotit <span style="color: rgb(98,98,98)">=</span> waiter<span style="color: rgb(98,98,98)">.</span>acquire(<span class="ansi-bold" style="color: rgb(0,135,0)">False</span>)
-
-<span class="ansi-red-fg">KeyboardInterrupt</span>:
+num branches: 1
+num long paths: 1
+Press Enter to continue to the next episode (or &#39;q&#39; to quit)...
+Quitting training.
 </pre></div></div>
 </div>
 <div class="nboutput nblast docutils container">
 <div class="prompt empty docutils container">
 </div>
 <div class="output_area docutils container">
-<script type="application/vnd.jupyter.widget-view+json">{"model_id": "399069b1bd7241b38e20fc7d1241f040", "version_major": 2, "version_minor": 0}</script></div>
+<script type="application/vnd.jupyter.widget-view+json">{"model_id": "a587d10dba06400d9f39b67371f20e9b", "version_major": 2, "version_minor": 0}</script></div>
 </div>
 <div class="nbinput nblast docutils container">
 <div class="prompt highlight-none notranslate"><div class="highlight"><pre><span></span>[11]:

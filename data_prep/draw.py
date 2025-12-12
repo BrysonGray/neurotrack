@@ -6,7 +6,7 @@ import numpy as np
 from pathlib import Path
 from dataclasses import dataclass, field
 from typing import Optional, List, Dict, Tuple, Union
-from skimage.filters import gaussian 
+from skimage.filters import gaussian
 import torch
 import imageio
 from scipy.ndimage import gaussian_filter, median_filter
@@ -78,14 +78,14 @@ class NeuronRenderer:
         self.rng = rng if rng is not None else np.random.default_rng()
 
     def draw_density(self, sections: Dict, shape: Tuple[int, ...], 
-                    width: Optional[float] = None, mask: bool = False, scale: float = 1.0) -> Image:
+                    width: Optional[float] = 3.0, mask: bool = False) -> Image:
         """
         Draw neuron density image from sections.
         
         Args:
             sections: Dictionary of section_id -> segments
             shape: Output image shape
-            width: Line width (auto-detected if None)
+            width: Line width (defaults to 3.0)
             mask: Whether to create a binary mask
             scale: Pixel scale factor
             
@@ -93,29 +93,13 @@ class NeuronRenderer:
             Image object with neuron density
         """
         density = Image(torch.zeros((1,) + shape))
-        segments = self._consolidate_segments(sections)
+        segments = np.concatenate([section for section in sections.values()])
         
         for segment in segments:
-            line_width = self._get_segment_width(torch.from_numpy(segment), width, scale)
+            line_width = self._get_segment_width(torch.from_numpy(segment), default_width=width)
             density.draw_line_segment(segment[:, :3], width=line_width, mask=mask, channel=0)
         
         return density
-    
-    def draw_mask(self, density: torch.Tensor, threshold: float = 1.0) -> torch.Tensor:
-        """
-        Create binary mask from density image.
-        
-        Args:
-            density: Neuron density tensor
-            threshold: Threshold for mask creation
-            
-        Returns:
-            Binary mask tensor
-        """
-        peak = density.amax()
-        mask = torch.zeros_like(density, dtype=torch.bool)
-        mask[density > peak * np.exp(-0.5 * threshold)] = True
-        return mask
     
     def draw_section_labels(self, sections: Dict, shape: Tuple[int, ...], 
                           width: float = 3.0) -> Image:
@@ -134,7 +118,7 @@ class NeuronRenderer:
         
         for section_id, section_segments in sections.items():
             for segment in section_segments:
-                segment_width = self._get_segment_width(segment, width)
+                segment_width = self._get_segment_width(segment, default_width=width)
                 labels.draw_line_segment(
                     segment[:, :3], width=segment_width, 
                     channel=0, mask=True, value=section_id
@@ -164,8 +148,10 @@ class NeuronRenderer:
         
         return img
     
-    def draw_neuron(self, sections: Dict, shape: Tuple[int, ...], 
-                   config: DrawingConfig, gif_config: Optional[GifConfig] = None) -> Image:
+    def draw_neuron(self, sections: Dict, 
+                   config: DrawingConfig,
+                   shape: Optional[Tuple[int, ...]] = None,
+                   gif_config: Optional[GifConfig] = None) -> Image:
         """
         Draw complete neuron image with all effects.
         
@@ -178,11 +164,10 @@ class NeuronRenderer:
         Returns:
             Rendered neuron image
         """
-        segments = self._consolidate_segments(sections)
+        segments = np.concatenate([section for section in sections.values()])
         if shape is None:
             shape = self._calculate_shape(segments)
-        bg_mean = getattr(config, 'background_mean', 0.0)
-        img = Image(torch.ones((1,) + shape) * bg_mean)
+        img = Image(torch.zeros((1,) + shape))
 
         gif_frames = []
         gif_steps = self._setup_gif_steps(len(segments), gif_config)
@@ -204,20 +189,19 @@ class NeuronRenderer:
 
         # Draw segments
         for idx, segment in enumerate(segments):
-            width_override = float(width_seq[idx]) if width_seq is not None else None
-            value_override = float(value_seq[idx]) if value_seq is not None else None
-            self._draw_single_segment(img, segment, config, width_override=width_override, value_override=value_override)
+            width_override = float(width_seq[idx]) if width_seq is not None else getattr(config, 'width', 3.0)
+            value_override = float(value_seq[idx]) if value_seq is not None else getattr(config, 'foreground_mean', 1.0)
+            img.draw_line_segment(segment[:, :3], width=width_override, mask=True, channel=0, value=value_override)
             self._maybe_capture_gif_frame(img, idx, gif_steps, gif_frames, gif_config)
         
         # Compute masks once (based on raw drawn density) for post-processing
-        peak = img.data.max()
-        threshold = bg_mean + float(config.mask_threshold) * (float(peak) - bg_mean)
-        foreground_mask = img.data > threshold
+        foreground_mask = img.data > 0.0
+        bg_mean = getattr(config, 'background_mean', 0.0)
+        img.data[~foreground_mask] = bg_mean
+
 
         # Apply post-processing
-        # img = self._apply_color_effects(img, config)
-        img = self._add_spatial_noise(img, config, foreground_mask)
-        img = self._add_gaussian_noise(img, config, foreground_mask)
+        img = self._add_combined_noise(img, config, foreground_mask)
         img = self._add_vignette(img, config, foreground_mask)
 
         # Final clamp and optional Gaussian blur
@@ -233,61 +217,6 @@ class NeuronRenderer:
         self._maybe_save_gif(gif_frames, gif_config)
         
         return img
-    
-    def neuron_from_swc(self, swc_list: List, config: DrawingConfig, 
-                       shape: Optional[Tuple[int, ...]] = None, 
-                       dropout: bool = False, adjust: bool = False) -> Dict:
-        """
-        Generate neuron image from SWC data.
-        
-        Args:
-            swc_list: SWC neuron data
-            config: Drawing configuration
-            shape: Output shape (auto-calculated if None)
-            dropout: Whether to add signal dropout
-            adjust: Whether to adjust coordinates
-            
-        Returns:
-            Dictionary with image, density, labels, etc.
-        """
-        # Parse SWC data
-        sections, graph = load.parse_swc(swc_list)
-        branches, terminals = load.get_critical_points(swc_list, sections)
-        scale = 1.0
-        
-        if adjust:
-            sections, branches, terminals, scale = load.adjust_neuron_coords(
-                sections, branches, terminals
-            )
-        
-        # Prepare segments
-        segments = self._consolidate_segments(sections)
-        
-        if shape is None:
-            shape = self._calculate_shape(segments)
-        
-        # Generate images
-        img = self.draw_neuron(sections, shape, config)
-        density = self.draw_density(sections, shape, width=config.width)
-        section_labels = self.draw_section_labels(sections, shape, width=2*config.width)
-        
-        # Apply dropout if requested
-        if dropout:
-            img = self._apply_dropout(img, section_labels, config.width)
-        
-        # Prepare output
-        root_key = min(sections.keys())
-        seed = sections[root_key][0, 0, :3].round().astype(np.uint16).tolist()
-        
-        return {
-            "image": img.data,
-            "neuron_density": density.data,
-            "section_labels": section_labels.data,
-            "branches": branches,
-            "seeds": [seed],
-            "scale": scale,
-            "graph": graph
-        }
     
     # Private helper methods
     def _ensure_tensor(self, data: Union[List, np.ndarray, torch.Tensor]) -> torch.Tensor:
@@ -333,19 +262,19 @@ class NeuronRenderer:
         # Generate white noise
         noise = self.rng.normal(0, 1, (depth, height, width)).astype(np.float32)
         
-        # Calculate sigma for desired correlation scale
-        sigma = max(0.5, scale / 3.0)  # Scale controls correlation length
-        
-        # Apply 3D Gaussian filter for spatial correlation
-        from scipy.ndimage import gaussian_filter
-        correlated_noise = gaussian_filter(noise, sigma=sigma, mode='reflect')
-        
-        # Convert to tensor and normalize to [-1, 1]
-        t = torch.from_numpy(correlated_noise)
-        std_val = torch.std(t)
-        if std_val > 0:
-            t = t / (3 * std_val)  # Normalize to roughly [-1, 1] (3-sigma rule)
-        return torch.clamp(t, -1.0, 1.0)
+        sigma = max(0.1, scale)
+        noise = gaussian_filter(noise, sigma=sigma, mode='reflect')
+        # Standardize to zero mean, unit variance
+        noise = noise - noise.mean()
+        std = noise.std()
+        if std > 1e-6:
+            noise = noise / std
+        else:
+            noise = np.zeros_like(noise)
+
+        noise = torch.from_numpy(noise)
+
+        return noise
     
     def _fractal_noise(self, depth: int, height: int, width: int, scale: float) -> torch.Tensor:
         """Generate fractal noise using octave-based approach."""
@@ -445,70 +374,53 @@ class NeuronRenderer:
             noise = noise / max_abs
         return torch.clamp(noise, -1.0, 1.0)
         
-    def _add_spatial_noise(self, img: Image, config: DrawingConfig, foreground_mask: torch.Tensor) -> Image:
-        """Add spatially correlated noise contribution to foreground/background means.
-
-        Masks are precomputed once in draw_neuron and passed here for consistency.
-        """
-        background_mask = ~foreground_mask
-
-        # Get noise method from config (with fallback)
-        noise_method = getattr(config, 'noise_method', 'gaussian_convolution')
+    def _add_combined_noise(self, img: Image, config: DrawingConfig, foreground_mask: torch.Tensor) -> Image:
+        """Add combined spatially correlated and Gaussian noise.
         
-        # Generate spatially correlated noise (Z,Y,X) -> (C,Z,Y,X)
+        Ensures total noise has zero mean and approximates target standard deviation.
+        """
         noise_shape = img.data.shape[1:]
+        noise_method = getattr(config, 'noise_method', 'gaussian_convolution')
         spatial_noise = self._generate_spatially_correlated_noise(
             noise_shape, config.spatial_noise_scale, method=noise_method
-        ).unsqueeze(0)
-
-        result_img = torch.zeros_like(img.data)
-        amp = float(getattr(config, 'spatial_noise_amplitude', 1.0))
-        fg_mean = float(getattr(config, 'foreground_mean', 1.0))
-        bg_mean = float(getattr(config, 'background_mean', 0.0))
+        ).unsqueeze(0) # (1, Z, Y, X)
+            
+        gaussian_noise = torch.randn_like(img.data)
+        
+        # Combine and scale for Foreground and Background
+        # We want Total = k * (w_s * S + w_g * G)
+        # Var(Total) = k^2 * (w_s^2 + w_g^2) = target_std^2
+        # Let w_s = spatial_noise_amplitude, w_g = 1.0
+        # k = target_std / sqrt(w_s^2 + 1)
+        
+        w_s = float(getattr(config, 'spatial_noise_amplitude', 1.0))
+        w_g = 1.0
+        norm_factor = np.sqrt(w_s**2 + w_g**2)
+        
+        # Foreground
+        fg_std = float(getattr(config, 'foreground_std', 0.1))
+        fg_k = fg_std / norm_factor if norm_factor > 0 else 0
+        
+        # Background
+        bg_std = float(getattr(config, 'background_std', 0.05))
+        bg_k = bg_std / norm_factor if norm_factor > 0 else 0
+        
+        # Calculate total noise field
+        total_noise = (w_s * spatial_noise + w_g * gaussian_noise)
+        
+        # Apply scaling
+        final_noise = torch.zeros_like(img.data)
+        
         if foreground_mask.any():
-            result_img[foreground_mask] = img.data[foreground_mask] + (amp * fg_mean * spatial_noise)[foreground_mask]
+            final_noise[foreground_mask] = (total_noise * fg_k)[foreground_mask]
+            
+        background_mask = ~foreground_mask
         if background_mask.any():
-            result_img[background_mask] = img.data[background_mask] + (amp * bg_mean * spatial_noise)[background_mask]
-
-        img.data = result_img
-        return img
-
-    def _add_gaussian_noise_tensor(
-        self,
-        img: torch.Tensor,
-        foreground_mask: torch.Tensor,
-        fg_std: float,
-        bg_std: float,
-    ) -> torch.Tensor:
-        """Add zero-mean Gaussian noise with different std for foreground/background.
-
-        Args:
-            img: image tensor (C, Z, Y, X)
-            foreground_mask: bool mask same shape as img
-            background_mask: bool mask same shape as img
-            fg_std: standard deviation for foreground gaussian noise
-            bg_std: standard deviation for background gaussian noise
-        Returns:
-            Tensor of same shape as img with noise added.
-        """
-        if fg_std <= 0 and bg_std <= 0:
-            return img
-        device = img.device
-        dtype = img.dtype
-        fg_noise = torch.randn_like(img, device=device, dtype=dtype) * float(fg_std)
-        bg_noise = torch.randn_like(img, device=device, dtype=dtype) * float(bg_std)
-        gauss = torch.where(foreground_mask, fg_noise, bg_noise)
-        return img + gauss
-
-    def _add_gaussian_noise(self, img: Image, config: DrawingConfig, foreground_mask: torch.Tensor) -> Image:
-        """Add Gaussian noise using foreground_std/background_std.
-        """
-        img.data = self._add_gaussian_noise_tensor(
-            img=img.data,
-            foreground_mask=foreground_mask,
-            fg_std=float(config.foreground_std),
-            bg_std=float(config.background_std),
-        )
+            final_noise[background_mask] = (total_noise * bg_k)[background_mask]
+            
+        # Add to image
+        img.data = img.data + final_noise
+        
         return img
 
     def _add_vignette(
@@ -574,16 +486,6 @@ class NeuronRenderer:
         factors = torch.where(foreground_mask, factor_fg, factor_bg)
         img.data = img.data * factors
         return img
-    
-    def _draw_single_segment(self, img: Image, segment: np.ndarray, 
-                           config: DrawingConfig, width_override: Optional[float] = None, value_override: Optional[float] = None) -> None:
-        """Draw a single segment with all effects."""
-        # Calculate segment properties
-        value = value_override if value_override is not None else self._get_segment_value(config)
-        width = width_override if width_override is not None else self._get_segment_width(torch.from_numpy(segment), config.width)
-        
-        # Draw the segment
-        img.draw_line_segment(segment[:, :3], width=width, mask=True, channel=0, value=value, sharpness=getattr(config, 'sharpness', 2.0))
 
     def _generate_ar1_sequence(self, n: int, rho: float, start_val: Optional[float] = None) -> np.ndarray:
         """Generate an AR(1) sequence with lag-1 correlation rho and unit variance.
@@ -601,31 +503,6 @@ class NeuronRenderer:
         for t in range(1, n):
             seq[t] = rho * seq[t-1] + sigma * eps[t-1]
         return seq
-
-    def _get_segment_value(self, config: DrawingConfig, default_value: int = 1.0) -> float:
-        """Get brightness value for segment."""
-        if config.foreground_mean:
-            value = config.foreground_mean
-        else:
-            value = default_value
-        return value
-
-    def _get_segment_width(self, segment: torch.Tensor, default_width: Optional[float] = None, 
-                          scale: float = 1.0) -> float:
-        """Get width for a segment, handling various cases."""
-        if default_width is not None:
-            return default_width
-        elif segment.shape[1] == 4:  # Width included in segment data
-            return ((segment[0, 3] + segment[1, 3]) / 2).item() / scale
-        else:
-            return 3.0
-
-    def _get_segment_sharpness(self, config: DrawingConfig) -> float:
-        """Get sharpness value for segment."""
-        if config.random_sharpness:
-            sharpness = self.rng.normal(1.0, config.random_sharpness)
-            return np.clip(sharpness, 1.0, 6.0)
-        return 1.0
     
     def _maybe_capture_gif_frame(self, img: Image, idx: int, gif_steps: set, 
                                gif_frames: List, gif_config: Optional[GifConfig]) -> None:
@@ -638,24 +515,7 @@ class NeuronRenderer:
     
     def _apply_color_effects(self, img: Image, config: DrawingConfig) -> Image:
         """Apply RGB color effects."""
-        pass  # Not implemented
-            
-        # Apply neuron color
-        if config.neuron_color:
-            neuron_color = torch.tensor(config.neuron_color, dtype=torch.float32)
-            img.data = neuron_color[:, None, None, None] * img.data
-        
-        # Apply background color
-        if config.background_color:
-            background_color = torch.tensor(config.background_color, dtype=torch.float32)
-            img.data = img.data + torch.ones_like(img.data) * background_color[:, None, None, None]
-        
-        return img
-        
-    def _consolidate_segments(self, sections: Dict) -> np.ndarray:
-        """Consolidate all sections into segment array."""
-        segments = [section for section in sections.values()]
-        return np.concatenate(segments)
+        pass  # Not implemented    
     
     def _calculate_shape(self, segments: np.ndarray) -> Tuple[int, ...]:
         """Calculate image shape from segments."""
@@ -663,25 +523,6 @@ class NeuronRenderer:
         shape = shape.astype(np.uint16)
         shape = shape + np.array([10, 10, 10])
         return tuple(shape.tolist())
-    
-    def _apply_dropout(self, img: Image, section_labels: Image, width: float) -> Image:
-        """Apply random signal dropout."""
-        neuron_coords = torch.nonzero(section_labels.data)
-        dropout_density = 0.001
-        size = int(dropout_density * len(neuron_coords))
-        
-        if size > 0:
-            rand_ints = self.rng.integers(0, len(neuron_coords), size=(size,))
-            dropout_points = neuron_coords[rand_ints]
-            dropout_points = dropout_points[:, 1:].T
-            
-            dropout_img = torch.zeros_like(img.data)
-            dropout_img[:, dropout_points[0], dropout_points[1], dropout_points[2]] = 1.0
-            dropout_img = gaussian(dropout_img, sigma=0.5*width)
-            dropout_img /= dropout_img.max()
-            img.data = img.data * (1. - dropout_img)
-        
-        return img
     
     def _maybe_save_gif(self, gif_frames: List, gif_config: Optional[GifConfig]) -> None:
         """Save GIF if frames were captured."""

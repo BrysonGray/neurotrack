@@ -1,74 +1,82 @@
 import torch
+import torch.nn as nn
 
-
-class ConvNet(torch.nn.Module):
-    ''' Base CNN class
-
+class ConvNet(nn.Module):
+    ''' Upgraded CNN class with 5 layers and increased capacity 
+        Input: (B, C, 35, 35, 35)
     '''
-    def __init__(self, chin=4, ch0=16, chout=4, use_layer_norm=True, activation='relu'):
+    def __init__(self, chin=4, ch0=32, chout=4, use_layer_norm=True, activation='relu'):
         super().__init__()        
         k = 3
-        p = (k-1)//2
-        s = 2
+        p = 1
+        
         self.use_layer_norm = use_layer_norm
         
         # Choose activation function
         if activation == 'relu':
-            self.activation = torch.nn.ReLU()
+            self.activation = nn.ReLU()
         elif activation == 'elu':
-            self.activation = torch.nn.ELU()
+            self.activation = nn.ELU()
         elif activation == 'swish':
-            self.activation = torch.nn.SiLU()  # Swish activation
+            self.activation = nn.SiLU()
         elif activation == 'leaky_relu':
-            self.activation = torch.nn.LeakyReLU(0.01)
+            self.activation = nn.LeakyReLU(0.01)
         else:
-            self.activation = torch.nn.ReLU()  # Default fallback
+            self.activation = nn.ReLU()
         
-        # Input normalization
-        # self.n0 = torch.nn.InstanceNorm3d(chin, affine=True)
+        # Layer 1: Input -> ch0 (32), stride 2. Output: 18
+        self.c0 = nn.Conv3d(chin, ch0, k, stride=2, padding=p)
+        self.b0 = self._make_norm(ch0)
         
-        # Convolutional layers
-        self.c0 = torch.nn.Conv3d(chin, ch0, k, s, p)
-        self.c1 = torch.nn.Conv3d(ch0, 2*ch0, k, s, p)
-        self.c2 = torch.nn.Conv3d(2*ch0, 4*ch0, k, s, p)
+        # Layer 2: ch0 -> 2*ch0 (64), stride 2. Output: 9
+        self.c1 = nn.Conv3d(ch0, 2*ch0, k, stride=2, padding=p)
+        self.b1 = self._make_norm(2*ch0)
         
-        # Normalization layers - choose between BatchNorm and LayerNorm
-        if use_layer_norm:
-            # LayerNorm is more stable than BatchNorm
-            self.b0 = torch.nn.GroupNorm(1, ch0)  # GroupNorm with 1 group = LayerNorm
-            self.b1 = torch.nn.GroupNorm(1, 2*ch0)
-            self.b2 = torch.nn.GroupNorm(1, 4*ch0)
-        else:
-            # Original BatchNorm (less stable)
-            self.b0 = torch.nn.BatchNorm3d(ch0)
-            self.b1 = torch.nn.BatchNorm3d(2*ch0)
-            self.b2 = torch.nn.BatchNorm3d(4*ch0)
+        # Layer 3: 2*ch0 -> 4*ch0 (128), stride 2. Output: 5
+        self.c2 = nn.Conv3d(2*ch0, 4*ch0, k, stride=2, padding=p)
+        self.b2 = self._make_norm(4*ch0)
         
-        # Linear layers with normalization
-        self.l0 = torch.nn.Linear(5**3*64, 64)
-        self.ln0 = torch.nn.LayerNorm(64)  # Normalize linear layer output
-        self.l1 = torch.nn.Linear(64, chout)
+        # Layer 4: 4*ch0 -> 8*ch0 (256), stride 1. Output: 5
+        self.c3 = nn.Conv3d(4*ch0, 8*ch0, k, stride=1, padding=p)
+        self.b3 = self._make_norm(8*ch0)
         
-        # Initialize weights to prevent NaN issues
+        # Layer 5: 8*ch0 -> 8*ch0 (256), stride 1. Output: 5
+        self.c4 = nn.Conv3d(8*ch0, 8*ch0, k, stride=1, padding=p)
+        self.b4 = self._make_norm(8*ch0)
+        
+        # Pooling to reduce parameters while keeping some spatial info
+        # Pools to 2x2x2 volume from 5x5x5
+        self.pool = nn.AdaptiveAvgPool3d((2, 2, 2))
+        
+        # Linear layers
+        # Input: 8*ch0 * 2*2*2 = 256 * 8 = 2048
+        flat_features = 8 * ch0 * 8
+        self.l0 = nn.Linear(flat_features, 512)
+        self.ln0 = nn.LayerNorm(512)
+        self.l1 = nn.Linear(512, chout)
+        
         self._initialize_weights()
     
+    def _make_norm(self, channels):
+        if self.use_layer_norm:
+            return nn.GroupNorm(1, channels)
+        else:
+            return nn.BatchNorm3d(channels)
+
     def _initialize_weights(self):
         """Initialize network weights using Xavier/He initialization."""
         for module in self.modules():
-            if isinstance(module, (torch.nn.Conv3d, torch.nn.Linear)):
-                # He initialization for ReLU activations
-                torch.nn.init.kaiming_normal_(module.weight, mode='fan_out', nonlinearity='relu')
+            if isinstance(module, (nn.Conv3d, nn.Linear)):
+                nn.init.kaiming_normal_(module.weight, mode='fan_out', nonlinearity='relu')
                 if module.bias is not None:
-                    torch.nn.init.constant_(module.bias, 0)
-            elif isinstance(module, (torch.nn.BatchNorm3d, torch.nn.GroupNorm, torch.nn.LayerNorm)):
+                    nn.init.constant_(module.bias, 0)
+            elif isinstance(module, (nn.BatchNorm3d, nn.GroupNorm, nn.LayerNorm)):
                 if hasattr(module, 'weight') and module.weight is not None:
-                    torch.nn.init.constant_(module.weight, 1)
+                    nn.init.constant_(module.weight, 1)
                 if hasattr(module, 'bias') and module.bias is not None:
-                    torch.nn.init.constant_(module.bias, 0)
+                    nn.init.constant_(module.bias, 0)
+
     def forward(self, x):
-        # Input normalization to stabilize training
-        # x = self.n0(x)
-        
         x = self.c0(x)
         x = self.b0(x)
         x = self.activation(x)
@@ -81,9 +89,19 @@ class ConvNet(torch.nn.Module):
         x = self.b2(x)
         x = self.activation(x)
         
-        # Flatten and linear layers
-        x = self.l0(x.reshape(x.shape[0], -1))
-        x = self.ln0(x)  # Normalize before activation
+        x = self.c3(x)
+        x = self.b3(x)
+        x = self.activation(x)
+        
+        x = self.c4(x)
+        x = self.b4(x)
+        x = self.activation(x)
+        
+        x = self.pool(x)
+        x = x.reshape(x.shape[0], -1)
+        
+        x = self.l0(x)
+        x = self.ln0(x)
         x = self.activation(x)
         
         x = self.l1(x)

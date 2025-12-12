@@ -288,9 +288,8 @@ def save_coordinates_and_annotations(swc_dir, img_dir, out_dir, samples_per_neur
 
         renderer = draw.NeuronRenderer()
         sections_dict = {0: segments}
-        density = renderer.draw_density(sections_dict, shape)
-        mask = renderer.draw_mask(density.data if hasattr(density, 'data') else density, threshold=5.0)
-        del density
+        mask = renderer.draw_density(sections_dict, shape, mask=True)
+        mask = mask.to(torch.bool)
 
         branch_coords, non_branch_coords = random_points_from_mask(mask, branches, samples_per_neuron, rng=rng)
         sample_points[img_name] = np.concatenate((branch_coords, non_branch_coords))
@@ -355,9 +354,8 @@ def spherical_patch_dataset(swc_dir, img_dir, out_dir, samples_per_neuron=100, s
 
     renderer = draw.NeuronRenderer()
     sections_dict = {0: segments}
-    density = renderer.draw_density(sections_dict, shape)
-    mask = renderer.draw_mask(density.data if hasattr(density, 'data') else density, threshold=5.0)
-    del density
+    mask = renderer.draw_density(sections_dict, shape, mask=True)
+    mask = mask.to(torch.bool)
 
     branch_coords, non_branch_coords = random_points_from_mask(mask, branches, samples_per_neuron, rng=rng)
     annotations, obs_id = save_spherical_patches(img, branch_coords, non_branch_coords, out_dir, start_id=obs_id, annotations=annotations)

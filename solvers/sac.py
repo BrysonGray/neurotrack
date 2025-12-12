@@ -381,7 +381,7 @@ def train(env,
 
     COMPLEXITY_INCREASE_FREQUENCY = 300  # Incease complexity after this many episodes
     COMPLEXITY_INCREMENT = 0.2  # Amount to increase complexity by
-    SAVE_GIF_FREQUENCY = 250  # Save GIF after this many episodes
+    SAVE_GIF_FREQUENCY = 100  # Save GIF after this many episodes
 
     steps_done = 0
     last_save = 0

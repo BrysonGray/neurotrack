@@ -123,11 +123,11 @@ def draw_line_segment(segment, width, mask=False, value=1, sharpness=1.0):
     dist = torch.where(segTb < 0, dist_to_start, dist)
     
     width = np.maximum(width, 1.0)
-    sharpness = 1.0 if sharpness is None else sharpness
     if mask:
         X = dist < width / 2
         X = X.to(dtype=torch.int16) * value
     else:
+        sharpness = 1.0 if sharpness is None else sharpness
         X = torch.exp(-0.5 * (dist / (width / 2.35))**(2 * sharpness)) * value # FWHM = 2.35 * sigma -> sigma = FWHM / 2.35
     
     return X.to(device=direction_vec.device)

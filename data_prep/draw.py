@@ -96,8 +96,7 @@ class NeuronRenderer:
         segments = np.concatenate([section for section in sections.values()])
         
         for segment in segments:
-            line_width = self._get_segment_width(torch.from_numpy(segment), default_width=width)
-            density.draw_line_segment(segment[:, :3], width=line_width, mask=mask, channel=0)
+            density.draw_line_segment(segment[:, :3], width=width, mask=mask, channel=0)
         
         return density
     

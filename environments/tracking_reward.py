@@ -277,7 +277,7 @@ def _get_section_id(node: int, sections: Dict[int, Dict[int, int]]) -> Union[int
     return None
 
 
-def _get_connected_nodes(node: int, edge_list: Dict[int, list]) -> list:
+def _get_connected_nodes(node: int, edge_list: Dict[int, list], max_dist=None, swc_list=None, id_to_idx=None) -> list:
     """
     Get all the nodes on the same tree as the given node.
 
@@ -287,25 +287,52 @@ def _get_connected_nodes(node: int, edge_list: Dict[int, list]) -> list:
         The node ID.
     edge_list : dict
         Undirected edge list from load.undirected_edge_list()
+    max_dist : float, optional
+        Maximum distance to traverse in coordinate space. If None, traverse until end point is reached. Requires swc_list and id_to_idx if provided. Defaults to None.
+    swc_list : np.ndarray, optional
+        The SWC list representing the neuron. Required if max_dist is provided. Defaults to None.
+    id_to_idx : dict, optional
+        Mapping from node ID to index in swc_list. Required if max_dist is provided. Defaults to None.
 
     Returns:
     --------
-    list
+    connected_nodes : list
         List of connected node IDs.
+    terminals : list
+        List of terminal node IDs found during traversal.
     """
+    if max_dist is not None and (swc_list is None or id_to_idx is None):
+        raise ValueError("swc_list and id_to_idx must be provided if max_dist is specified.")
+    if max_dist is not None:
+        swc_array = np.array(swc_list)
     visited = set()
-    stack = [node]
+    stack = [(node, 0.0)]  # (node_id, cumulative_distance_from_start)
+    terminals = []
 
     while stack:
-        n = stack.pop()
+        n, dist = stack.pop()
         if n in visited:
             continue
         visited.add(n)
+        if len(edge_list.get(n, [])) == 1 and n != node:
+            terminals.append(n)
+        
+        # Check if we've exceeded max_dist. If so, don't explore neighbors
+        if max_dist is not None and dist > max_dist:
+            continue
+            
         for nb in edge_list.get(n, []):
             if nb not in visited:
-                stack.append(nb)
+                if max_dist is not None:
+                    edge_dist = sum((swc_array[id_to_idx[nb], 2:5] - swc_array[id_to_idx[n], 2:5]) ** 2) ** 0.5
+                    new_dist = dist + edge_dist
+                    stack.append((nb, new_dist))
+                else:
+                    stack.append((nb, 0.0))
+            
+    connected_nodes = list(visited)
 
-    return list(visited)
+    return connected_nodes, terminals
 
 
 def _get_nearest_node(point: Union[torch.Tensor, np.ndarray], swc_list: Union[torch.Tensor, np.ndarray], id_to_idx: Dict[int, int], valid_nodes: set = None) -> int:
@@ -1001,7 +1028,7 @@ def remove_visited(swc_list: Union[np.ndarray, torch.Tensor],
     
     # Keep all nodes that are not only part of fully visited edges
     nodes_to_keep = set()
-    changed_nodes = set()
+    cut_ends = set()
     for edge, coverage in visited.copy().items():
         if abs(coverage) < 1e-3:
             nodes_to_keep.update(edge)
@@ -1044,9 +1071,8 @@ def remove_visited(swc_list: Union[np.ndarray, torch.Tensor],
             swc_list = torch.cat([swc_list, new_node.reshape(1, -1)])
             nodes_to_keep.add(new_node_id)
             
-            changed_nodes.add(new_node_id)
-            changed_nodes.add(keep_node_id)
-            changed_nodes.add(other_node_id)
+            # Only add the new node (it always has degree 1)
+            cut_ends.add(new_node_id)
 
             # update the visited dictionary to reflect the new edge
             new_edge = (edge[to_keep], new_node_id)
@@ -1066,12 +1092,15 @@ def remove_visited(swc_list: Union[np.ndarray, torch.Tensor],
             del visited[edge]
             edge_list[edge[0]].remove(edge[1])
             edge_list[edge[1]].remove(edge[0])
-            changed_nodes.add(edge[0])
-            changed_nodes.add(edge[1])
+
             if not edge_list[edge[0]]:
                 del edge_list[edge[0]]
+            else:
+                cut_ends.add(edge[0])
             if not edge_list[edge[1]]:
                 del edge_list[edge[1]]
+            else:
+                cut_ends.add(edge[1])
     # remove nodes from swc_list
     new_swc_list = [node for node in swc_list if int(node[0]) in nodes_to_keep]
     if new_swc_list:
@@ -1080,4 +1109,4 @@ def remove_visited(swc_list: Union[np.ndarray, torch.Tensor],
         new_swc_list = torch.empty((0, swc_list.shape[1]), dtype=swc_list.dtype, device=swc_list.device)
     # new_swc_list = torch.stack([swc_list[id_to_idx[n]] for n in nodes_to_keep])
 
-    return new_swc_list, visited, edge_list, list(changed_nodes)
+    return new_swc_list, visited, edge_list, list(cut_ends)

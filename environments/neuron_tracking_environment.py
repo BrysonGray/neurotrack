@@ -233,18 +233,11 @@ class NeuronTrackingEnvironment:
         
         self.paths = [[p] for p in seeds.unbind(0)]
         self.roots = list(seeds.unbind(0))
-
-        # Initialize termination points for current path
-        nearest_node = _get_nearest_node(self.paths[0][0], self.unvisited_tree, id_to_idx=self.id_to_idx)
-        termination_nodes = _get_termination_nodes(nearest_node, edge_list=self.edge_list)
-        mask = torch.isin(self.full_tree[:, 0], torch.tensor(termination_nodes))
-        self.termination_points = self.full_tree[mask][:, 2:5]
-        # Initialize section nodes for current path
-        self.section_nodes = _get_connected_nodes(nearest_node, edge_list=self.edge_list)
-        self.section_assigned = True # the initial path always has section assigned.
         self.cut_ends = []
         # Initialize visited edges
         self.visited = _init_visited(self.full_tree)
+        # Initialize first path: Assign section nodes, termination points, target vector, and section_assigned flag
+        self._init_path()
 
         # Add channel for path visualization
         if self.img.data.shape[0] == 1:
@@ -299,6 +292,61 @@ class NeuronTrackingEnvironment:
                 status = "continue"
 
         return status
+    
+
+    def _init_path(self):
+        """
+        Assign new section nodes. If there are cut ends, sections nodes will begin from nearby cut ends. If not, from the nearest node within the agents observable window.
+        If no unvisited nodes remain, or no nearby nodes, section nodes will be None.
+        """
+        termination_nodes = []
+        # set default termination points, target vector and section nodes to empty
+        self.termination_points = torch.empty((0, 3), dtype=torch.float32, device=self.unvisited_tree.device)
+        self.target_vector = torch.zeros((3,), dtype=torch.float32, device=self.unvisited_tree.device)
+        self.section_nodes = None
+        self.section_assigned = False
+        if self.unvisited_tree.shape[0] > 0:
+            # use the nearby cut ends if available
+            if self.cut_ends and len(self.cut_ends) > 0:
+                cut_ends_indices = [self.id_to_idx[int(v)] for v in self.cut_ends]
+                swc_filtered = self.unvisited_tree[cut_ends_indices]
+                node_coords = swc_filtered[:, 2:5]  # shape (M,3)
+                # Compute distances
+                dists2 = torch.sum((node_coords - self.paths[0][0].unsqueeze(0)) ** 2, dim=1)
+                # get cut ends within 17 pixels i.e. 17^2 = 289
+                close_mask = dists2 < 289.0
+                if torch.any(close_mask):
+                    close_cut_ends_nodes = torch.tensor(self.cut_ends)[close_mask]
+                    termination_nodes = []
+                    self.section_nodes = []
+                    for ce in close_cut_ends_nodes:
+                        connected_nodes, terminals = _get_connected_nodes(int(ce), edge_list=self.edge_list, max_dist=12.0, swc_list=self.unvisited_tree, id_to_idx=self.id_to_idx)
+                        self.section_nodes.extend(connected_nodes)
+                        termination_nodes.extend(terminals)
+                    mask = torch.isin(self.full_tree[:, 0], torch.tensor(termination_nodes))
+                    self.termination_points = self.full_tree[mask][:, 2:5]
+                    self.section_assigned = True
+                    target_points = _compute_target_point(self.paths[0][0], self.unvisited_tree, self.step_size, edge_list=self.edge_list,
+                                                        id_to_idx=self.id_to_idx, terminal_points=None, valid_nodes=close_cut_ends_nodes.tolist())
+                    target_vectors = target_points - self.paths[0][0].unsqueeze(0)
+                    # assign target vector to closest target point
+                    self.target_vector = target_vectors[torch.argmin((target_vectors**2).sum(dim=1))]
+            else: # otherwise use the nearest node
+                nearest_node = _get_nearest_node(self.paths[0][0], self.unvisited_tree, id_to_idx=self.id_to_idx)
+                nearest_node_coords = self.unvisited_tree[self.id_to_idx[nearest_node], 2:5]
+                dists2 = torch.sum((nearest_node_coords - self.paths[0][0]) ** 2)
+                if dists2 < 289.0:  # only assign section if within 17 pixels
+                    # Initialize section nodes for new path
+                    self.section_nodes, terminals = _get_connected_nodes(nearest_node, edge_list=self.edge_list, max_dist=12.0, swc_list=self.unvisited_tree, id_to_idx=self.id_to_idx)
+                    mask = torch.isin(self.full_tree[:, 0], torch.tensor(terminals))
+                    self.termination_points = self.full_tree[mask][:, 2:5]
+                    self.section_assigned = True
+                    target_points = _compute_target_point(self.paths[0][0], self.unvisited_tree, self.step_size, edge_list=self.edge_list,
+                                                        id_to_idx=self.id_to_idx, terminal_points=None, valid_nodes=self.section_nodes)
+                    target_vectors = target_points - self.paths[0][0].unsqueeze(0)
+                    # assign target vector to closest target point
+                    self.target_vector = target_vectors[torch.argmin((target_vectors**2).sum(dim=1))]
+
 
     def _terminate_path(self, training) -> bool:
         """
@@ -329,22 +377,11 @@ class NeuronTrackingEnvironment:
         elif len(self.paths) == 0:
             terminate_episode = True
         if not terminate_episode: # Move to next path
-            # Get termination points for new path
-            if self.unvisited_tree.shape[0] > 0:
-                nearest_node = _get_nearest_node(self.paths[0][0], self.unvisited_tree, id_to_idx=self.id_to_idx)
-                termination_nodes = _get_termination_nodes(nearest_node, edge_list=self.edge_list)
-                mask = torch.isin(self.full_tree[:, 0], torch.tensor(termination_nodes))
-                self.termination_points = self.full_tree[mask][:, 2:5]
-                # Initialize section nodes for new path
-                self.section_nodes = _get_connected_nodes(nearest_node, edge_list=self.edge_list)
-                self.section_assigned = False
-            else:
-                self.termination_points = torch.empty((0, 3), dtype=torch.float32, device=self.unvisited_tree.device)
-                self.section_nodes = None
-
+            self._init_path()
 
         return terminate_episode
     
+
     def step(self, action: torch.Tensor, verbose: bool = False, training: bool = False) -> Tuple[torch.Tensor, torch.Tensor, bool]:
         """
         Perform a single step in the environment.
@@ -377,30 +414,16 @@ class NeuronTrackingEnvironment:
             current_position = self.paths[0][-1]
             new_position = current_position + direction
             status = self._get_status(new_position)
-
-            if self.target_vector is None:
-                target_points = _compute_target_point(current_position, self.unvisited_tree, self.step_size, edge_list=self.edge_list,
-                                                      id_to_idx=self.id_to_idx, terminal_points=self.termination_points, valid_nodes=self.section_nodes)
-                # if no neuron nodes or termination points are within radius, target target point is the current position.
-                if len(target_points) == 0 or ((target_points - current_position)**2).sum(dim=1).min() > self.radius**2:
-                    target_points = current_position.unsqueeze(0)
-                else:
-                    self.section_assigned = True
-                target_vectors = target_points - current_position
-                target_vector = target_vectors[torch.argmin(((target_vectors - direction)**2).sum(dim=1))]
-            else:
-                target_vector = self.target_vector
-            info['current_target_vector'] = target_vector
+            info['current_target_vector'] = self.target_vector
 
             if status in ["out_of_image", "choose_stop"]: # then terminate path
                 terminated = True
                 # Terminate the branch, but the episode may continue.
                 # Reward is negative squared distance to nearest termination point times 1 / (1 - gamma).
-                reward = distance_reward(direction, target_vector, terminated=True, gamma=self.gamma)
+                reward = distance_reward(direction, self.target_vector, terminated=True, gamma=self.gamma)
                 # terminate path
                 info['terminate_episode'] = self._terminate_path(training)
                 observation = self.get_state(terminate=True)
-                self.target_vector = None
             
             else: # Take step
                 # Add new position to path
@@ -414,59 +437,92 @@ class NeuronTrackingEnvironment:
                 observation = self.get_state()
 
                 # Get reward
-                reward = distance_reward(direction, target_vector, terminated=False)
+                reward = distance_reward(direction, self.target_vector, terminated=False)
 
                 if status in ["out_of_mask", "too_long"]:  # Truncate path
                     truncated = True
                     # terminate path
                     info['terminate_episode'] = self._terminate_path(training)
-                    self.target_vector = None
                 else:
-                    # update visited edges
-                    self.visited, neuron_end_point = _add_to_visited(current_position, new_position, self.unvisited_tree, self.visited, edge_list=self.edge_list,
-                                                   id_to_idx=self.id_to_idx, valid_nodes=self.section_nodes)
-                    if neuron_end_point is not None:
-                        self.unvisited_tree, self.visited, self.edge_list, changed_nodes = remove_visited(self.unvisited_tree, self.visited, self.edge_list, id_to_idx=self.id_to_idx)
-                        
-                        # Update id_to_idx mapping
-                        if self.unvisited_tree.shape[0] > 0:
-                            self.id_to_idx = {int(node_id): idx for idx, node_id in enumerate(self.unvisited_tree[:, 0].tolist())}
-                        else:
-                            self.id_to_idx = {}
-
-                        
-                        self.cut_ends.extend(changed_nodes)
-                        # remove nodes from cut ends that no longer exist
-                        valid_keys = self.id_to_idx.keys()
-                        self.cut_ends = [ce for ce in self.cut_ends if not valid_keys.isdisjoint([ce])]
-                        
-                        # # Update the section nodes
-                        # if self.unvisited_tree.shape[0] > 0:
-                        #     # Optimization: restrict search to changed nodes
-                        #     candidate_nodes = set(changed_nodes)
-                            
-                        #     current_node = _get_nearest_node(neuron_end_point, self.unvisited_tree, self.id_to_idx, valid_nodes=candidate_nodes)
-                        #     if current_node is not None:
-                        #         self.section_nodes = _get_connected_nodes(current_node, edge_list=self.edge_list)
-
-                        # TEST: try updating section nodes based on proximity to end point. Use any cut ends within 17 pixels.
-                        # Update the section nodes
-                        if self.unvisited_tree.shape[0] > 0 and len(self.cut_ends) > 0:
-                            cut_ends_indices = [self.id_to_idx[int(v)] for v in self.cut_ends]
-                            swc_filtered = self.unvisited_tree[cut_ends_indices]
-                            node_coords = swc_filtered[:, 2:5]  # shape (M,3)
-                            # Compute distances
-                            dists2 = torch.sum((node_coords - neuron_end_point.unsqueeze(0)) ** 2, dim=1)
-                            # get cut ends within 17 pixels i.e. 17^2 = 289
-                            close_mask = dists2 < 289.0
+                    # Check if section_nodes should be assigned (cut ends entered window)
+                    if self.section_nodes is None and self.cut_ends and len(self.cut_ends) > 0:
+                        cut_ends_indices = [self.id_to_idx[int(v)] for v in self.cut_ends]
+                        swc_filtered = self.unvisited_tree[cut_ends_indices]
+                        node_coords = swc_filtered[:, 2:5]  # shape (M,3)
+                        dists2 = torch.sum((node_coords - new_position.unsqueeze(0)) ** 2, dim=1)
+                        close_mask = dists2 < 289.0  # within 17 pixels
+                        if torch.any(close_mask):
+                            # Assign section nodes from nearby cut ends
                             close_cut_ends = swc_filtered[close_mask][:, 0].tolist()
                             self.section_nodes = []
+                            termination_nodes = []
                             for node in close_cut_ends:
-                                connected_nodes = _get_connected_nodes(int(node), edge_list=self.edge_list)
+                                connected_nodes, terminals = _get_connected_nodes(int(node), edge_list=self.edge_list, max_dist=12.0, swc_list=self.unvisited_tree, id_to_idx=self.id_to_idx)
                                 self.section_nodes.extend(connected_nodes)
+                                termination_nodes.extend(terminals)
+                            if termination_nodes:
+                                mask = torch.isin(self.full_tree[:, 0], torch.tensor(termination_nodes))
+                                self.termination_points = self.full_tree[mask][:, 2:5]
+                            self.section_assigned = True
+                    
+                    # update visited edges
+                    if self.cut_ends and len(self.cut_ends) > 0:
+                        # use nearest cut end as starting point
+                        cut_ends_indices = [self.id_to_idx[int(v)] for v in self.cut_ends]
+                        swc_filtered = self.unvisited_tree[cut_ends_indices]
+                        node_coords = swc_filtered[:, 2:5]  # shape (M,3)
+                        # Compute distances
+                        dists2 = torch.sum((node_coords - new_position.unsqueeze(0)) ** 2, dim=1)
+                        start_pos = node_coords[torch.argmin(dists2)]
+                    else:
+                        start_pos = current_position
 
+                    neuron_end_point = None
+                    if self.section_nodes is not None:
+                        potentially_visited, neuron_end_point = _add_to_visited(start_pos, new_position, self.unvisited_tree, self.visited, edge_list=self.edge_list,
+                                                    id_to_idx=self.id_to_idx, valid_nodes=self.section_nodes)
+                    if neuron_end_point is not None:
+                        dist_to_neuron_sq = ((neuron_end_point - new_position)**2).sum()
+                        if dist_to_neuron_sq < 289.0:  # within 17 pixels
+                            self.visited = potentially_visited
+                            self.unvisited_tree, self.visited, self.edge_list, changed_nodes = remove_visited(self.unvisited_tree, self.visited, self.edge_list, id_to_idx=self.id_to_idx)
+                        
+                            # Update id_to_idx mapping
+                            if self.unvisited_tree.shape[0] > 0:
+                                self.id_to_idx = {int(node_id): idx for idx, node_id in enumerate(self.unvisited_tree[:, 0].tolist())}
+                            else:
+                                self.id_to_idx = {}
 
-                   # Create new branches during training
+                        
+                            self.cut_ends.extend(changed_nodes)
+                            # remove nodes from cut ends that no longer exist
+                            valid_keys = self.id_to_idx.keys()
+                            self.cut_ends = list(set([ce for ce in self.cut_ends if ce in valid_keys]))
+
+                            # TEST: try updating section nodes based on proximity to the new position. Use any cut ends within 17 pixels.
+                            # Update the section nodes
+                            if self.unvisited_tree.shape[0] > 0 and len(self.cut_ends) > 0:
+                                cut_ends_indices = [self.id_to_idx[int(v)] for v in self.cut_ends]
+                                swc_filtered = self.unvisited_tree[cut_ends_indices]
+                                node_coords = swc_filtered[:, 2:5]  # shape (M,3)
+                                # Compute distances
+                                dists2 = torch.sum((node_coords - new_position.unsqueeze(0)) ** 2, dim=1)
+                                # get cut ends within 17 pixels i.e. 17^2 = 289
+                                close_mask = dists2 < 289.0
+                                close_cut_ends = swc_filtered[close_mask][:, 0].tolist()
+                                self.section_nodes = []
+                                self.termination_nodes = []
+                                for node in close_cut_ends:
+                                    connected_nodes, terminals = _get_connected_nodes(int(node), edge_list=self.edge_list, max_dist=12.0, swc_list=self.unvisited_tree, id_to_idx=self.id_to_idx)
+                                    self.section_nodes.extend(connected_nodes)
+                                    self.termination_nodes.extend(terminals)
+                                if self.termination_nodes:
+                                    mask = torch.isin(self.full_tree[:, 0], torch.tensor(self.termination_nodes))
+                                    self.termination_points = self.full_tree[mask][:, 2:5]
+                            elif self.unvisited_tree.shape[0] == 0:
+                                self.section_nodes = None
+
+                    # Create new branches during training
                     if training and self.branching:
                         distances = ((torch.stack(self.roots) - new_position)**2).sum(dim=1)
                         if not torch.any(distances < 49.0): # no branches within 7 pixels (7^2 to avoid sqrt)
@@ -474,26 +530,27 @@ class NeuronTrackingEnvironment:
                             self.roots.append(new_position)
 
                     # Compute next target vector
-                    # first get new valid nodes
+                    valid_nodes = self.cut_ends if len(self.cut_ends) > 0 else self.section_nodes
                     target_points = _compute_target_point(new_position, self.unvisited_tree, self.step_size, edge_list=self.edge_list,
-                                                        id_to_idx=self.id_to_idx, terminal_points=self.termination_points, valid_nodes=self.section_nodes)
+                                    id_to_idx=self.id_to_idx, terminal_points=self.termination_points, valid_nodes=valid_nodes)
                     
                     # if no neuron nodes or termination points are within radius, then if the path has already been assigned
                     # a section but walked away from it, trucate the path. If the path has no section assigned, i.e. it started
                     # at a new path with no neuron within the agent window, then the target point is the current position.
                     target_out_of_window = len(target_points) == 0 or ((target_points - new_position)**2).sum(dim=1).min() > self.radius**2
-                    if target_out_of_window and self.section_assigned:
-                        # truncate path
-                        truncated = True
-                        info['terminate_episode'] = self._terminate_path(training)
-                        self.target_vector = None
-                    else:
-                        if target_out_of_window: # If target out of window but no section assigned, set target to current position.
-                            target_points = new_position.unsqueeze(0)
+                    if target_out_of_window: # target out of window
+                        if self.section_assigned: # if no target points found in window and section already assigned, truncate.
+                            # truncate path
+                            truncated = True
+                            info['terminate_episode'] = self._terminate_path(training)
+                        else: # if no target points found and no section assigned, set target to current position.
+                            info['next_target_vector'] = torch.zeros_like(direction)
+                    else: # target points found in window
+                        if not self.section_assigned: # if target points found and no section assigned, assign section.
+                            self.section_assigned = True
                         target_vectors = target_points - new_position
-                        target_vector = target_vectors[torch.argmin(((target_vectors - direction)**2).sum(dim=1))]
-                        self.target_vector = target_vector
-                        info['next_target_vector'] = target_vector
+                        self.target_vector = target_vectors[torch.argmin(((target_vectors - direction)**2).sum(dim=1))]
+                        info['next_target_vector'] = self.target_vector
 
         return observation, reward, terminated, truncated, info
 

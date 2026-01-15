@@ -27,31 +27,30 @@ from environments.tracking_reward import (
     _get_nearest_node, _get_termination_nodes, _init_visited,
     _compute_target_point, distance_reward, _add_to_visited,
     remove_visited, _get_connected_nodes)
-from neurotrack.data.neuron_data import Dataset, DataLoader, DataGenerator
+from torch.utils.data import DataLoader as TorchDataLoader
 
 DEVICE = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 
 class NeuronTrackingEnvironment:
     """
-    Enhanced neuron tracking environment using DataLoader for neuron sampling.
+    Enhanced neuron tracking environment using NeuronPatchDataset.
     
-    The environment automatically samples neuron data from the dataloader when reset() is called.
-    It loads TIFF images, SWC subtrees, and reward masks from file paths, then sets up the 
-    tracking environment with appropriate seeds and visualization channels.
+    The environment automatically samples neuron patch data from the dataset when reset() is called.
+    Patches contain pre-processed images, subtrees, and masks ready for tracking.
     """
     
-    def __init__(self, dataloader: DataLoader,
+    def __init__(self, dataset,
                  radius: int = 17, step_size: float = 4.0, step_width: float = 4.0,
                  max_len: int = 10000, max_paths: int = 1000, friction: float = 0.0,
-                 gamma=0.99, branching: bool = False, repeat_starts: bool = False, section_masking: bool = False, classifier=None):
+                 gamma=0.99, branching: bool = False, repeat_starts: bool = False):
         """
         Initialize the enhanced SAC tracking environment.
         
         Parameters:
         -----------
-        dataloader : DataLoader
-            DataLoader object for sampling neurons
+        dataset : NeuronPatchDataset or torch.utils.data.Dataset
+            Dataset object for sampling neuron patches
         radius : int
             Radius around the center to randomly place starting points
         step_size : float
@@ -62,20 +61,19 @@ class NeuronTrackingEnvironment:
             Maximum length of the path
         max_paths : int
             Maximum number of paths allowed
-        alpha : float
-            Alpha parameter for tracking
-        beta : float
-            Beta parameter for tracking
         friction : float
             Friction parameter for tracking
+        gamma : float
+            Discount factor for reward computation
+        branching : bool
+            Whether to enable branching during training
         repeat_starts : bool
             Whether to repeatedly restart at the beginning of a completed path
         section_masking : bool
             Whether to mask out all sections except the current section and its descendants
-        classifier : optional
-            Branch classifier for tracking
         """
-        self.dataloader = dataloader
+        self.dataset = dataset
+        self.current_patch_idx = 0
         self.current_neuron_info = None
         
         # Store initialization parameters without calling parent __init__ yet
@@ -88,8 +86,6 @@ class NeuronTrackingEnvironment:
         self.friction = friction
         self.branching = branching
         self.repeat_starts = repeat_starts
-        self.section_masking = section_masking
-        self.classifier = classifier
         
         # Initialize other attributes that will be set when neuron data is loaded
         self.img = None
@@ -109,96 +105,40 @@ class NeuronTrackingEnvironment:
         self.target_vector = None
         self.section_assigned = False
 
-    def _process_file_paths(self, file_data: Dict) -> Dict:
+    def _setup_environment(self, patch_data: Dict):
         """
-        Process file paths from dataloader.sample() into neuron data format.
+        Setup environment with patch data from NeuronPatchDataset.
         
         Parameters:
         -----------
-        file_data : Dict
-            Dictionary containing file paths with keys:
-            - neuron_name: name of neuron
-            - img_path: path to image TIFF file
-            - swc_path: path to SWC subtree file
-            - reward_mask_path: path to reward mask TIFF file
-            - complexity: neuron complexity level
-            - morphology: morphology complexity category
-        
-        Returns:
-        --------
-        Dict containing:
-        - image: processed image tensor
-        - subtree: subtree data
-        - reward_mask: reward mask tensor  
-        - metadata: additional information
-        """
-        # Load image
-        img_array = tf.imread(file_data['img_path'])
-        if img_array.ndim == 3:
-            img_array = img_array[None]  # Add channel dimension
-        image_tensor = torch.from_numpy(img_array)
-        
-        # Load subtree
-        subtree = load.swc(file_data['swc_path'], verbose=False)
-        
-        # Load reward mask
-        reward_array = tf.imread(file_data['reward_mask_path'])
-        if reward_array.ndim == 3:
-            reward_array = reward_array[None]  # Add channel dimension  
-        reward_tensor = torch.from_numpy(reward_array)
-        
-        return {
-            'image': image_tensor,
-            'subtree': subtree,
-            'reward_mask': reward_tensor,
-            'metadata': file_data
-        }
-    
-    def _setup_environment(self, neuron_data: Dict):
-        """
-        Setup environment with neuron data.
-        
-        Parameters:
-        -----------
-        neuron_data : Dict
+        patch_data : Dict
             Dictionary containing:
-            - image: processed image tensor
-            - subtree: subtree data
-            - reward_mask: reward mask tensor
-            - metadata: additional information
+            - image: composite image (already processed)
+            - neuron_tree: subtree data (already in proper format)
+            - neuron_mask: neuron area mask
+            - name: filename
+            - image_idx: source image index
+            - global_idx: global patch index
         """
         
-        # Setup image
-        img_tensor = neuron_data['image']
+        # Setup image - already composite with neuron overlay
+        img_tensor = patch_data['image']
+        if img_tensor.ndim == 3:
+            img_tensor = img_tensor.unsqueeze(0)  # Add channel dimension if needed
         self.img = Image(img_tensor)
         
-        # Setup reward mask as true density
-        self.neuron_mask = neuron_data['reward_mask']
+        # Setup neuron mask
+        self.neuron_mask = patch_data['neuron_mask']
         if self.neuron_mask.ndim == 4:
             self.neuron_mask = self.neuron_mask[0]  # Remove channel dimension if present
 
-        # Generate seeds from subtree endpoints/branch points
-        subtree = torch.tensor(neuron_data['subtree']) # remember subtree is in x,y,z order
+        # Get subtree - already in proper format from dataset
+        subtree = torch.tensor(patch_data['neuron_tree'])  # Already in x,y,z order
         self.edge_list = load.undirected_edge_list(subtree)
         self.full_tree = subtree
         self.full_tree[:, 2:5] = self.full_tree[:, 2:5].flip(dims=(1,))  # Convert to z, y, x order
         self.unvisited_tree = self.full_tree.clone()
         self.id_to_idx = {int(node_id): idx for idx, node_id in enumerate(self.unvisited_tree[:, 0].tolist())}
-
-        # Find endpoints and branch points as seeds
-        # end_nodes = [k for k, v in self.edge_list.items() if len(v) == 1]
-        # n_seeds = len(end_nodes) // 2 # Limit number of seeds to half the endpoints and a maximum of 10
-        # n_seeds = min(n_seeds, 10)
-        # mask = torch.isin(self.full_tree[:,0], torch.tensor(end_nodes))
-        # seeds = self.full_tree[mask][:n_seeds, 2:5]
-
-        # only one seed per image
-        # sections = tree.restructure_neuron_tree(self.full_tree.cpu(), input_type="swc")
-        # # get the root of the longest section
-        # longest_section_id = max(sections, key=lambda s: len(sections[s]))
-        # longest_section = sections[longest_section_id]
-        # seed = longest_section[0]  # Seed is a 3D point (z, y, x)
-        # seeds = seed.unsqueeze(0)
 
         # seed is the end point farthest from any branch points.
         branch_nodes = [k for k, v in self.edge_list.items() if len(v) > 2]
@@ -581,25 +521,29 @@ class NeuronTrackingEnvironment:
         self.unvisited_tree = None
 
         if move_to_next:
-            # Sample new neuron data from dataloader
+            # Sample new patch data from dataset
             if dataset_index is not None:
                 if not isinstance(dataset_index, int):
                     raise TypeError(f"dataset index must be int but got {type(dataset_index)}")
-                if dataset_index < 0 or dataset_index >= len(self.dataloader.dataset):
-                    raise ValueError(f"dataset index {dataset_index} is out of range [0, {len(self.dataloader.dataset)-1}]")
-                file_data = self.dataloader.dataset[dataset_index]
-                self.dataloader.current_idx = dataset_index
+                self.current_patch_idx = dataset_index
             else:
-                file_data = self.dataloader.sample()
+                # Move to next patch
+                self.current_patch_idx += 1
+            
+            patch_data = self.dataset[self.current_patch_idx]
         else:
-            file_data = self.dataloader.dataset[self.dataloader.current_idx]
+            # Reuse current patch
+            patch_data = self.dataset[self.current_patch_idx]
         
-        # Process file paths into neuron data format
-        neuron_data = self._process_file_paths(file_data)
-        self.current_neuron_info = file_data
+        # Store patch info
+        self.current_neuron_info = {
+            'neuron_name': patch_data.get('neuron_name', 'unknown'),
+            'image_idx': patch_data.get('image_idx', -1),
+            'global_idx': patch_data.get('global_idx', self.current_patch_idx)
+        }
 
-        # Setup environment with new neuron data
-        self._setup_environment(neuron_data)
+        # Setup environment with patch data
+        self._setup_environment(patch_data)
     
 
     def get_state(self, terminate=False):
@@ -675,46 +619,31 @@ class NeuronTrackingEnvironment:
         return torch.tensor([reward], dtype=torch.float32)
     
 
-def create_neuron_tracking_environment(data_dir: str, 
-                                     complexity: float = 0.0,
-                                     rng_seed: int = 0, 
-                                     **env_kwargs) -> NeuronTrackingEnvironment:
+def create_neuron_tracking_environment(dataset, **env_kwargs) -> NeuronTrackingEnvironment:
     """
     Create a neuron tracking environment setup.
     
     Parameters:
     -----------
-    data_dir : str
-        Directory containing neuron data CSV file and associated TIFF/SWC files
-    complexity : float
-        Initial complexity parameter for neuron sampling
-    rng_seed : int
-        Random seed for reproducibility
+    dataset : NeuronPatchDataset or torch.utils.data.Dataset
+        Dataset containing neuron patches
     **env_kwargs : dict
         Additional arguments for environment initialization
     
     Returns:
     --------
     NeuronTrackingEnvironment
-        Configured environment ready for use. Call reset() to load first neuron.
+        Configured environment ready for use. Call reset() to load first patch.
     
     Note:
     -----
-    The environment will automatically sample and load neuron data when reset() is called.
-    Data is loaded from file paths returned by the DataLoader.
+    The environment will automatically sample and load patch data when reset() is called.
+    Patches contain pre-processed images, subtrees, and masks.
     """
-
-    rng = np.random.default_rng(rng_seed)
-
-    # Create dataset
-    dataset = Dataset(data_dir=data_dir, rng=rng)
-
-    # Create dataloader
-    dataloader = DataLoader(dataset=dataset, complexity=complexity, rng=rng)
     
     # Create environment
     environment = NeuronTrackingEnvironment(
-        dataloader=dataloader,
+        dataset=dataset,
         **env_kwargs
     )
     
@@ -723,15 +652,26 @@ def create_neuron_tracking_environment(data_dir: str,
 
 if __name__ == "__main__":
     # Example usage
-    data_dir = "/home/brysongray/data/neurotrack_data/gold166/gold166_swc_processed_subset"
+    from data_prep.patch_dataset import NeuronPatchDataset
+    import numpy as np
+    
+    # Create dataset
+    dataset = NeuronPatchDataset(
+        swc_dir="data_cache",
+        img_dir="simple_data",
+        crop_size=64,
+        patches_per_image=10,
+        alpha=0.2,
+        rng=np.random.default_rng(42)
+    )
     
     # Create environment
-    env = create_neuron_tracking_environment(data_dir, complexity=0.2)
+    env = create_neuron_tracking_environment(dataset)
     
-    # Reset to load first neuron from dataloader
+    # Reset to load first patch
     env.reset()
     
     # Environment is now ready for training/inference
-    print(f"Loaded neuron: {env.current_neuron_info['neuron_name']}")
+    print(f"Loaded patch: {env.current_neuron_info['neuron_name']}")
     print(f"Image shape: {env.img.data.shape}")
     print(f"Number of seeds: {len(env.seeds)}")

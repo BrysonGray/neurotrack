@@ -18,6 +18,7 @@ parent_dir = script_path.parent.parent  # Go up two levels
 sys.path.append(str(parent_dir))
 from environments.sac_tracking_env import Environment
 from neurotrack.data.neuron_data import Dataset, DataLoader, DataGenerator, DrawingComplexityConfig
+from data_prep import NeuronPatchDataset
 # from environments.neuron_tracking_environment import NeuronTrackingEnvironment
 from environments.neuron_tracking_environment import NeuronTrackingEnvironment
 from memory.buffer import PrioritizedReplayBuffer
@@ -85,7 +86,8 @@ def main():
     with open(args_json) as f:
         params = json.load(f)
     
-    data_dir = params["data_dir"]
+    img_dir = params["img_dir"]
+    swc_dir = params["swc_dir"]
     outdir = params["outdir"]
     name = params["name"]
     step_size = params["step_size"] if "step_size" in params else 1.0
@@ -94,51 +96,54 @@ def main():
     tau = params["tau"] if "tau" in params else 0.005
     gamma = params["gamma"] if "gamma" in params else 0.99
     lr = params["lr"] if "lr" in params else 0.001
-    alpha = params["alpha"] if "alpha" in params else 1.0
-    beta = params["beta"] if "beta" in params else 1e-3
     friction = params["friction"] if "friction" in params else 1e-4
     n_episodes = params["n_episodes"] if "n_episodes" in params else 100
     init_temperature = params["init_temperature"] if "init_temperature" in params else 0.005
     target_entropy = params["target_entropy"] if "target_entropy" in params else 0.0
     update_alpha = params["update_alpha"] if "update_alpha" in params else True
     repeat_starts = params["repeat_starts"] if "repeat_starts" in params else True
-    section_masking = params["section_masking"] if "section_masking" in params else False
     branching = params["branching"] if "branching" in params else 0
     rng_seed = params["rng_seed"] if "rng_seed" in params else 1
     start_complexity = params["start_complexity"] if "start_complexity" in params else 0.0
-    start_morphology = params["start_morphology"] if "start_morphology" in params else "simple"
+    # start_morphology = params["start_morphology"] if "start_morphology" in params else "simple"
     patch_radius = 17
     in_channels = 2
 
-    if "classifier_weights" in params:
-        classifier_path = params["classifier_weights"]
-        classifier_state_dict = torch.load(classifier_path)#, weights_only=True)
-        classifier = ResNet3D(ResidualBlock3D, [3, 4, 6, 3], in_channels=in_channels-1, num_classes=1)
-        classifier = classifier.to(device=DEVICE, dtype=dtype)
-        classifier.load_state_dict(classifier_state_dict)
-        classifier.eval()
-    else:
-        classifier = None
+    # if "classifier_weights" in params:
+    #     classifier_path = params["classifier_weights"]
+    #     classifier_state_dict = torch.load(classifier_path)#, weights_only=True)
+    #     classifier = ResNet3D(ResidualBlock3D, [3, 4, 6, 3], in_channels=in_channels-1, num_classes=1)
+    #     classifier = classifier.to(device=DEVICE, dtype=dtype)
+    #     classifier.load_state_dict(classifier_state_dict)
+    #     classifier.eval()
+    # else:
+    #     classifier = None
     
     rng = np.random.default_rng(rng_seed)
     # Create dataset
-    dataset = Dataset(data_dir=data_dir, rng=rng)
-    # Create dataloader
-    dataloader = DataLoader(dataset=dataset, complexity=start_complexity, morphology=start_morphology, stochastic_complexity=True, rng=rng)
+    # dataset = Dataset(data_dir=data_dir, rng=rng)
+    # # Create dataloader
+    # dataloader = DataLoader(dataset=dataset, complexity=start_complexity, morphology=start_morphology, stochastic_complexity=True, rng=rng)
+    dataset = NeuronPatchDataset(
+        img_dir=img_dir,
+        swc_dir=swc_dir,
+        crop_size=128,
+        patches_per_image=10,
+        alpha=start_complexity,
+        rng=rng
+    )
 
     # Create environment
     # alpha and beta removed to test new environment reward structure
     env = NeuronTrackingEnvironment(
-        dataloader=dataloader,
+        dataset=dataset,
         radius=patch_radius,
         step_size=step_size,
         step_width=step_width,
         max_len=1000,
         friction=friction,
         repeat_starts=repeat_starts,
-        section_masking=section_masking,
-        branching=branching,
-        classifier=classifier
+        branching=branching
     )
     
     input_size = 2*patch_radius+1
@@ -201,10 +206,11 @@ def main():
     logdir = script_path.parent.parent / "logs" / name
     os.makedirs(logdir, exist_ok=True)
     sac.train(env, actor, Q1, Q2, Q1_target, Q2_target, log_alpha,
-          actor_optimizer, Q1_optimizer, Q2_optimizer, log_alpha_optimizer,
-          memory, target_entropy, batch_size, gamma, tau, outdir, logdir,
-          name, update_alpha=update_alpha, show=True, pause_after_episode=False, show_live=False,
-          update_after=256, updates_per_step=1, update_every=1, n_episodes=n_episodes)
+            actor_optimizer, Q1_optimizer, Q2_optimizer, log_alpha_optimizer,
+            memory, target_entropy, batch_size, gamma, outdir, logdir,
+            name, update_after=256, updates_per_step=1, update_every=1, n_episodes=n_episodes,
+            update_alpha=update_alpha, dynamic_complexity=True, show=True, pause_after_episode=False,
+            show_live=False, pause_after_step=False)
     
     print("Done!")
     

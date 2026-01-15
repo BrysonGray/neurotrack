@@ -17,9 +17,11 @@ from pathlib import Path
 import sys
 import tifffile as tf
 import torch
+from torch.utils.data import Dataset as TorchDataset, Sampler
 from typing import Dict, List, Tuple, Optional, Union, Literal
 import warnings
 from dataclasses import dataclass
+from collections import deque
 
 # Add parent directories to path for imports
 script_path = Path(os.path.abspath(__file__))
@@ -304,6 +306,51 @@ class DataLoader:
         item = self.dataset[self.current_idx]
         self.current_idx += 1
         return item
+
+
+class Dataset:
+    """
+    Dataset class that stores neuron image file paths and SWC data.
+    """
+
+    def __init__(self, image_dir, swc_dir):
+        """
+        Initialize Dataset from directories containing images and SWC files.
+
+        Parameters:
+        -----------
+        image_dir : str
+            Directory containing neuron image files
+        swc_dir : str
+            Directory containing SWC files
+        """
+        self.image_dir = Path(image_dir)
+        self.swc_dir = Path(swc_dir)
+
+        # Find all SWC files in the directory
+        self.swc_files = list(self.swc_dir.rglob("*.swc"))
+        if not self.swc_files:
+            raise ValueError(f"No SWC files found in directory: {swc_dir}")
+
+        # Map SWC files to corresponding image files
+        self.data_entries = []
+        for swc_file in self.swc_files:
+            neuron_name = swc_file.stem
+            img_file = self.image_dir / f"{neuron_name}_image.tif"
+            if img_file.exists():
+                self.data_entries.append({
+                    'neuron_name': neuron_name,
+                    'swc_path': str(swc_file),
+                    'img_path': str(img_file)
+                })
+            else:
+                print(f"Warning: No matching image file for {swc_file.name}, skipping.")
+
+    def __len__(self) -> int:
+        return len(self.data_entries)
+    
+    def __getitem__(self, idx: int) -> Dict:
+        return self.data_entries[idx]
 
 
 class DataGenerator:
@@ -1122,3 +1169,6 @@ if __name__ == "__main__":
             print(f"Failed to load test dataset: {e}")
     else:
         print(f"Test data directory not found: {test_data_dir}")
+
+
+

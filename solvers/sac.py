@@ -302,7 +302,6 @@ def train(env,
           target_entropy,
           batch_size,
           gamma,
-          tau,
           outdir,
           logdir,
           name,
@@ -351,8 +350,6 @@ def train(env,
         The batch size for sampling from the replay buffer.
     gamma : float
         Discount factor for future rewards.
-    tau : float
-        Soft update parameter for updating the target networks.
     outdir : str or Path
         Directory to save model snapshots and checkpoints.
     logdir : str or Path
@@ -380,7 +377,7 @@ def train(env,
     """
 
     COMPLEXITY_INCREASE_FREQUENCY = 300  # Incease complexity after this many episodes
-    COMPLEXITY_INCREMENT = 0.2  # Amount to increase complexity by
+    COMPLEXITY_INCREMENT = 0.1  # Amount to increase complexity by
     SAVE_GIF_FREQUENCY = 100  # Save GIF after this many episodes
 
     steps_done = 0
@@ -494,24 +491,31 @@ def train(env,
                 
                 if dynamic_complexity:
                     if ep > 0 and ep % COMPLEXITY_INCREASE_FREQUENCY == 0: 
-                        current_complexity = env.dataloader.complexity
-                        current_morphology = env.dataloader.morphology
+                        # current_complexity = env.dataloader.complexity
+                        # current_morphology = env.dataloader.morphology
+                        current_complexity = env.dataset.alpha
+                        new_complexity = min(current_complexity + COMPLEXITY_INCREMENT, 1.0)  # Cap complexity at 1.0
+                        print(f"Increasing complexity to {new_complexity:.2f}", flush=True)
+                        env.dataset.alpha = new_complexity
+                        if new_complexity >= 0.3:
+                            print("Enabling branching in environment.", flush=True)
+                            env.branching = True
                         # First increase morphology filter if not at "any", then increase complexity.
-                        if current_morphology != "any":
-                            next_morphology = {"simple": "moderate", "moderate": "complex", "complex": "any"}[current_morphology]
-                            num_images_with_morophology = env.dataloader.dataset.get_complexity_distribution()['morphology_distribution'].get(next_morphology, 0)
-                            if next_morphology != "any" and num_images_with_morophology < 100:
-                                print(f"Not enough images with morphology '{next_morphology}' ({num_images_with_morophology} found). Setting morphology to 'any' instead.", flush=True)
-                                next_morphology = "any"
-                            env.dataloader.set_morphology(next_morphology)
-                            print(f"Setting morphology filter to: {next_morphology}", flush=True)
-                            if next_morphology == "moderate":
-                                print("Enabling branching in environment.", flush=True)
-                                env.branching = True
-                        elif current_complexity < 1.0:
-                            new_complexity = min(current_complexity + COMPLEXITY_INCREMENT, 1.0)  # Cap complexity at 1.0
-                            print(f"Increasing complexity to {new_complexity:.2f}", flush=True)
-                            env.dataloader.set_complexity(new_complexity)
+                        # if current_morphology != "any":
+                        #     next_morphology = {"simple": "moderate", "moderate": "complex", "complex": "any"}[current_morphology]
+                        #     num_images_with_morophology = env.dataloader.dataset.get_complexity_distribution()['morphology_distribution'].get(next_morphology, 0)
+                        #     if next_morphology != "any" and num_images_with_morophology < 100:
+                        #         print(f"Not enough images with morphology '{next_morphology}' ({num_images_with_morophology} found). Setting morphology to 'any' instead.", flush=True)
+                        #         next_morphology = "any"
+                        #     env.dataloader.set_morphology(next_morphology)
+                        #     print(f"Setting morphology filter to: {next_morphology}", flush=True)
+                        #     if next_morphology == "moderate":
+                        #         print("Enabling branching in environment.", flush=True)
+                        #         env.branching = True
+                        # elif current_complexity < 1.0:
+                        #     new_complexity = min(current_complexity + COMPLEXITY_INCREMENT, 1.0)  # Cap complexity at 1.0
+                        #     print(f"Increasing complexity to {new_complexity:.2f}", flush=True)
+                        #     env.dataloader.set_complexity(new_complexity)
                 
                 if len(policy_loss) > 0:
                     episode_avg_loss = sum(policy_loss)/len(policy_loss) 
@@ -549,7 +553,7 @@ def train(env,
                                 ep_return,
                                 episode_avg_loss,
                                 moving_avg_reward,
-                                env.dataloader.complexity
+                                env.dataset.alpha
                             ])
                         if ep % SAVE_GIF_FREQUENCY == 0:
                             trace_gif(env.img.data[:-1].cpu(), env.finished_paths, step_width=env.step_width,
@@ -607,14 +611,15 @@ def inference(env, actor, outdir, Q_net=None, n_trials=1, show=True, show_live=F
         fig, ax = plt.subplots(2, 3, figsize=(15,10))
         plt.ion()
     actor.eval()
+    env.dataset.crop_patches = False  # Disable patch cropping during inference
     if sync:
         # find image indices that are not yet processed
         # get a list of image names that are already processed
         processed_image_names = [re.split(r'_\d\d-\d\d-\d\d_inference.npz', f)[0] for f in os.listdir(outdir) if f.endswith('.npz')]
-        image_names = [entry["neuron_name"] for entry in env.dataloader.dataset]
+        image_names = [entry["neuron_name"] for entry in env.dataset]
         img_indices = [i for i, f in enumerate(image_names) if f.split('/')[-1] not in processed_image_names]
     else:
-        img_indices = [i for i in range(env.dataloader.current_idx, len(env.dataloader.dataset))]
+        img_indices = [i for i in range(env.dataset.image_idx, len(env.dataset.img_files))]
 
     if n_trials < 1:
         raise ValueError("n_trials must be at least 1")
@@ -628,7 +633,7 @@ def inference(env, actor, outdir, Q_net=None, n_trials=1, show=True, show_live=F
         if not use_progress_bar:
             print(f"Processing image {i + 1}/{len(img_indices)}", flush=True)
             
-        img_idx = img_indices[i] % len(env.dataloader.dataset) # -1 because the index is incremented when the environment resets
+        img_idx = img_indices[i] % len(env.dataset.img_files) # -1 because the index is incremented when the environment resets
         env.reset(dataset_index=img_idx)
         coverages = []
         estimated_returns = []

@@ -43,7 +43,7 @@ class NeuronTrackingEnvironment:
     def __init__(self, dataset,
                  radius: int = 17, step_size: float = 4.0, step_width: float = 4.0,
                  max_len: int = 10000, max_paths: int = 1000, friction: float = 0.0,
-                 gamma=0.99, branching: bool = False, repeat_starts: bool = False):
+                 gamma=0.99, branching: bool = False, repeat_starts: bool = False, start_idx: int = 0):
         """
         Initialize the enhanced SAC tracking environment.
         
@@ -73,7 +73,7 @@ class NeuronTrackingEnvironment:
             Whether to mask out all sections except the current section and its descendants
         """
         self.dataset = dataset
-        self.current_patch_idx = 0
+        self.current_patch_idx = start_idx
         self.current_neuron_info = None
         
         # Store initialization parameters without calling parent __init__ yet

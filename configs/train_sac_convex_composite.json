@@ -1,7 +1,8 @@
 {
-    "img_dir": "/home/brysongray/data/neurotrack_data/gold166/gold166_tifs_processed_subset",
-    "swc_dir": "/home/brysongray/data/neurotrack_data/gold166/gold166_swc_processed_subset",
-    "outdir": "/home/brysongray/data/neurotrack_data/model_weights/sac_weights/training_outputs_1-14/",
+    "img_dir": "/home/brysongray/data/neurotrack_data/gold166/gold166_training_set/images/",
+    "swc_dir": "/home/brysongray/data/neurotrack_data/gold166/gold166_training_set/morphology/",
+    "outdir": "/home/brysongray/data/neurotrack_data/model_weights/sac_weights/training_outputs_1-15/",
+    "sac_weights": "/home/brysongray/data/neurotrack_data/model_weights/sac_weights/training_outputs_1-15/model_state_dicts_convex_composite_images_01-15-26.pt",
     "name": "convex_composite_images",
     "n_seeds": 1,
     "step_size": 3.0,
@@ -16,6 +17,7 @@
     "target_entropy": 0.0,
     "repeat_starts": 0,
     "rng_seed": 1,
-    "start_complexity": 0.0,
-    "branching": 0
+    "start_complexity": 0.2,
+    "branching": 0,
+    "start_idx": 777
 }

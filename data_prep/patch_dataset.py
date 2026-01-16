@@ -101,8 +101,17 @@ class NeuronPatchDataset(TorchDataset):
         
         img = tf.imread(img_path)
 
-        if 'float' not in str(img.dtype):
-            img = img.astype(np.float32) / np.iinfo(img.dtype).max
+        # normalize to [0, 1]
+        img_max = img.max()
+        img_min = img.min()
+        if img_max > img_min:
+            img = (img - img_min) / (img_max - img_min)
+            img = img.astype(np.float32)
+        else:
+            img = np.zeros_like(img, dtype=np.float32)
+
+        # if 'float' not in str(img.dtype):
+        #     img = img.astype(np.float32) / np.iinfo(img.dtype).max
         
         img = torch.from_numpy(img)
         

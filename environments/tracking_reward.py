@@ -1090,17 +1090,19 @@ def remove_visited(swc_list: Union[np.ndarray, torch.Tensor],
     for edge, coverage in list(visited.items()):
         if abs(coverage) > 0.999:
             del visited[edge]
-            edge_list[edge[0]].remove(edge[1])
-            edge_list[edge[1]].remove(edge[0])
-
-            if not edge_list[edge[0]]:
-                del edge_list[edge[0]]
-            else:
-                cut_ends.add(edge[0])
-            if not edge_list[edge[1]]:
-                del edge_list[edge[1]]
-            else:
-                cut_ends.add(edge[1])
+            # Check if nodes still exist in edge_list before accessing
+            if edge[0] in edge_list:
+                edge_list[edge[0]].remove(edge[1])
+                if not edge_list[edge[0]]:
+                    del edge_list[edge[0]]
+                else:
+                    cut_ends.add(edge[0])
+            if edge[1] in edge_list:
+                edge_list[edge[1]].remove(edge[0])
+                if not edge_list[edge[1]]:
+                    del edge_list[edge[1]]
+                else:
+                    cut_ends.add(edge[1])
     # remove nodes from swc_list
     new_swc_list = [node for node in swc_list if int(node[0]) in nodes_to_keep]
     if new_swc_list:

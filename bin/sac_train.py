@@ -105,6 +105,8 @@ def main():
     branching = params["branching"] if "branching" in params else 0
     rng_seed = params["rng_seed"] if "rng_seed" in params else 1
     start_complexity = params["start_complexity"] if "start_complexity" in params else 0.0
+    start_idx = params["start_idx"] if "start_idx" in params else 0
+    print(f"Starting training with start_idx: {start_idx}")
     # start_morphology = params["start_morphology"] if "start_morphology" in params else "simple"
     patch_radius = 17
     in_channels = 2
@@ -143,7 +145,8 @@ def main():
         max_len=1000,
         friction=friction,
         repeat_starts=repeat_starts,
-        branching=branching
+        branching=branching,
+        start_idx=start_idx
     )
     
     input_size = 2*patch_radius+1

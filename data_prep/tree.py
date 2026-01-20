@@ -97,13 +97,14 @@ def split_paths_into_sections(paths):
     # divide each path wherever it intersects with the origin of other paths
     # create a new section for each segment of the path
     for path in paths:
-        intersections = [0] + [i+1 for i, point in enumerate(path[1:]) if point[:3] in path_origins]
+        path_array = np.array(path) if not isinstance(path, np.ndarray) else path
+        intersections = [0] + [i+1 for i, point in enumerate(path_array[1:]) if point[:3] in path_origins]
         if len(intersections) > 1:
-            sections |= {len(sections) + i+1: path[intersections[i]:intersections[i+1]+1] for i in range(len(intersections)-1)}
-            if intersections[-1] != len(path) - 1:
-                sections[len(sections)+1] = path[intersections[-1]:]  # Add the last segment
+            sections |= {len(sections) + i+1: torch.from_numpy(path_array[intersections[i]:intersections[i+1]+1].astype(np.float32)) for i in range(len(intersections)-1)}
+            if intersections[-1] != len(path_array) - 1:
+                sections[len(sections)+1] = torch.from_numpy(path_array[intersections[-1]:].astype(np.float32))  # Add the last segment
         else:
-            sections[len(sections)+1] = path
+            sections[len(sections)+1] = torch.from_numpy(path_array.astype(np.float32))
 
     return sections
 

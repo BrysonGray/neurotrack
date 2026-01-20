@@ -42,8 +42,8 @@ class NeuronTrackingEnvironment:
     
     def __init__(self, dataset,
                  radius: int = 17, step_size: float = 4.0, step_width: float = 4.0,
-                 max_len: int = 10000, max_paths: int = 1000, friction: float = 0.0,
-                 gamma=0.99, branching: bool = False, repeat_starts: bool = False, start_idx: int = 0):
+                 max_len: int = 10000, max_paths: int = 1000, gamma=0.99, branching: bool = False,
+                 repeat_starts: bool = False, start_idx: int = 0):
         """
         Initialize the enhanced SAC tracking environment.
         
@@ -61,8 +61,6 @@ class NeuronTrackingEnvironment:
             Maximum length of the path
         max_paths : int
             Maximum number of paths allowed
-        friction : float
-            Friction parameter for tracking
         gamma : float
             Discount factor for reward computation
         branching : bool
@@ -83,7 +81,6 @@ class NeuronTrackingEnvironment:
         self.max_len = max_len
         self.max_paths = max_paths
         self.gamma = gamma
-        self.friction = friction
         self.branching = branching
         self.repeat_starts = repeat_starts
         

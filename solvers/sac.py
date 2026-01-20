@@ -301,10 +301,11 @@ def train(env,
           memory,
           target_entropy,
           batch_size,
-          gamma,
           outdir,
           logdir,
           name,
+          gamma=0.99,
+          tau=0.005,
           update_after=256,
           updates_per_step=1,
           update_every=1,
@@ -348,12 +349,14 @@ def train(env,
         The target entropy for the policy.
     batch_size : int
         The batch size for sampling from the replay buffer.
-    gamma : float
-        Discount factor for future rewards.
     outdir : str or Path
         Directory to save model snapshots and checkpoints.
     logdir : str or Path
         Directory to save training logs.
+    gamma : float
+        Discount factor for future rewards.
+    tau : float
+        Interpolation parameter for target network updates.
     name : str
         Name for saving model snapshots and logs.
     update_after : int, optional
@@ -466,6 +469,8 @@ def train(env,
                                                 batch_obs, batch_actions, batch_next_target_vecs,
                                                 batch_next_obs, batch_dones, Q1_optimizer,
                                                 Q2_optimizer, gamma, log_alpha, weights=None)
+                            target_update(Q1, Q2, Q1_target, Q2_target, tau)
+
                     elif isinstance(memory, PrioritizedReplayBuffer):
                         batch_obs, batch_actions, batch_next_obs, batch_rewards, batch_target_vecs, batch_next_target_vecs, batch_dones, weights, tree_idxs = memory.sample(batch_size, transform=True)
                         if gamma > 0:
@@ -473,6 +478,7 @@ def train(env,
                                                 batch_obs, batch_actions, batch_next_target_vecs,
                                                 batch_next_obs, batch_dones, Q1_optimizer,
                                                 Q2_optimizer, gamma, log_alpha, weights=weights)
+                            target_update(Q1, Q2, Q1_target, Q2_target, tau)
                             memory.update_priorities(tree_idxs, td_error.cpu().numpy())                    
                     else:
                         raise RuntimeError("Unknown memory buffer")
@@ -482,8 +488,6 @@ def train(env,
                                         actor, actor_optimizer, Q1, Q2, log_alpha,
                                         log_alpha_optimizer, target_entropy, update_alpha=update_alpha)
                     policy_loss.append(loss)
-                    # update target networks
-                    # target_update(Q1, Q2, Q1_target, Q2_target, tau)
 
                     
             if info["terminate_episode"]:
@@ -597,14 +601,31 @@ def inference(env, actor, outdir, Q_net=None, n_trials=1, show=True, show_live=F
         The actor model used to perform actions in the environment.
     outdir : str
         The directory where the inference results will be saved.
+    Q_net : object, optional
+        Q-network for estimating returns (required if n_trials > 1).
     n_trials : int, optional
         The number of trials to perform for each image (default is 5).
     show : bool, optional
         If True, display the state of the environment during inference (default is True).
+    show_live : bool, optional
+        If True, show state after every step (default is False).
+    save_paths : bool, optional
+        If True, save results to disk as .npz files (default is False).
+    sync : bool, optional
+        If True, skip already processed images (default is False).
+    stochastic : bool, optional
+        If True, sample actions stochastically instead of using mean (default is False).
         
     Returns
     -------
-    None
+    list of dict
+        List of dictionaries, one per image, containing:
+        - 'neuron_name': Name/path of the neuron
+        - 'paths': List of reconstructed paths (best trial)
+        - 'labeled_neuron': Image volume with paths labeled
+        - 'estimated_return': Estimated return (if Q_net provided)
+        - 'all_trial_paths': All trial paths
+        - 'all_estimated_returns': All trial estimated returns
     """
 
     if show:
@@ -619,7 +640,7 @@ def inference(env, actor, outdir, Q_net=None, n_trials=1, show=True, show_live=F
         image_names = [entry["neuron_name"] for entry in env.dataset]
         img_indices = [i for i, f in enumerate(image_names) if f.split('/')[-1] not in processed_image_names]
     else:
-        img_indices = [i for i in range(env.dataset.image_idx, len(env.dataset.img_files))]
+        img_indices = list(range(len(env.dataset.img_files)))
 
     if n_trials < 1:
         raise ValueError("n_trials must be at least 1")
@@ -628,6 +649,8 @@ def inference(env, actor, outdir, Q_net=None, n_trials=1, show=True, show_live=F
 
     # Detect if running in a terminal or redirected (like with nohup)
     use_progress_bar = sys.stdout.isatty()
+    results = []
+    
     for i in tqdm(range(len(img_indices)), dynamic_ncols=True, leave=True, file=sys.stdout, mininterval=1.0, disable=not use_progress_bar):
         # Print inference progress when tqdm is disabled (e.g., with nohup)
         if not use_progress_bar:
@@ -703,27 +726,42 @@ def inference(env, actor, outdir, Q_net=None, n_trials=1, show=True, show_live=F
 
                 obs = env.get_state()
 
-        if save_paths:
+        # Select best trial based on estimated return
+        if n_trials > 1 and len(estimated_returns) > 0:
             value = np.max(estimated_returns)
             index = np.argmax(estimated_returns)
-            estimated_return = value.item()
+            estimated_return = float(value)
             index = int(index)
-            labeled_neuron = labeled_neurons[index]
-            name = env.current_neuron_info["neuron_name"]
+        else:
+            index = 0
+            estimated_return = estimated_returns[0] if len(estimated_returns) > 0 else 0.0
+
+        labeled_neuron = labeled_neurons[index]
+        paths_to_save = trial_paths[index]
+        labeled_neuron_np = labeled_neuron.numpy()
+        name = env.current_neuron_info["neuron_name"]
+
+        # Save to disk if requested
+        if save_paths:
             if not os.path.exists(outdir):
                 os.makedirs(outdir)
-            # Convert paths to a serializable format
-            paths_to_save = trial_paths[index]
-            labeled_neuron_np = labeled_neuron.numpy()
-
-            # Using numpy's compressed format
             np.savez_compressed(os.path.join(outdir, f"{name}_{date}_inference.npz"),
                                 labeled_neuron=labeled_neuron_np,
                                 coverages=coverages,
                                 estimated_returns=estimated_returns,
                                 paths=np.array(paths_to_save, dtype=object))
 
-    return
+        # Collect results for this image
+        results.append({
+            'neuron_name': name,
+            'paths': paths_to_save,
+            'labeled_neuron': labeled_neuron_np,
+            'estimated_return': estimated_return,
+            'all_trial_paths': trial_paths,
+            'all_estimated_returns': estimated_returns
+        })
+
+    return results
 
 if __name__ == "__main__":
     pass

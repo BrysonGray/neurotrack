@@ -1,0 +1,21 @@
+{
+  "img_dir": "/home/brysongray/data/neurotrack_data/gold166/gold166_validation_set/images",
+  "swc_dir": "/home/brysongray/data/neurotrack_data/gold166/gold166_validation_set/morphology",
+  
+  "out_dir": "/home/brysongray/data/neurotrack_data/inference_outputs/pipeline_test/",
+  "test_name": "test_1-20-26",
+  
+  "sac_weights": "/home/brysongray/data/neurotrack_data/model_weights/sac_weights/training_outputs_1-16/model_state_dicts_convex_composite_images_01-16-26.pt",
+  
+  "step_size": 2.0,
+  "step_width": 4.0,
+  "repeat_starts": false,
+  "rng_seed": 42,
+  "n_trials": 1,
+  
+  "min_branch_length": 10.0,
+  "smoothing_window": 5,
+  "overlap_threshold": 0.8,
+  
+  "distance_threshold": 2.0
+}

@@ -16,15 +16,10 @@ from torch.optim.adam import Adam
 script_path = Path(os.path.abspath(__file__))
 parent_dir = script_path.parent.parent  # Go up two levels
 sys.path.append(str(parent_dir))
-from environments.sac_tracking_env import Environment
-from neurotrack.data.neuron_data import Dataset, DataLoader, DataGenerator, DrawingComplexityConfig
 from data_prep import NeuronPatchDataset
-# from environments.neuron_tracking_environment import NeuronTrackingEnvironment
 from environments.neuron_tracking_environment import NeuronTrackingEnvironment
 from memory.buffer import PrioritizedReplayBuffer
-from models.resblock import ResidualBlock3D
-from models.resnet import ResNet3D
-from models.cnn import ConvNet
+from models.deeper_cnn import ConvNet
 from solvers import sac
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -93,10 +88,9 @@ def main():
     step_size = params["step_size"] if "step_size" in params else 1.0
     step_width = params["step_width"] if "step_width" in params else 1.0
     batch_size = params["batchsize"] if "batchsize" in params else 256
-    tau = params["tau"] if "tau" in params else 0.005
     gamma = params["gamma"] if "gamma" in params else 0.99
+    tau = params["tau"] if "tau" in params else 0.005
     lr = params["lr"] if "lr" in params else 0.001
-    friction = params["friction"] if "friction" in params else 1e-4
     n_episodes = params["n_episodes"] if "n_episodes" in params else 100
     init_temperature = params["init_temperature"] if "init_temperature" in params else 0.005
     target_entropy = params["target_entropy"] if "target_entropy" in params else 0.0
@@ -107,25 +101,10 @@ def main():
     start_complexity = params["start_complexity"] if "start_complexity" in params else 0.0
     start_idx = params["start_idx"] if "start_idx" in params else 0
     print(f"Starting training with start_idx: {start_idx}")
-    # start_morphology = params["start_morphology"] if "start_morphology" in params else "simple"
     patch_radius = 17
     in_channels = 2
-
-    # if "classifier_weights" in params:
-    #     classifier_path = params["classifier_weights"]
-    #     classifier_state_dict = torch.load(classifier_path)#, weights_only=True)
-    #     classifier = ResNet3D(ResidualBlock3D, [3, 4, 6, 3], in_channels=in_channels-1, num_classes=1)
-    #     classifier = classifier.to(device=DEVICE, dtype=dtype)
-    #     classifier.load_state_dict(classifier_state_dict)
-    #     classifier.eval()
-    # else:
-    #     classifier = None
     
     rng = np.random.default_rng(rng_seed)
-    # Create dataset
-    # dataset = Dataset(data_dir=data_dir, rng=rng)
-    # # Create dataloader
-    # dataloader = DataLoader(dataset=dataset, complexity=start_complexity, morphology=start_morphology, stochastic_complexity=True, rng=rng)
     dataset = NeuronPatchDataset(
         img_dir=img_dir,
         swc_dir=swc_dir,
@@ -143,7 +122,6 @@ def main():
         step_size=step_size,
         step_width=step_width,
         max_len=1000,
-        friction=friction,
         repeat_starts=repeat_starts,
         branching=branching,
         start_idx=start_idx
@@ -210,8 +188,8 @@ def main():
     os.makedirs(logdir, exist_ok=True)
     sac.train(env, actor, Q1, Q2, Q1_target, Q2_target, log_alpha,
             actor_optimizer, Q1_optimizer, Q2_optimizer, log_alpha_optimizer,
-            memory, target_entropy, batch_size, gamma, outdir, logdir,
-            name, update_after=256, updates_per_step=1, update_every=1, n_episodes=n_episodes,
+            memory, target_entropy, batch_size, outdir, logdir,
+            name, gamma, tau, update_after=256, updates_per_step=1, update_every=1, n_episodes=n_episodes,
             update_alpha=update_alpha, dynamic_complexity=True, show=True, pause_after_episode=False,
             show_live=False, pause_after_step=False)
     

@@ -94,6 +94,15 @@ def _coerce_paths_xyz(paths: List[List[List[float]]]) -> List[np.ndarray]:
     return coerced
 
 
+def _coord_key_xyz(point_xyz: np.ndarray, decimals: int = 5) -> Tuple[float, float, float]:
+    """Build a stable hashable XYZ key for node lookup across path/SWC conversions."""
+    point = np.asarray(point_xyz, dtype=np.float32).reshape(-1)
+    if point.shape[0] < 3:
+        raise ValueError("XYZ point must contain at least three values.")
+    rounded = np.round(point[:3].astype(np.float64), decimals=decimals)
+    return float(rounded[0]), float(rounded[1]), float(rounded[2])
+
+
 def _find_closest_node_xyz(
     paths_xyz: List[np.ndarray],
     query_xyz: np.ndarray,
@@ -142,37 +151,48 @@ def _trim_paths_downstream(
 
     clipped_node_idx = int(np.clip(selected_node_idx, 0, selected_path.shape[0] - 1))
     selected_node = np.asarray(selected_node_xyz, dtype=np.float32)[:3]
-    atol_sq = float(atol) * float(atol)
+    if clipped_node_idx >= 0 and clipped_node_idx < selected_path.shape[0]:
+        selected_node = selected_path[clipped_node_idx].astype(np.float32, copy=True)
 
-    trimmed_selected_path = selected_path[: clipped_node_idx + 1].copy()
-    trimmed_paths = [path.copy() for path in paths_xyz]
-    trimmed_paths[selected_path_idx] = trimmed_selected_path
+    swc_list = data_save.paths_to_swc(paths_xyz)
+    if len(swc_list) == 0:
+        return [path.copy() for path in paths_xyz]
 
-    anchors: List[np.ndarray] = [selected_node]
-    if clipped_node_idx + 1 < selected_path.shape[0]:
-        anchors.extend([node.copy() for node in selected_path[clipped_node_idx + 1:]])
+    coord_to_node_id: Dict[Tuple[float, float, float], int] = {}
+    for row in swc_list:
+        node_key = _coord_key_xyz(np.asarray(row[2:5], dtype=np.float32))
+        coord_to_node_id[node_key] = int(row[0])
 
-    keep_mask = [True] * len(paths_xyz)
-    changed = True
-    while changed:
-        changed = False
-        for path_idx, path in enumerate(paths_xyz):
-            if path_idx == selected_path_idx or not keep_mask[path_idx] or path.shape[0] == 0:
-                continue
-            root = path[0]
-            is_downstream = any(float(np.sum((root - anchor) ** 2)) <= atol_sq for anchor in anchors)
-            if not is_downstream:
-                continue
-            keep_mask[path_idx] = False
-            anchors.extend([node.copy() for node in path])
-            changed = True
+    selected_node_id = coord_to_node_id.get(_coord_key_xyz(selected_node))
+    if selected_node_id is None:
+        # Fallback for tiny float drift if keying fails.
+        swc_xyz = np.asarray([row[2:5] for row in swc_list], dtype=np.float32)
+        if swc_xyz.size == 0:
+            return [path.copy() for path in paths_xyz]
+        dist_sq = np.sum((swc_xyz - selected_node[None, :]) ** 2, axis=1)
+        best_idx = int(np.argmin(dist_sq))
+        if float(dist_sq[best_idx]) > float(atol) * float(atol):
+            return [path.copy() for path in paths_xyz]
+        selected_node_id = int(swc_list[best_idx][0])
+
+    downstream_ids = data_loading.get_downstream_swc_node_ids(
+        swc_list=swc_list,
+        start_node_id=int(selected_node_id),
+        include_start=False,
+    )
+    if len(downstream_ids) == 0:
+        return [path.copy() for path in paths_xyz]
 
     output: List[np.ndarray] = []
-    for path_idx, path in enumerate(trimmed_paths):
-        if path_idx == selected_path_idx:
-            output.append(path)
-        elif keep_mask[path_idx]:
-            output.append(path)
+    for path in paths_xyz:
+        kept_nodes: List[np.ndarray] = []
+        for node_xyz in path:
+            node_id = coord_to_node_id.get(_coord_key_xyz(node_xyz))
+            if node_id is not None and node_id in downstream_ids:
+                continue
+            kept_nodes.append(np.asarray(node_xyz, dtype=np.float32)[:3].copy())
+        if len(kept_nodes) > 0:
+            output.append(np.asarray(kept_nodes, dtype=np.float32))
     return output
 
 
@@ -189,7 +209,9 @@ def _draw_mask_from_paths_xyz(
     for path in paths_xyz:
         if path.ndim != 2 or path.shape[1] < 3 or path.shape[0] < 2:
             continue
-        path_zyx = path[:, ::-1].astype(np.float32, copy=False)
+        # Reversing columns with ::-1 creates a negative-stride view; torch.as_tensor
+        # cannot consume it directly, so materialize as a contiguous float32 array.
+        path_zyx = np.ascontiguousarray(path[:, ::-1], dtype=np.float32)
         for idx in range(path_zyx.shape[0] - 1):
             segment = torch.as_tensor(path_zyx[idx: idx + 2], dtype=torch.float32)
             mask_image.draw_line_segment(segment, width=width, channel=0, mask=False)
@@ -283,13 +305,13 @@ class _TraceSessionManager:
             self.set_model_weights_path(str(self.trace_params["sac_weights"]))
 
         self.trace_results_by_key: Dict[str, List[List[List[float]]]] = {}
-        self.trace_mask_cache_by_key: Dict[str, np.ndarray] = {}
         self._revision_state_by_key: Dict[str, Dict[str, object]] = {}
         self._trace_output_dir: Optional[Path] = None
         self._temp_dir = tempfile.TemporaryDirectory(prefix="neurotrack_trace_session_")
         self._temp_root = Path(self._temp_dir.name)
         self._message = ""
         self._token = 0
+        self._overlay_token = 0
         self._running = False
         self._thread: Optional[threading.Thread] = None
         self._cancel_event: Optional[threading.Event] = None
@@ -311,6 +333,10 @@ class _TraceSessionManager:
             self._message = message
             if increment_token:
                 self._token += 1
+
+    def _increment_overlay_token(self) -> None:
+        with self._state_lock:
+            self._overlay_token += 1
 
     def close(self):
         self.cancel_trace_all()
@@ -403,16 +429,22 @@ class _TraceSessionManager:
             "selected_path_index": int(path_idx),
             "selected_node_index": int(node_idx),
             "selected_node_xyz": node_xyz.tolist(),
+            "selected_point_zyx": point_zyx[:3].tolist(),
             "preview_paths": None,
         }
         self._set_state(
             (
-                "Revision node selected at "
+                "Revision point selected at "
+                f"(x={query_xyz[0]:.1f}, y={query_xyz[1]:.1f}, z={query_xyz[2]:.1f}); "
+                "trim anchor at "
                 f"(x={node_xyz[0]:.1f}, y={node_xyz[1]:.1f}, z={node_xyz[2]:.1f}) for {image_key}."
             ),
             increment_token=True,
         )
-        return {"selected_node_xyz": node_xyz.tolist()}
+        return {
+            "selected_node_xyz": node_xyz.tolist(),
+            "selected_point_xyz": query_xyz.tolist(),
+        }
 
     def preview_trace_revision(self, image_key: str) -> Optional[List[List[List[float]]]]:
         state = self._revision_state_by_key.get(image_key)
@@ -475,19 +507,31 @@ class _TraceSessionManager:
         if selected_node_xyz.size < 3:
             self._set_state("Invalid selected node for revision retrace.", increment_token=True)
             return None
+        selected_node_xyz = selected_node_xyz[:3].astype(np.float32, copy=True)
 
-        cached_mask = self.trace_mask_cache_by_key.get(image_key)
-        mask_dtype = np.uint8 if cached_mask is None else cached_mask.dtype
+        selected_point_zyx = np.asarray(state.get("selected_point_zyx", []), dtype=np.float32)
+        if selected_point_zyx.size < 3:
+            # Backward-compatible fallback for sessions that predate selected_point_zyx state.
+            selected_point_zyx = np.asarray(
+                [selected_node_xyz[2], selected_node_xyz[1], selected_node_xyz[0]],
+                dtype=np.float32,
+            )
+        selected_point_zyx = selected_point_zyx[:3].astype(np.float32, copy=True)
+        selected_point_xyz = np.asarray(
+            [selected_point_zyx[2], selected_point_zyx[1], selected_point_zyx[0]],
+            dtype=np.float32,
+        )
+
         trimmed_mask = _draw_mask_from_paths_xyz(
             paths_xyz=_coerce_paths_xyz(preview_paths),
             shape_zyx=volume_shape,
             width=float(self.trace_params.get("step_width", 4.0)),
-            mask_dtype=mask_dtype,
+            mask_dtype=np.float32,
         )
         revision_seed_rows = [[
-            float(selected_node_xyz[2]),
-            float(selected_node_xyz[1]),
-            float(selected_node_xyz[0]),
+            float(selected_point_zyx[0]),
+            float(selected_point_zyx[1]),
+            float(selected_point_zyx[2]),
         ]]
 
         self._set_state(f"Launching revision retrace for {image_key}...", increment_token=False)
@@ -498,11 +542,23 @@ class _TraceSessionManager:
             cancel_event=None,
             initial_path_mask=trimmed_mask,
         )
-        paths = result["paths"]
+        new_paths_xyz = _coerce_paths_xyz(result["paths"])
+
+        paths: List[List[List[float]]] = [
+            path.tolist() for path in _coerce_paths_xyz(preview_paths) if path.shape[0] > 0
+        ]
+        if len(new_paths_xyz) > 0:
+            bridge_target_xyz = selected_point_xyz
+            closest_new = _find_closest_node_xyz(paths_xyz=new_paths_xyz, query_xyz=selected_point_xyz)
+            if closest_new is not None:
+                bridge_target_xyz = np.asarray(closest_new[2], dtype=np.float32)[:3]
+            if float(np.linalg.norm(selected_node_xyz - bridge_target_xyz)) > 1e-3:
+                bridge_path = np.asarray([selected_node_xyz, bridge_target_xyz], dtype=np.float32)
+                paths.append(bridge_path.tolist())
+        paths.extend(path.tolist() for path in new_paths_xyz if path.shape[0] > 0)
+
         self.trace_results_by_key[image_key] = paths
-        labeled_neuron = result.get("labeled_neuron", None)
-        if labeled_neuron is not None:
-            self.trace_mask_cache_by_key[image_key] = np.asarray(labeled_neuron)
+        self._increment_overlay_token()
         self._write_temp_trace(image_key=image_key, paths=paths)
         self._clear_derived_results(image_key)
         self._clear_revision_state(image_key)
@@ -719,6 +775,7 @@ class _TraceSessionManager:
                 "running": self._running,
                 "message": self._message,
                 "token": self._token,
+                "overlay_token": self._overlay_token,
                 "overlay_paths": self.trace_results_by_key.get(current_key, []),
                 "trace_output_dir": None if self._trace_output_dir is None else str(self._trace_output_dir),
                 "model_weights_path": self.get_model_weights_path(),
@@ -807,9 +864,7 @@ class _TraceSessionManager:
         )
         paths = result["paths"]
         self.trace_results_by_key[image_key] = paths
-        labeled_neuron = result.get("labeled_neuron", None)
-        if labeled_neuron is not None:
-            self.trace_mask_cache_by_key[image_key] = np.asarray(labeled_neuron)
+        self._increment_overlay_token()
         self._write_temp_trace(image_key=image_key, paths=paths)
         self._clear_derived_results(image_key)
         self._clear_revision_state(image_key)
@@ -849,9 +904,7 @@ class _TraceSessionManager:
                     )
                     paths = result["paths"]
                     self.trace_results_by_key[key] = paths
-                    labeled_neuron = result.get("labeled_neuron", None)
-                    if labeled_neuron is not None:
-                        self.trace_mask_cache_by_key[key] = np.asarray(labeled_neuron)
+                    self._increment_overlay_token()
                     self._write_temp_trace(image_key=key, paths=paths)
                     self._clear_derived_results(key)
                     self._clear_revision_state(key)

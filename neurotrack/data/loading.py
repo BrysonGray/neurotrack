@@ -282,6 +282,54 @@ def adjacency_dict(swc_list):
     return adj_dict
 
 
+def get_downstream_swc_node_ids(swc_list, start_node_id, include_start=False):
+    """Return downstream SWC node IDs using strict parent->child topology.
+
+    Parameters
+    ----------
+    swc_list : list or np.ndarray
+        SWC rows in ``[id, type, x, y, z, radius, parent_id]`` format.
+    start_node_id : int
+        Node id whose descendants should be collected.
+    include_start : bool, optional
+        If True, include ``start_node_id`` in the returned set.
+
+    Returns
+    -------
+    set
+        Set of downstream SWC node IDs.
+    """
+    swc_array = np.array(swc_list) if not isinstance(swc_list, np.ndarray) else swc_list
+    if swc_array.size == 0:
+        return set()
+
+    node_ids = set(swc_array[:, 0].astype(int).tolist())
+    start_id = int(start_node_id)
+    if start_id not in node_ids:
+        return set()
+
+    children_by_parent = {}
+    for row in swc_array:
+        node_id = int(row[0])
+        parent_id = int(row[6])
+        if parent_id in node_ids:
+            children_by_parent.setdefault(parent_id, []).append(node_id)
+
+    downstream = {start_id} if include_start else set()
+    visited = {start_id}
+    stack = list(children_by_parent.get(start_id, []))
+
+    while stack:
+        node_id = int(stack.pop())
+        if node_id in visited:
+            continue
+        visited.add(node_id)
+        downstream.add(node_id)
+        stack.extend(children_by_parent.get(node_id, []))
+
+    return downstream
+
+
 def parse_swc(swc_list, transpose=True, verbose=False):
     """
     Parse a list of SWC lines and return an directed adjacency list of neuron sections,

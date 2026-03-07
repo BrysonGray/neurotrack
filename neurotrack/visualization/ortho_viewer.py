@@ -202,9 +202,11 @@ class _OrthoViewDialog:
         self._on_select_eval_output_dir = on_select_eval_output_dir
         self._on_eval_params_changed = on_eval_params_changed
         self._trace_status_token = None
+        self._trace_overlay_token = None
         self.trace_overlay_visible = True
         self.trace_revision_mode_enabled = False
         self.trace_revision_selected_node_xyz: Optional[np.ndarray] = None
+        self.trace_revision_selected_point_xyz: Optional[np.ndarray] = None
         self.trace_revision_preview_paths: List[np.ndarray] = []
         self.trace_revision_preview_active = False
         self.post_paths: List[np.ndarray] = []
@@ -963,6 +965,7 @@ class _OrthoViewDialog:
         # clear per-image post-processing and evaluation state
         self.post_paths = []
         self.trace_revision_selected_node_xyz = None
+        self.trace_revision_selected_point_xyz = None
         self.trace_revision_preview_paths = []
         self.trace_revision_preview_active = False
         self.trace_revision_mode_enabled = False
@@ -995,6 +998,7 @@ class _OrthoViewDialog:
                 if path_np.ndim == 2 and path_np.shape[1] >= 3 and path_np.shape[0] >= 2:
                     self.finished_paths.append(path_np[:, :3])
             self.trace_revision_selected_node_xyz = None
+            self.trace_revision_selected_point_xyz = None
             self.trace_revision_preview_paths = []
             self.trace_revision_preview_active = False
             self._update_trace_revision_controls()
@@ -1045,6 +1049,7 @@ class _OrthoViewDialog:
         self.trace_revision_mode_enabled = bool(checked)
         if not self.trace_revision_mode_enabled:
             self.trace_revision_selected_node_xyz = None
+            self.trace_revision_selected_point_xyz = None
             self.trace_revision_preview_paths = []
             self.trace_revision_preview_active = False
             self._redraw()
@@ -1059,6 +1064,16 @@ class _OrthoViewDialog:
             self.trace_revision_selected_node_xyz = None
             return
         self.trace_revision_selected_node_xyz = arr[:3].copy()
+
+    def _set_trace_revision_selected_point(self, point_xyz: Optional[object]):
+        if point_xyz is None:
+            self.trace_revision_selected_point_xyz = None
+            return
+        arr = np.asarray(point_xyz, dtype=np.float32).reshape(-1)
+        if arr.shape[0] < 3:
+            self.trace_revision_selected_point_xyz = None
+            return
+        self.trace_revision_selected_point_xyz = arr[:3].copy()
 
     def _set_trace_revision_preview_paths(self, preview_paths: Optional[List[np.ndarray]]):
         self.trace_revision_preview_paths = []
@@ -1084,7 +1099,15 @@ class _OrthoViewDialog:
         result = self._on_trace_revision_select_point(selected_point_zyx)
 
         selected_node_xyz = result.get("selected_node_xyz") if isinstance(result, dict) else None
+        selected_point_xyz = result.get("selected_point_xyz") if isinstance(result, dict) else None
+        if selected_point_xyz is None and selected_node_xyz is not None:
+            selected_point_xyz = [
+                float(selected_point_zyx[2]),
+                float(selected_point_zyx[1]),
+                float(selected_point_zyx[0]),
+            ]
         self._set_trace_revision_selected_node(selected_node_xyz)
+        self._set_trace_revision_selected_point(selected_point_xyz)
         self.trace_revision_preview_active = False
         self.trace_revision_preview_paths = []
         self._update_trace_revision_controls()
@@ -1121,6 +1144,7 @@ class _OrthoViewDialog:
                 self.finished_paths.append(path_np[:, :3])
 
         self.trace_revision_selected_node_xyz = None
+        self.trace_revision_selected_point_xyz = None
         self.trace_revision_preview_paths = []
         self.trace_revision_preview_active = False
         self._update_trace_revision_controls()
@@ -1317,6 +1341,25 @@ class _OrthoViewDialog:
         else:
             self.trace_progress_label.setText("")
         self._set_trace_controls_busy(running)
+
+        overlay_token = status.get("overlay_token")
+        if overlay_token is not None and overlay_token != self._trace_overlay_token:
+            self._trace_overlay_token = overlay_token
+            overlay_paths = status.get("overlay_paths", None)
+            if overlay_paths is not None:
+                self.finished_paths = []
+                for path in overlay_paths:
+                    path_np = np.asarray(path, dtype=np.float32)
+                    if path_np.ndim == 2 and path_np.shape[1] >= 3 and path_np.shape[0] >= 2:
+                        self.finished_paths.append(path_np[:, :3])
+                # A new overlay invalidates any pending revision point/preview from the old trace.
+                self.trace_revision_selected_node_xyz = None
+                self.trace_revision_selected_point_xyz = None
+                self.trace_revision_preview_paths = []
+                self.trace_revision_preview_active = False
+                self._update_trace_revision_controls()
+                self._redraw(fast=True)
+
         token = status.get("token")
         if token is not None and token != self._trace_status_token:
             self._trace_status_token = token
@@ -1328,18 +1371,6 @@ class _OrthoViewDialog:
             if isinstance(model_weights_path, str) and len(model_weights_path) > 0:
                 self._model_weights_path = model_weights_path
                 self._refresh_output_path_labels()
-            overlay_paths = status.get("overlay_paths", None)
-            if overlay_paths is not None:
-                self.finished_paths = []
-                for path in overlay_paths:
-                    path_np = np.asarray(path, dtype=np.float32)
-                    if path_np.ndim == 2 and path_np.shape[1] >= 3 and path_np.shape[0] >= 2:
-                        self.finished_paths.append(path_np[:, :3])
-                self.trace_revision_selected_node_xyz = None
-                self.trace_revision_preview_paths = []
-                self.trace_revision_preview_active = False
-                self._update_trace_revision_controls()
-                self._redraw(fast=True)
 
             postprocess_paths = status.get("postprocess_paths", None)
             if postprocess_paths is not None:
@@ -1515,29 +1546,39 @@ class _OrthoViewDialog:
 
         if self.trace_overlay_visible:
             trace_paths = self.finished_paths
+            trace_color = "lime"
             if self.trace_revision_preview_active and self.trace_revision_preview_paths:
                 trace_paths = self.trace_revision_preview_paths
+                trace_color = "gold"
             for path in trace_paths:
-                artists.extend(self._plot_path_in_view(ax=ax, path=path, view=view, color="lime"))
+                artists.extend(self._plot_path_in_view(ax=ax, path=path, view=view, color=trace_color))
+
+        def _revision_marker_visible(point_xyz: np.ndarray) -> bool:
+            if self.projection_mode == "mip":
+                return True
+            if view == "xy":
+                return bool(np.isclose(point_xyz[2], self.current_z, atol=0.5))
+            if view == "xz":
+                return bool(np.isclose(point_xyz[1], self.current_y, atol=0.5))
+            return bool(np.isclose(point_xyz[0], self.current_x, atol=0.5))
+
+        def _project_revision_marker(point_xyz: np.ndarray) -> Tuple[float, float]:
+            if view == "xy":
+                return float(point_xyz[0]), float(point_xyz[1])
+            if view == "xz":
+                return float(point_xyz[0]), float(point_xyz[2])
+            return float(point_xyz[1]), float(point_xyz[2])
+
+        if self.trace_revision_selected_point_xyz is not None:
+            point = self.trace_revision_selected_point_xyz
+            if _revision_marker_visible(point):
+                px, py = _project_revision_marker(point)
+                artists.append(ax.scatter([px], [py], s=50, c="green", edgecolors="black"))
 
         if self.trace_revision_selected_node_xyz is not None:
             node = self.trace_revision_selected_node_xyz
-            if self.projection_mode == "mip":
-                visible = True
-            elif view == "xy":
-                visible = bool(np.isclose(node[2], self.current_z, atol=0.5))
-            elif view == "xz":
-                visible = bool(np.isclose(node[1], self.current_y, atol=0.5))
-            else:
-                visible = bool(np.isclose(node[0], self.current_x, atol=0.5))
-
-            if visible:
-                if view == "xy":
-                    px, py = float(node[0]), float(node[1])
-                elif view == "xz":
-                    px, py = float(node[0]), float(node[2])
-                else:
-                    px, py = float(node[1]), float(node[2])
+            if _revision_marker_visible(node):
+                px, py = _project_revision_marker(node)
                 artists.append(ax.scatter([px], [py], s=55, c="red", edgecolors="black"))
 
         if self.post_overlay_visible and self.post_paths:

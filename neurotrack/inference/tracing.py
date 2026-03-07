@@ -1,5 +1,6 @@
 """SAC-based forward-pass tracing loop for inference."""
 
+import time
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
@@ -67,9 +68,22 @@ def trace_image(env, actor, dataset_idx, Q_net=None, n_trials=1, show=True, show
         plt.ion()
 
     actor.eval()
+    trace_start_time = time.perf_counter()
+    timing_ms = {
+        "reset_and_mask": 0.0,
+        "get_state": 0.0,
+        "actor_forward": 0.0,
+        "sample_action": 0.0,
+        "env_step": 0.0,
+        "q_eval": 0.0,
+        "postprocess": 0.0,
+        "steps": 0,
+        "trials": int(n_trials),
+    }
     env.dataset.inference_mode = True  # Disable mask drawing during inference.
 
     img_idx = dataset_idx % len(env.dataset.img_files)
+    reset_start = time.perf_counter()
     env.reset(dataset_index=img_idx)
 
     def _apply_initial_path_mask_if_provided():
@@ -111,6 +125,7 @@ def trace_image(env, actor, dataset_idx, Q_net=None, n_trials=1, show=True, show
             )
 
     _apply_initial_path_mask_if_provided()
+    timing_ms["reset_and_mask"] = (time.perf_counter() - reset_start) * 1000.0
 
     estimated_returns = []
     labeled_neurons = []
@@ -124,13 +139,20 @@ def trace_image(env, actor, dataset_idx, Q_net=None, n_trials=1, show=True, show
             raise RuntimeError("Trace cancelled.")
 
         estimated_return = 0
+        state_start = time.perf_counter()
         obs = env.get_state()
+        timing_ms["get_state"] += (time.perf_counter() - state_start) * 1000.0
 
         for t in count():
             if cancel_event is not None and cancel_event.is_set():
                 raise RuntimeError("Trace cancelled.")
             with torch.no_grad():
-                actor_out = actor(obs.to(DEVICE))
+                actor_start = time.perf_counter()
+                obs_on_device = obs.to(DEVICE)
+                actor_out = actor(obs_on_device)
+                timing_ms["actor_forward"] += (time.perf_counter() - actor_start) * 1000.0
+
+                sample_start = time.perf_counter()
                 direction_dist = sample_from_output(actor_out.detach().cpu())
                 if stochastic:
                     action = direction_dist.sample()[0]
@@ -138,13 +160,19 @@ def trace_image(env, actor, dataset_idx, Q_net=None, n_trials=1, show=True, show
                     action = direction_dist.mean[0]
                 variance.append(float(direction_dist.variance[0].mean()))
                 step_magnitudes.append(float(action.norm()))
+                timing_ms["sample_action"] += (time.perf_counter() - sample_start) * 1000.0
 
+            step_start = time.perf_counter()
             next_obs, reward, terminated, truncated, info = env.step(action, training=False)
+            timing_ms["env_step"] += (time.perf_counter() - step_start) * 1000.0
+            timing_ms["steps"] += 1
 
             if Q_net is not None:
-                current_state = torch.cat((obs.to(DEVICE), torch.ones((obs.shape[0], 1, obs.shape[2], obs.shape[3], obs.shape[4]), device=DEVICE) * action[None, :, None, None, None].to(DEVICE)), dim=1)
+                q_start = time.perf_counter()
+                current_state = torch.cat((obs_on_device, torch.ones((obs.shape[0], 1, obs.shape[2], obs.shape[3], obs.shape[4]), device=DEVICE) * action[None, :, None, None, None].to(DEVICE)), dim=1)
                 q_val = Q_net(current_state)[:, 0]
                 estimated_return += q_val.cpu().item()
+                timing_ms["q_eval"] += (time.perf_counter() - q_start) * 1000.0
 
             # Show state after every step
             if show_live and show:
@@ -179,13 +207,18 @@ def trace_image(env, actor, dataset_idx, Q_net=None, n_trials=1, show=True, show
                     except NameError:
                         pass
                 if trial < n_trials - 1:
+                    reset_start = time.perf_counter()
                     env.reset(move_to_next=False)
                     _apply_initial_path_mask_if_provided()
+                    timing_ms["reset_and_mask"] += (time.perf_counter() - reset_start) * 1000.0
                 break  # Move to next trial.
 
+            state_start = time.perf_counter()
             obs = env.get_state()
+            timing_ms["get_state"] += (time.perf_counter() - state_start) * 1000.0
 
     # Select best trial based on estimated return.
+    post_start = time.perf_counter()
     if n_trials > 1 and len(estimated_returns) > 0:
         index = int(np.argmax(estimated_returns))
     else:
@@ -201,7 +234,17 @@ def trace_image(env, actor, dataset_idx, Q_net=None, n_trials=1, show=True, show
         'neuron_name': name,
         'labeled_neuron': labeled_neuron,
         'paths': paths,
+        'timing_ms': {
+            **{k: round(float(v), 3) for k, v in timing_ms.items() if k not in {"steps", "trials"}},
+            'steps': int(timing_ms["steps"]),
+            'trials': int(timing_ms["trials"]),
+            'total': round((time.perf_counter() - trace_start_time) * 1000.0, 3),
+        },
     }
+    result['timing_ms']['postprocess'] = round(
+        float(result['timing_ms'].get('postprocess', 0.0)) + (time.perf_counter() - post_start) * 1000.0,
+        3,
+    )
 
     if return_stats:
         if len(variance) > 0:

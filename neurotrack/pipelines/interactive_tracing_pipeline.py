@@ -282,6 +282,7 @@ class _TraceRuntime:
             return {
                 "paths": result["paths"],
                 "labeled_neuron": labeled_neuron,
+                "timing_ms": result.get("timing_ms", None),
             }
 
 
@@ -318,6 +319,7 @@ class _TraceSessionManager:
         self._state_lock = threading.Lock()
         self._progress_completed = 0
         self._progress_total = 0
+        self._trace_timing_by_key: Dict[str, Dict[str, object]] = {}
 
         # post-processing and evaluation state
         self.postprocess_results_by_key: Dict[str, Dict[str, object]] = {}
@@ -398,6 +400,28 @@ class _TraceSessionManager:
     def _clear_derived_results(self, image_key: str) -> None:
         self.postprocess_results_by_key.pop(image_key, None)
         self.eval_results_by_key.pop(image_key, None)
+
+    def _store_trace_timing(self, image_key: str, timing_ms: Optional[object]) -> None:
+        if isinstance(timing_ms, dict):
+            self._trace_timing_by_key[image_key] = dict(timing_ms)
+
+    @staticmethod
+    def _format_timing_summary(timing_ms: Optional[object]) -> str:
+        if not isinstance(timing_ms, dict):
+            return ""
+        total = timing_ms.get("total", None)
+        steps = timing_ms.get("steps", None)
+        actor_forward = timing_ms.get("actor_forward", None)
+        env_step = timing_ms.get("env_step", None)
+        get_state = timing_ms.get("get_state", None)
+        if total is None or steps is None:
+            return ""
+        return (
+            f" [timing: total={float(total):.1f}ms, steps={int(steps)}, "
+            f"actor={float(actor_forward or 0.0):.1f}ms, "
+            f"env_step={float(env_step or 0.0):.1f}ms, "
+            f"get_state={float(get_state or 0.0):.1f}ms]"
+        )
 
     def select_revision_node(
         self,
@@ -542,6 +566,7 @@ class _TraceSessionManager:
             cancel_event=None,
             initial_path_mask=trimmed_mask,
         )
+        self._store_trace_timing(image_key=image_key, timing_ms=result.get("timing_ms", None))
         new_paths_xyz = _coerce_paths_xyz(result["paths"])
 
         paths: List[List[List[float]]] = [
@@ -562,7 +587,11 @@ class _TraceSessionManager:
         self._write_temp_trace(image_key=image_key, paths=paths)
         self._clear_derived_results(image_key)
         self._clear_revision_state(image_key)
-        self._set_state(f"Revision retrace complete: {image_key}", increment_token=True)
+        self._set_state(
+            f"Revision retrace complete: {image_key}"
+            f"{self._format_timing_summary(self._trace_timing_by_key.get(image_key))}",
+            increment_token=True,
+        )
         return paths
 
     # ------------------------------------------------------------------
@@ -777,6 +806,7 @@ class _TraceSessionManager:
                 "token": self._token,
                 "overlay_token": self._overlay_token,
                 "overlay_paths": self.trace_results_by_key.get(current_key, []),
+                "trace_timing_ms": self._trace_timing_by_key.get(current_key, None),
                 "trace_output_dir": None if self._trace_output_dir is None else str(self._trace_output_dir),
                 "model_weights_path": self.get_model_weights_path(),
                 "progress_completed": self._progress_completed,
@@ -833,7 +863,13 @@ class _TraceSessionManager:
 
     def update_trace_params(self, overrides: Dict[str, object]) -> None:
         """Update runtime trace parameters and reload the runtime if weights are available."""
-        self.trace_params.update(overrides)
+        changed = False
+        for key, value in overrides.items():
+            if self.trace_params.get(key) != value:
+                self.trace_params[key] = value
+                changed = True
+        if not changed:
+            return
         if self.trace_params.get("sac_weights"):
             try:
                 self._runtime = _TraceRuntime(trace_params=self.trace_params)
@@ -862,13 +898,17 @@ class _TraceSessionManager:
             seed_rows=seed_rows,
             cancel_event=None,
         )
+        self._store_trace_timing(image_key=image_key, timing_ms=result.get("timing_ms", None))
         paths = result["paths"]
         self.trace_results_by_key[image_key] = paths
         self._increment_overlay_token()
         self._write_temp_trace(image_key=image_key, paths=paths)
         self._clear_derived_results(image_key)
         self._clear_revision_state(image_key)
-        self._set_state(f"Trace complete: {image_key}", increment_token=True)
+        self._set_state(
+            f"Trace complete: {image_key}{self._format_timing_summary(self._trace_timing_by_key.get(image_key))}",
+            increment_token=True,
+        )
         return paths
 
     def start_trace_all(self, seeds_by_key: Dict[str, List[List[float]]]):
@@ -902,6 +942,7 @@ class _TraceSessionManager:
                         seed_rows=seed_rows,
                         cancel_event=self._cancel_event,
                     )
+                    self._store_trace_timing(image_key=key, timing_ms=result.get("timing_ms", None))
                     paths = result["paths"]
                     self.trace_results_by_key[key] = paths
                     self._increment_overlay_token()
@@ -910,7 +951,11 @@ class _TraceSessionManager:
                     self._clear_revision_state(key)
                     with self._state_lock:
                         self._progress_completed = idx + 1
-                    self._set_state(f"Completed {idx + 1}/{total}: {key}", increment_token=True)
+                    self._set_state(
+                        f"Completed {idx + 1}/{total}: {key}"
+                        f"{self._format_timing_summary(self._trace_timing_by_key.get(key))}",
+                        increment_token=True,
+                    )
             except RuntimeError as exc:
                 self._set_state(str(exc), increment_token=True)
             except Exception as exc:

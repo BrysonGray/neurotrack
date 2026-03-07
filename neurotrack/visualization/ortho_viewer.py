@@ -136,6 +136,7 @@ class _OrthoViewDialog:
         self.current_x = int(self.shape[2] // 2)
         self.maximized_view: Optional[str] = None
         self.projection_mode = "slice"
+        self._mip_cache_by_view: Dict[str, Optional[np.ndarray]] = {"xy": None, "xz": None, "yz": None}
         self.seeds: List[Tuple[int, int, int]] = []
         if initial_seeds is not None:
             seed_arr = np.asarray(initial_seeds, dtype=np.float32)
@@ -203,6 +204,11 @@ class _OrthoViewDialog:
         self._on_eval_params_changed = on_eval_params_changed
         self._trace_status_token = None
         self._trace_overlay_token = None
+        self._trace_controls_running_state: Optional[bool] = None
+        self._last_trace_status_message = ""
+        self._last_trace_progress_text = ""
+        self._pending_trace_param_overrides: Optional[Dict[str, object]] = None
+        self._trace_params_debounce_timer = None
         self.trace_overlay_visible = True
         self.trace_revision_mode_enabled = False
         self.trace_revision_selected_node_xyz: Optional[np.ndarray] = None
@@ -759,6 +765,12 @@ class _OrthoViewDialog:
             self._qt_timer.timeout.connect(self._poll_trace_status)
             self._qt_timer.start(250)
             self._set_trace_controls_busy(False)
+            self._trace_controls_running_state = False
+        if mode == "seed" and self._on_trace_params_changed is not None:
+            qt_core = importlib.import_module("qtpy.QtCore")
+            self._trace_params_debounce_timer = qt_core.QTimer(self.dialog)
+            self._trace_params_debounce_timer.setSingleShot(True)
+            self._trace_params_debounce_timer.timeout.connect(self._flush_pending_trace_params)
         self._update_trace_revision_controls()
 
         self._mpl_press_cid = self.canvas.mpl_connect("button_press_event", self._on_mouse_press)
@@ -927,6 +939,7 @@ class _OrthoViewDialog:
 
         self.img_np = _extract_first_channel_numpy(np.asarray(image_data))
         self.shape = self.img_np.shape
+        self._invalidate_mip_cache()
         self.current_z = int(self.shape[0] // 2)
         self.current_y = int(self.shape[1] // 2)
         self.current_x = int(self.shape[2] // 2)
@@ -990,6 +1003,7 @@ class _OrthoViewDialog:
     def _trace_current_neuron(self):
         if self._on_trace_current is None:
             return
+        self._flush_pending_trace_params()
         paths = self._on_trace_current(np.asarray(self.seeds, dtype=np.float32))
         if paths is not None:
             self.finished_paths = []
@@ -1007,6 +1021,7 @@ class _OrthoViewDialog:
     def _trace_all_neurons(self):
         if self._on_trace_all is None:
             return
+        self._flush_pending_trace_params()
         self._on_trace_all()
 
     def _cancel_trace(self):
@@ -1133,6 +1148,7 @@ class _OrthoViewDialog:
             or not self._has_trace_revision_callbacks()
         ):
             return
+        self._flush_pending_trace_params()
         paths = self._on_trace_revision_launch()
         if paths is None:
             return
@@ -1270,7 +1286,20 @@ class _OrthoViewDialog:
     def _on_advanced_params_changed(self, *_args):
         if self._on_trace_params_changed is None:
             return
-        self._on_trace_params_changed(self.get_trace_params_overrides())
+        self._pending_trace_param_overrides = self.get_trace_params_overrides()
+        if self._trace_params_debounce_timer is None:
+            self._flush_pending_trace_params()
+            return
+        self._trace_params_debounce_timer.start(250)
+
+    def _flush_pending_trace_params(self):
+        if self._on_trace_params_changed is None:
+            return
+        if self._pending_trace_param_overrides is None:
+            return
+        overrides = dict(self._pending_trace_param_overrides)
+        self._pending_trace_param_overrides = None
+        self._on_trace_params_changed(overrides)
 
     def get_trace_params_overrides(self) -> Dict[str, object]:
         """Return the current advanced trace parameter values from the config panel."""
@@ -1332,15 +1361,21 @@ class _OrthoViewDialog:
             return
         status = self._get_trace_status() or {}
         message = str(status.get("message", ""))
-        self.trace_status_label.setText(message)
+        if message != self._last_trace_status_message:
+            self.trace_status_label.setText(message)
+            self._last_trace_status_message = message
         running = bool(status.get("running", False))
         completed = status.get("progress_completed", None)
         total = status.get("progress_total", None)
+        progress_text = ""
         if isinstance(completed, int) and isinstance(total, int) and total > 0:
-            self.trace_progress_label.setText(f"Trace Progress: {completed}/{total}")
-        else:
-            self.trace_progress_label.setText("")
-        self._set_trace_controls_busy(running)
+            progress_text = f"Trace Progress: {completed}/{total}"
+        if progress_text != self._last_trace_progress_text:
+            self.trace_progress_label.setText(progress_text)
+            self._last_trace_progress_text = progress_text
+        if self._trace_controls_running_state is None or running != self._trace_controls_running_state:
+            self._set_trace_controls_busy(running)
+            self._trace_controls_running_state = running
 
         overlay_token = status.get("overlay_token")
         if overlay_token is not None and overlay_token != self._trace_overlay_token:
@@ -1409,17 +1444,27 @@ class _OrthoViewDialog:
             self.btn_run_postprocess.setEnabled(not running)
             self.btn_run_evaluation.setEnabled(not running)
 
+    def _invalidate_mip_cache(self):
+        self._mip_cache_by_view = {"xy": None, "xz": None, "yz": None}
+
     def _get_plane(self, view: str) -> np.ndarray:
+        if self.projection_mode == "mip":
+            cached = self._mip_cache_by_view.get(view)
+            if cached is not None:
+                return cached
+            if view == "xy":
+                cached = np.max(self.img_np, axis=0)
+            elif view == "xz":
+                cached = np.max(self.img_np, axis=1)
+            else:
+                cached = np.max(self.img_np, axis=2)
+            self._mip_cache_by_view[view] = cached
+            return cached
+
         if view == "xy":
-            if self.projection_mode == "mip":
-                return np.max(self.img_np, axis=0)
             return self.img_np[self.current_z, :, :]
         if view == "xz":
-            if self.projection_mode == "mip":
-                return np.max(self.img_np, axis=1)
             return self.img_np[:, self.current_y, :]
-        if self.projection_mode == "mip":
-            return np.max(self.img_np, axis=2)
         return self.img_np[:, :, self.current_x]
 
     def _iter_views(self):
@@ -1525,8 +1570,6 @@ class _OrthoViewDialog:
                 ax.set_xlim(full_xlim)
                 ax.set_ylim(full_ylim)
 
-        if (not fast) and (not needs_layout):
-            self.figure.tight_layout()
         self.canvas.draw_idle()
         if self.mode == "seed":
             self.info_label.setText(

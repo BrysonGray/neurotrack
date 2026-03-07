@@ -145,3 +145,8 @@ dmypy.json
 
 # HTML files
 *.html
+
+# Media
+*.png
+*.pdf
+*.jpg

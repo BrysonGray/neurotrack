@@ -14,7 +14,6 @@ import numpy as np
 import os
 import pandas as pd
 from pathlib import Path
-import sys
 import tifffile as tf
 import torch
 from torch.utils.data import Dataset as TorchDataset, Sampler
@@ -23,11 +22,10 @@ import warnings
 from dataclasses import dataclass
 from collections import deque
 
-# Add parent directories to path for imports
-script_path = Path(os.path.abspath(__file__))
-parent_dir = script_path.parent.parent.parent
-sys.path.append(str(parent_dir))
-from data_prep import draw, load, generate
+from neurotrack.data import rendering as draw
+from neurotrack.data import loading as load
+from neurotrack.data import generation as generate
+from neurotrack.data.image import to_uint8
 
 
 @dataclass
@@ -402,11 +400,11 @@ class DataGenerator:
         rng : np.random.Generator, optional
             Random number generator for reproducibility
         """
-        edge_list = load.undirected_edge_list(swc_list)
+        adj_dict = load.adjacency_dict(swc_list)
         
         # Identify branch points and endpoints
-        branch_points = [node for node, neighbors in edge_list.items() if len(neighbors) > 2]
-        end_points = [node for node, neighbors in edge_list.items() if len(neighbors) == 1]
+        branch_points = [node for node, neighbors in adj_dict.items() if len(neighbors) > 2]
+        end_points = [node for node, neighbors in adj_dict.items() if len(neighbors) == 1]
         critical_points = branch_points + end_points
         
         subtrees = []
@@ -423,7 +421,7 @@ class DataGenerator:
                     subtree = [swc_list[swc_list[:,0] == current_node][0].tolist()]
                     path_len = 0.0
                     while path_len < target_path_len:
-                        neighbors = edge_list[current_node]
+                        neighbors = adj_dict[current_node]
                         next_nodes = [n for n in neighbors if n not in path]
                         
                         if not next_nodes:
@@ -825,7 +823,7 @@ class DataGenerator:
                                     axis=1
                                 )
                                 subtree = swc_array[in_box_mask].tolist()
-                                subtree_edge_list = load.undirected_edge_list(subtree)
+                                subtree_adj_dict = load.adjacency_dict(subtree)
                                 # only keep tree connected to the center node
                                 center_node = center[0]
                                 visited = set()
@@ -834,11 +832,11 @@ class DataGenerator:
                                     node = to_visit.pop()
                                     if node not in visited:
                                         visited.add(node)
-                                        neighbors = subtree_edge_list.get(node, [])
+                                        neighbors = subtree_adj_dict.get(node, [])
                                         to_visit.extend(neighbors)
                                 subtree = [node for node in subtree if node[0] in visited]
                                 # get number of branches
-                                num_branches = sum(1 for neighbors in subtree_edge_list.values() if len(neighbors) > 2)
+                                num_branches = sum(1 for neighbors in subtree_adj_dict.values() if len(neighbors) > 2)
                                 morphology_ = "simple" if num_branches == 0 else "moderate" if num_branches == 1 else "complex"
                                 subtrees.append(subtree)
                                 morphologies.append(morphology_)

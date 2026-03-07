@@ -1,0 +1,32 @@
+{
+  "img_dir": "/home/brysongray/data/neurotrack_data/gold166/gold166_cleaned/test_set/images",
+  "swc_dir": "/home/brysongray/data/neurotrack_data/gold166/gold166_cleaned/test_set/morphology",
+  "seeds_path": "/home/brysongray/data/neurotrack_data/gold166/gold166_cleaned/test_set/seeds.json",
+  "out_dir": "/home/brysongray/data/neurotrack_data/inference_outputs/pipeline_test_inference/",
+  "test_name": "test_inference_3-5-26",
+
+  "sac_weights": "/home/brysongray/data/neurotrack_data/model_weights/sac_weights/training_outputs_2-11/model_state_dicts_convex_composite_images_02-12-26.pt",
+
+  "step_width": 4.0,
+  "repeat_starts": false,
+  "rng_seed": 42,
+  "n_trials": 1,
+  "review_before_next": true,
+  "crop_patches": false,
+  "patches_per_image": 1,
+  "save_paths": true,
+  "sync": true,
+  "stochastic_actions": false,
+
+  "run_postprocessing": true,
+  "scales_path": "/home/brysongray/data/neurotrack_data/gold166/tif_to_x_y_pix_size.json",
+  "min_branch_length": 5.0,
+  "resampling_step_size": 4.0,
+  "smoothing_window": 5,
+  "overlap_threshold": 0.5,
+  "overlap_distance_threshold": 1.0,
+
+  "run_evaluation": true,
+  "eval_distance_threshold": 1.0
+
+}

@@ -864,7 +864,9 @@ class _OrthoViewDialog:
         self.current_z = int(self.z_slider.value())
         self.current_y = int(self.y_slider.value())
         self.current_x = int(self.x_slider.value())
-        self._redraw()
+        # In MIP mode, slider moves only update crosshairs; overlays are unchanged.
+        # Skip overlay re-plotting to keep interactive scrubbing responsive.
+        self._redraw(skip_overlay_redraw=(self.projection_mode == "mip"))
 
     def _undo_seed(self):
         if self.seeds:
@@ -1544,7 +1546,7 @@ class _OrthoViewDialog:
         self.figure.tight_layout()
         self._layout_dirty = False
 
-    def _redraw(self, fast: bool = False):
+    def _redraw(self, fast: bool = False, skip_overlay_redraw: bool = False):
         views = self._iter_views()
         needs_layout = self._layout_dirty or (self._current_views != views) or (len(self.axes_by_view) == 0)
         if needs_layout:
@@ -1555,8 +1557,14 @@ class _OrthoViewDialog:
             self.image_artists[view].set_data(self._get_plane(view))
             self._set_crosshair_for_view(view)
 
-            self._clear_overlay_artists(view)
-            self.overlay_artists[view] = self._draw_overlay(ax, view)
+            can_skip_overlay = (
+                skip_overlay_redraw
+                and self.projection_mode == "mip"
+                and len(self.overlay_artists.get(view, [])) > 0
+            )
+            if not can_skip_overlay:
+                self._clear_overlay_artists(view)
+                self.overlay_artists[view] = self._draw_overlay(ax, view)
 
             # Re-enforce limits AFTER drawing overlays so that ax.plot() calls
             # inside _plot_path_in_view cannot trigger matplotlib autoscale and

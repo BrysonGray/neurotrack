@@ -150,3 +150,9 @@ dmypy.json
 *.png
 *.pdf
 *.jpg
+
+# notebooks
+*.ipynb
+
+*.md
+*.json

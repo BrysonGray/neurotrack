@@ -148,28 +148,37 @@ def trace_image(env, actor, dataset_idx, Q_net=None, n_trials=1, show=True, show
                 raise RuntimeError("Trace cancelled.")
             with torch.no_grad():
                 actor_start = time.perf_counter()
-                obs_on_device = obs.to(DEVICE)
+                obs_on_device = obs.to(device=DEVICE, non_blocking=True)
                 actor_out = actor(obs_on_device)
                 timing_ms["actor_forward"] += (time.perf_counter() - actor_start) * 1000.0
 
                 sample_start = time.perf_counter()
-                direction_dist = sample_from_output(actor_out.detach().cpu())
+                direction_dist = sample_from_output(actor_out)
                 if stochastic:
                     action = direction_dist.sample()[0]
                 else:
                     action = direction_dist.mean[0]
-                variance.append(float(direction_dist.variance[0].mean()))
-                step_magnitudes.append(float(action.norm()))
+                variance.append(float(direction_dist.variance[0].mean().detach().cpu()))
+                step_magnitudes.append(float(action.norm().detach().cpu()))
                 timing_ms["sample_action"] += (time.perf_counter() - sample_start) * 1000.0
 
             step_start = time.perf_counter()
-            next_obs, reward, terminated, truncated, info = env.step(action, training=False)
+            action_cpu = action.detach().cpu()
+            next_obs, reward, terminated, truncated, info = env.step(action_cpu, training=False)
             timing_ms["env_step"] += (time.perf_counter() - step_start) * 1000.0
             timing_ms["steps"] += 1
 
             if Q_net is not None:
                 q_start = time.perf_counter()
-                current_state = torch.cat((obs_on_device, torch.ones((obs.shape[0], 1, obs.shape[2], obs.shape[3], obs.shape[4]), device=DEVICE) * action[None, :, None, None, None].to(DEVICE)), dim=1)
+                action_on_device = action if action.device == DEVICE else action.to(device=DEVICE, non_blocking=True)
+                action_channels = action_on_device.view(1, 3, 1, 1, 1).expand(
+                    obs_on_device.shape[0],
+                    3,
+                    obs_on_device.shape[2],
+                    obs_on_device.shape[3],
+                    obs_on_device.shape[4],
+                )
+                current_state = torch.cat((obs_on_device, action_channels), dim=1)
                 q_val = Q_net(current_state)[:, 0]
                 estimated_return += q_val.cpu().item()
                 timing_ms["q_eval"] += (time.perf_counter() - q_start) * 1000.0

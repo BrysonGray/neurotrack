@@ -111,7 +111,8 @@ class NeuronTrackingEnvironment:
         self.neuron_mask = None
         self.seeds = []
         self.paths = []
-        self.roots = []
+        self.roots = torch.empty((0, 3), dtype=torch.float32)
+        self._zero_state_patch: Optional[torch.Tensor] = None
         self.finished_paths = []
         self.section_nodes = None
         self.termination_points = None # termination points for the current path
@@ -124,6 +125,23 @@ class NeuronTrackingEnvironment:
         self.target_vector = None
         self.section_assigned = False
         self.has_ground_truth = False
+
+    def _set_roots(self, roots: List[torch.Tensor]) -> None:
+        """Set cached branch-root tensor representation."""
+        if len(roots) == 0:
+            self.roots = torch.empty((0, 3), dtype=torch.float32)
+            return
+        self.roots = torch.stack([r.to(dtype=torch.float32) for r in roots], dim=0)
+
+    def _append_root(self, root: torch.Tensor) -> None:
+        """Append a branch root while keeping cached tensor in sync."""
+        root_t = root.to(dtype=torch.float32)
+        if self.roots.numel() == 0:
+            self.roots = root_t.unsqueeze(0)
+            return
+        if self.roots.device != root_t.device:
+            root_t = root_t.to(self.roots.device)
+        self.roots = torch.cat((self.roots, root_t.unsqueeze(0)), dim=0)
 
     def _setup_environment(self, patch_data: Dict):
         """
@@ -228,7 +246,7 @@ class NeuronTrackingEnvironment:
                 seeds = (spatial_shape / 2.0).unsqueeze(0)
         
         self.paths = [[p] for p in seeds.unbind(0)]
-        self.roots = list(seeds.unbind(0))
+        self._set_roots(list(seeds.unbind(0)))
         self.cut_ends = []
         if self.has_ground_truth:
             # Initialize visited edges
@@ -329,10 +347,13 @@ class NeuronTrackingEnvironment:
         segment = torch.stack(self.paths[0][-2:], dim=0)
         self.img.draw_line_segment(segment, width=self.step_width, channel=-1, mask=False)
         if self.branching:
-            distances = ((torch.stack(self.roots) - new_position)**2).sum(dim=1)
-            if not torch.any(distances < 49.0): # no branches within 7 pixels (7^2 to avoid sqrt)
+            roots_tensor = self.roots
+            if roots_tensor.device != new_position.device:
+                roots_tensor = roots_tensor.to(new_position.device)
+            distances = ((roots_tensor - new_position) ** 2).sum(dim=1)
+            if not torch.any(distances < 49.0):  # no branches within 7 pixels (7^2 to avoid sqrt)
                 self.paths.append([new_position])
-                self.roots.append(new_position)
+                self._append_root(new_position)
                 
         observation = self.get_state()
         reward = torch.tensor(0.0, dtype=torch.float32)
@@ -418,7 +439,7 @@ class NeuronTrackingEnvironment:
         elif training and self.repeat_starts and len(self.finished_paths[-1]) > 4:
             # If the path took more than three steps, add a new path at the same root
             self.paths.append([finished_path[0]])
-            self.roots.append(finished_path[0])
+            self._append_root(finished_path[0])
         elif len(self.paths) == 0:
             terminate_episode = True
         if not terminate_episode: # Move to next path
@@ -572,10 +593,13 @@ class NeuronTrackingEnvironment:
 
                     # Create new branches during training
                     if self.branching:
-                        distances = ((torch.stack(self.roots) - new_position)**2).sum(dim=1)
-                        if not torch.any(distances < 49.0): # no branches within 7 pixels (7^2 to avoid sqrt)
+                        roots_tensor = self.roots
+                        if roots_tensor.device != new_position.device:
+                            roots_tensor = roots_tensor.to(new_position.device)
+                        distances = ((roots_tensor - new_position) ** 2).sum(dim=1)
+                        if not torch.any(distances < 49.0):  # no branches within 7 pixels (7^2 to avoid sqrt)
                             self.paths.append([new_position])
-                            self.roots.append(new_position)
+                            self._append_root(new_position)
 
                     # Compute next target vector
                     valid_nodes = self.cut_ends if len(self.cut_ends) > 0 else self.section_nodes
@@ -619,7 +643,8 @@ class NeuronTrackingEnvironment:
         self.neuron_mask = None
         self.seeds = []
         self.paths = []
-        self.roots = []
+        self.roots = torch.empty((0, 3), dtype=torch.float32)
+        self._zero_state_patch = None
         self.finished_paths = []
         self.termination_points = None # termination points for the current path
         self.visited = {}
@@ -662,13 +687,25 @@ class NeuronTrackingEnvironment:
             
         with torch.no_grad():
             if terminate:
-                patch = torch.zeros((self.img.data.shape[0],)+(2*self.radius + 1,)*3)
+                patch_shape = (self.img.data.shape[0],) + (2 * self.radius + 1,) * 3
+                if (
+                    self._zero_state_patch is None
+                    or tuple(self._zero_state_patch.shape) != patch_shape
+                    or self._zero_state_patch.dtype != self.img.data.dtype
+                    or self._zero_state_patch.device != self.img.data.device
+                ):
+                    self._zero_state_patch = torch.zeros(
+                        patch_shape,
+                        dtype=self.img.data.dtype,
+                        device=self.img.data.device,
+                    )
+                patch = self._zero_state_patch
             else:
                 center = self.paths[0][-1]
-                patch, _ = self.img.crop(center, self.radius, pad=True, value=0.0)
-                patch = patch.clone()
+                radius = int(self.radius)
+                patch, _ = self.img.crop(center, radius, pad=True, value=0.0)
                 if patch.dtype == torch.uint8:
-                    patch = patch / 255.0
+                    patch = patch.to(dtype=torch.float32) * (1.0 / 255.0)
 
         return patch[None]
 

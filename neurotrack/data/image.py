@@ -296,7 +296,7 @@ class Image:
             padding : ndarray
                 Length that patch overlaps with image boundaries on each end of each dimension.
         """
-        i,j,k = [int(x.item()) for x in center]
+        i, j, k = [int(float(x.item() if isinstance(x, torch.Tensor) else x)) for x in center]
         if self.data.ndim == 4:
             shape = self.data.shape[1:]
         elif self.data.ndim == 3:
@@ -308,6 +308,20 @@ class Image:
             i = np.clip(i, 0, shape[0]-1)
             j = np.clip(j, 0, shape[1]-1)
             k = np.clip(k, 0, shape[2]-1)
+
+        if interp:
+            raise NotImplementedError("Interpolation is not currently implemented.")
+
+        z0, z1 = i - radius, i + radius + 1
+        y0, y1 = j - radius, j + radius + 1
+        x0, x1 = k - radius, k + radius + 1
+        # Fast-path when crop is fully in-bounds: return a direct view and skip padding bookkeeping.
+        if z0 >= 0 and y0 >= 0 and x0 >= 0 and z1 <= shape[0] and y1 <= shape[1] and x1 <= shape[2]:
+            if self.data.ndim == 4:
+                patch = self.data[:, z0:z1, y0:y1, x0:x1]
+            else:
+                patch = self.data[z0:z1, y0:y1, x0:x1]
+            return patch, np.zeros(6, dtype=np.int64)
             
         # get amount of padding for each face
         zpad_top = zpad_btm = ypad_front = ypad_back = xpad_left = xpad_right = 0
@@ -328,10 +342,11 @@ class Image:
         # get remainder for each face (patch radius minus padding) 
         remainder = np.array([radius]*6) - padding # zrmd_top, zrmd_btm, yrmd_front, yrmd_back, xrmd_left, xrmd_right
         # patch is data cropped around center. Note: slicing img creates a view (not a copy of img)
-        patch = self.data[:, i-remainder[0]:i+remainder[1]+1, j-remainder[2]:j+remainder[3]+1, k-remainder[4]:k+remainder[5]+1]
+        if self.data.ndim == 4:
+            patch = self.data[:, i-remainder[0]:i+remainder[1]+1, j-remainder[2]:j+remainder[3]+1, k-remainder[4]:k+remainder[5]+1]
+        else:
+            patch = self.data[i-remainder[0]:i+remainder[1]+1, j-remainder[2]:j+remainder[3]+1, k-remainder[4]:k+remainder[5]+1]
 
-        if interp:
-            raise NotImplementedError("Interpolation is not currently implemented.")
         #     center = center.numpy().astype(np.float32)
         #     remainder = remainder.reshape(3,2)
         #     x = [np.arange(x-r[0], x+r[1]+1).astype(np.float32) for x,r in zip(np.round(center), remainder)]
@@ -343,8 +358,12 @@ class Image:
             patch_size = 2*radius+1
             if self.data.dtype == torch.uint8 and not isinstance(value, int):
                 value = int(value)
-            patch_ = torch.ones((self.data.shape[0], patch_size, patch_size, patch_size), device=self.data.device, dtype=self.data.dtype) * value
-            patch_[:, zpad_top:patch_size - zpad_btm, ypad_front:patch_size - ypad_back, xpad_left:patch_size - xpad_right] = patch
+            if self.data.ndim == 4:
+                patch_ = torch.full((self.data.shape[0], patch_size, patch_size, patch_size), value, device=self.data.device, dtype=self.data.dtype)
+                patch_[:, zpad_top:patch_size - zpad_btm, ypad_front:patch_size - ypad_back, xpad_left:patch_size - xpad_right] = patch
+            else:
+                patch_ = torch.full((patch_size, patch_size, patch_size), value, device=self.data.device, dtype=self.data.dtype)
+                patch_[zpad_top:patch_size - zpad_btm, ypad_front:patch_size - ypad_back, xpad_left:patch_size - xpad_right] = patch
             patch = patch_
 
         return patch, padding

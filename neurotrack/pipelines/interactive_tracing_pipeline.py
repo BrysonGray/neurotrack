@@ -212,8 +212,18 @@ def _draw_mask_from_paths_xyz(
         # Reversing columns with ::-1 creates a negative-stride view; torch.as_tensor
         # cannot consume it directly, so materialize as a contiguous float32 array.
         path_zyx = np.ascontiguousarray(path[:, ::-1], dtype=np.float32)
-        for idx in range(path_zyx.shape[0] - 1):
-            segment = torch.as_tensor(path_zyx[idx: idx + 2], dtype=torch.float32)
+        if path_zyx.shape[0] > 2:
+            # Drop consecutive duplicate/near-duplicate vertices to reduce no-op draw calls.
+            deltas = np.abs(np.diff(path_zyx, axis=0))
+            keep_mask = np.ones((path_zyx.shape[0],), dtype=bool)
+            keep_mask[1:] = np.any(deltas > 1e-5, axis=1)
+            path_zyx = path_zyx[keep_mask]
+        if path_zyx.shape[0] < 2:
+            continue
+
+        path_zyx_t = torch.from_numpy(path_zyx)
+        for idx in range(path_zyx_t.shape[0] - 1):
+            segment = path_zyx_t[idx: idx + 2]
             mask_image.draw_line_segment(segment, width=width, channel=0, mask=False)
 
     return mask_image.data[0].detach().cpu().numpy()

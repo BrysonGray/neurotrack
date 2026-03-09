@@ -546,7 +546,8 @@ def train(env,
                             writer = csv.writer(f)
                             if not file_exists:
                                 writer.writerow(['episode', 'image_file', 'num_branches', 'episode_return', 'episode_avg_policy_loss', 'moving_avg_reward', 'complexity'])
-                            num_branches = len(env.finished_paths) - len(env.roots)
+                            num_roots = int(env.roots.shape[0])
+                            num_branches = len(env.finished_paths) - num_roots
                             writer.writerow([
                                 ep,
                                 env.current_neuron_info["neuron_name"],

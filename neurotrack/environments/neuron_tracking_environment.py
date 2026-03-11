@@ -345,7 +345,7 @@ class NeuronTrackingEnvironment:
 
         self.paths[0].append(new_position)
         segment = torch.stack(self.paths[0][-2:], dim=0)
-        self.img.draw_line_segment(segment, width=self.step_width, channel=-1, mask=False)
+        self.img.draw_line_segment(segment, width=self.step_width, channel=-1, mask=True)
         if self.branching:
             roots_tensor = self.roots
             if roots_tensor.device != new_position.device:
@@ -500,7 +500,7 @@ class NeuronTrackingEnvironment:
                 
                 # Draw the segment on the state input image
                 segment = torch.stack(self.paths[0][-2:], dim=0)
-                self.img.draw_line_segment(segment, width=self.step_width, channel=-1, mask=False)
+                self.img.draw_line_segment(segment, width=self.step_width, channel=-1, mask=True)
 
                 # get new observation
                 observation = self.get_state()

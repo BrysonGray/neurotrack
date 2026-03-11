@@ -39,7 +39,7 @@ def trace_gif(image: torch.Tensor, paths: List[torch.Tensor], step_width: float,
     for path in paths:
         segments = torch.stack((path[:-1], path[1:]), dim=1)  # (N-1, 2, 3)
         for segment in segments:
-            img.draw_line_segment(segment, width=step_width, channel=-1, mask=False)
+            img.draw_line_segment(segment, width=step_width, channel=-1, mask=True)
             segments_drawn += 1
             if (segments_drawn % segments_per_frame != 0 and segments_drawn != n_segments):
                 continue

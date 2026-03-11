@@ -224,7 +224,7 @@ def _draw_mask_from_paths_xyz(
         path_zyx_t = torch.from_numpy(path_zyx)
         for idx in range(path_zyx_t.shape[0] - 1):
             segment = path_zyx_t[idx: idx + 2]
-            mask_image.draw_line_segment(segment, width=width, channel=0, mask=False)
+            mask_image.draw_line_segment(segment, width=width, channel=0, mask=True)
 
     return mask_image.data[0].detach().cpu().numpy()
 

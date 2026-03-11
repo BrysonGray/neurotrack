@@ -14,6 +14,7 @@ from scipy.ndimage import map_coordinates
 from skimage.draw import line_nd
 from skimage.filters import gaussian
 from skimage.morphology import dilation
+from functools import lru_cache
 from typing import Literal, Union
 import warnings
 
@@ -118,65 +119,131 @@ def to_uint8(data: Union[np.ndarray, torch.Tensor]) -> Union[np.ndarray, torch.T
     raise TypeError(f"Expected np.ndarray or torch.Tensor, got {type(data)}")
 
 
-def draw_line_segment(segment, width, mask=False, value=1, sharpness=1.0):
-    """ Generate an image of a line segment with width.
-
-    Parameters
-    ----------
-    segment: torch.Tensor
-        array with two three dimensional points (shape: 2x3)
-    width: scalar
-        segment width
-    binary: bool
-        Make a line mask rather than a blurred idealized line.
-    value: int
-        If binary is set to True, set the line brightness to this value. Default is 1.
-    
-    Returns
-    -------
-    X : torch.Tensor
-        A patch with the new line segment starting at its center.
-    """
+def _as_float_segment_tensor(segment: Union[np.ndarray, torch.Tensor]) -> torch.Tensor:
+    """Convert a segment to a float32 tensor while preserving device when possible."""
     if isinstance(segment, np.ndarray):
-        segment = torch.from_numpy(segment).to(dtype=torch.float32)
-    else:
-        # ensure float dtype for subsequent math
-        segment = segment.to(dtype=torch.float32)
+        return torch.from_numpy(segment).to(dtype=torch.float32)
+    if isinstance(segment, torch.Tensor):
+        return segment.to(dtype=torch.float32)
+    raise TypeError(f"Expected segment as np.ndarray or torch.Tensor, got {type(segment)}")
+
+
+@lru_cache(maxsize=32)
+def _binary_ball_offsets(radius: int) -> np.ndarray:
+    """Cached integer offsets for a filled 3D sphere."""
+    axis = np.arange(-radius, radius + 1, dtype=np.int16)
+    zz, yy, xx = np.meshgrid(axis, axis, axis, indexing="ij")
+    keep = (zz * zz + yy * yy + xx * xx) <= (radius * radius)
+    return np.stack((zz[keep], yy[keep], xx[keep]), axis=1)
+
+
+def _draw_line_segment_gaussian(segment: torch.Tensor, width, value=1, sharpness=1.0) -> torch.Tensor:
+    """Draw a blurred line segment by evaluating distance to the segment."""
     start = segment[0]
     direction_vec = segment[1] - segment[0]
 
-    # the patch should contain both line end points plus some blur
-    # L = int(torch.ceil(segment_length)) + 1 # The radius of the patch is the whole line length since the line starts at patch center.
-    L = int(max(abs(direction_vec).tolist()))
-    overhang = int(np.ceil(2*width)) # include space beyond the end of the line
+    # The patch should contain both line end points plus a blur margin.
+    L = int(torch.max(torch.abs(direction_vec)).item())
+    width = max(float(width), 1.0)
+    overhang = int(np.ceil(2 * width))
     patch_radius = L + overhang
 
-    patch_size = 2*patch_radius + 1
-    # Create coordinate grid as float tensors on same device as direction_vec
-    x = [torch.arange(patch_size, dtype=torch.float32, device=direction_vec.device),] * 3
-    X = torch.stack(torch.meshgrid(*x, indexing='ij'), -1)
-    translation = (torch.tensor([patch_radius,] * 3, dtype=torch.float32, device=direction_vec.device) + (start % 1))
+    patch_size = 2 * patch_radius + 1
+    x = [torch.arange(patch_size, dtype=torch.float32, device=direction_vec.device)] * 3
+    X = torch.stack(torch.meshgrid(*x, indexing="ij"), -1)
+    translation = torch.tensor([patch_radius] * 3, dtype=torch.float32, device=direction_vec.device) + (start % 1)
     X = X - translation
+
     seglen_sq = torch.dot(direction_vec, direction_vec)
-    P = torch.outer(direction_vec, direction_vec) / seglen_sq
-    P_ = (torch.eye(3, dtype=direction_vec.dtype, device=direction_vec.device) - P)
-    P_X = torch.matmul(P_[None,None,None], X[...,None]).squeeze()
-    dist = torch.linalg.norm(P_X, dim=-1)
-    segTb = torch.matmul(direction_vec[None,None,None,None], X[...,None]).squeeze()
-    dist_to_end = torch.linalg.norm(X - direction_vec, dim=-1)
-    dist_to_start = torch.linalg.norm(X, dim=-1)
-    dist = torch.where(segTb > seglen_sq, dist_to_end, dist)
-    dist = torch.where(segTb < 0, dist_to_start, dist)
-    
-    width = np.maximum(width, 1.0)
-    if mask:
-        X = dist < width / 2
-        X = X.to(dtype=torch.int16) * value
+    if seglen_sq > 0:
+        P = torch.outer(direction_vec, direction_vec) / seglen_sq
+        P_ = torch.eye(3, dtype=direction_vec.dtype, device=direction_vec.device) - P
+        P_X = torch.matmul(P_[None, None, None], X[..., None]).squeeze()
+        dist = torch.linalg.norm(P_X, dim=-1)
+        segTb = torch.matmul(direction_vec[None, None, None, None], X[..., None]).squeeze()
+        dist_to_end = torch.linalg.norm(X - direction_vec, dim=-1)
+        dist_to_start = torch.linalg.norm(X, dim=-1)
+        dist = torch.where(segTb > seglen_sq, dist_to_end, dist)
+        dist = torch.where(segTb < 0, dist_to_start, dist)
     else:
-        sharpness = 1.0 if sharpness is None else sharpness
-        X = torch.exp(-0.5 * (dist / (width / 2.35))**(2 * sharpness)) * value # FWHM = 2.35 * sigma -> sigma = FWHM / 2.35
-    
-    return X.to(device=direction_vec.device)
+        dist = torch.linalg.norm(X, dim=-1)
+
+    sharpness = 1.0 if sharpness is None else sharpness
+    return torch.exp(-0.5 * (dist / (width / 2.35)) ** (2 * sharpness)) * value
+
+
+def _draw_line_segment_binary(segment: torch.Tensor, width, value=1) -> torch.Tensor:
+    """Draw a thick binary line by centerline rasterization plus sphere stamping."""
+    direction_vec = segment[1] - segment[0]
+    direction_int = np.rint(direction_vec.detach().cpu().numpy()).astype(np.int32)
+
+    radius = max(1, int(np.ceil(max(float(width), 1.0) / 2.0)))
+    L = int(np.max(np.abs(direction_int)))
+    patch_radius = L + radius
+    patch_size = 2 * patch_radius + 1
+
+    start_idx = np.array([patch_radius, patch_radius, patch_radius], dtype=np.int32)
+    end_idx = start_idx + direction_int
+    line_coords = np.stack(line_nd(start_idx, end_idx, endpoint=True), axis=1).astype(np.int32, copy=False)
+
+    offsets = _binary_ball_offsets(radius).astype(np.int32, copy=False)
+    voxels = (line_coords[:, None, :] + offsets[None, :, :]).reshape(-1, 3)
+
+    valid = (
+        (voxels[:, 0] >= 0)
+        & (voxels[:, 0] < patch_size)
+        & (voxels[:, 1] >= 0)
+        & (voxels[:, 1] < patch_size)
+        & (voxels[:, 2] >= 0)
+        & (voxels[:, 2] < patch_size)
+    )
+    voxels = voxels[valid]
+
+    X = np.zeros((patch_size, patch_size, patch_size), dtype=np.float32)
+    X[voxels[:, 0], voxels[:, 1], voxels[:, 2]] = float(value)
+    return torch.from_numpy(X).to(device=segment.device)
+
+
+def draw_line_segment(
+    segment,
+    width,
+    mask=False,
+    value=1,
+    sharpness=1.0,
+    mode: Literal["gaussian", "binary"] = "gaussian",
+):
+    """Generate a 3D patch containing a line segment.
+
+    Parameters
+    ----------
+    segment : torch.Tensor or np.ndarray
+        Array with two three-dimensional points (shape: 2x3).
+    width : scalar
+        Segment width.
+    mask : bool, optional
+        Backward-compatible alias for binary drawing; if True, forces binary mode.
+    value : scalar, optional
+        Pixel value assigned to the segment.
+    sharpness : float, optional
+        Gaussian sharpness exponent, used only in gaussian mode.
+    mode : {"gaussian", "binary"}, optional
+        Drawing mode. Gaussian evaluates a blurred segment profile.
+        Binary rasterizes the centerline and stamps a spherical thickness mask.
+
+    Returns
+    -------
+    torch.Tensor
+        A patch with the new line segment starting at its center.
+    """
+    segment = _as_float_segment_tensor(segment)
+    if mask:
+        mode = "binary"
+
+    if mode == "gaussian":
+        return _draw_line_segment_gaussian(segment, width, value=value, sharpness=sharpness)
+    if mode == "binary":
+        return _draw_line_segment_binary(segment, width, value=value)
+    raise ValueError(f"Unsupported draw mode '{mode}'. Expected 'gaussian' or 'binary'.")
 
 
 def extract_spherical_patch(volume, x, y, z, center, radius, order=1, permutation=None, normalize=False):
@@ -369,7 +436,16 @@ class Image:
         return patch, padding
     
 
-    def draw_line_segment(self, segment, width, channel=-1, value=1, mask=False, sharpness=1.0):
+    def draw_line_segment(
+        self,
+        segment,
+        width,
+        channel=-1,
+        value=1,
+        mask=False,
+        sharpness=1.0,
+        mode: Literal["gaussian", "binary"] = "gaussian",
+    ):
 
         """ Add an image patch with the new line segment to the existing image in the specified channel.
 
@@ -385,6 +461,8 @@ class Image:
             The value to assign to the line segment (default is 1.0).
         binary : bool, optional
             If True, the line segment will be added in a binary fashion (default is False).
+        mode : {"gaussian", "binary"}, optional
+            Drawing mode. If mask is True, binary mode is used.
             
         Returns
         -------
@@ -395,7 +473,14 @@ class Image:
         """
         
         # create the patch with the new line segment starting at its center.
-        X = draw_line_segment(segment, width, mask, value, sharpness=sharpness)
+        X = draw_line_segment(
+            segment=segment,
+            width=width,
+            mask=mask,
+            value=value,
+            sharpness=sharpness,
+            mode=mode,
+        )
         if self.data.dtype == torch.uint8:
             X = X * 255  # scale to uint8 if necessary
             X = X.to(dtype=torch.uint8)

@@ -94,7 +94,7 @@ def main():
     repeat_starts = params["repeat_starts"] if "repeat_starts" in params else True
     branching = params["branching"] if "branching" in params else 0
     seeds_path = params["seeds_path"] if "seeds_path" in params else None
-    auto_seed_selection_mode = params["auto_seed_selection_mode"] if "auto_seed_selection_mode" in params else "remote_endnode"
+    root_sampling_probability = params["root_sampling_probability"] if "root_sampling_probability" in params else None
     rng_seed = params["rng_seed"] if "rng_seed" in params else 1
     start_complexity = params["start_complexity"] if "start_complexity" in params else 0.0
     start_idx = params["start_idx"] if "start_idx" in params else 0
@@ -109,7 +109,10 @@ def main():
         crop_size=128,
         patches_per_image=10,
         alpha=start_complexity,
-        rng=rng
+        step_width=step_width,
+        rng=rng,
+        seeds_path=seeds_path,
+        root_sampling_probability=root_sampling_probability,
     )
 
     # Create environment
@@ -123,8 +126,6 @@ def main():
         repeat_starts=repeat_starts,
         branching=branching,
         start_idx=start_idx,
-        seeds_path=seeds_path,
-        auto_seed_selection_mode=auto_seed_selection_mode,
     )
     
     input_size = 2*patch_radius+1

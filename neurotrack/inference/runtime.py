@@ -35,9 +35,12 @@ def build_env(params: Dict[str, Any]) -> NeuronTrackingEnvironment:
         img_dir=params["img_dir"],
         swc_dir=params.get("swc_dir", None),
         alpha=1.0,
+        step_width=float(params.get("step_width", 4.0)),
         rng=rng,
         crop_patches=params.get("crop_patches", False),
         patches_per_image=int(params.get("patches_per_image", 1)),
+        seeds_path=params.get("seeds_path", None),
+        root_sampling_probability=params.get("root_sampling_probability", None),
         inference_mode=True,
     )
 
@@ -50,8 +53,6 @@ def build_env(params: Dict[str, Any]) -> NeuronTrackingEnvironment:
         branching=params.get("branching", True),
         repeat_starts=params.get("repeat_starts", False),
         start_idx=0,
-        seeds_path=params.get("seeds_path", None),
-        auto_seed_selection_mode=params.get("auto_seed_selection_mode", "remote_endnode"),
         inference_mode=True,
     )
 

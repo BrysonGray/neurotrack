@@ -242,9 +242,11 @@ class _TraceRuntime:
             img_dir=str(trace_params["img_dir"]),
             swc_dir=trace_params.get("swc_dir", None),
             alpha=1.0,
+            step_width=float(trace_params.get("step_width", 4.0)),
             rng=np.random.default_rng(rng_seed),
             crop_patches=False,
             patches_per_image=1,
+            seed_points_by_image={},
             inference_mode=True,
         )
 
@@ -258,8 +260,6 @@ class _TraceRuntime:
             repeat_starts=bool(trace_params.get("repeat_starts", False)),
             start_idx=0,
             inference_mode=True,
-            auto_seed_selection_mode=str(trace_params.get("auto_seed_selection_mode", "remote_endnode")),
-            seed_points_by_image={},
         )
 
     def trace_image(
@@ -271,7 +271,9 @@ class _TraceRuntime:
         initial_path_mask: Optional[np.ndarray] = None,
     ) -> Dict[str, object]:
         with self._lock:
-            self._env.seed_points_by_image = {image_relative_key: seed_rows}
+            self._dataset.seed_points_by_image[image_relative_key] = [
+                [float(coord) for coord in row] for row in seed_rows
+            ]
             result = sac_trace_image(
                 env=self._env,
                 actor=self._actor,

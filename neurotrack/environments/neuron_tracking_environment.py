@@ -10,15 +10,11 @@ Author: Bryson Gray
 import numpy as np
 import tifffile as tf
 import torch
-from pathlib import Path
 from typing import Dict, Tuple, Literal, Optional, List
-import warnings
 
-from neurotrack.core.pipeline_config import flexible_image_key_lookup
 from neurotrack.data import loading as load
 from neurotrack.data import tree
 from neurotrack.data.image import Image
-from neurotrack.data.seed_io import load_seeds_json
 from neurotrack.environments.tracking_reward import (
     _get_nearest_node, _get_termination_nodes, _init_visited,
     _compute_target_point, distance_reward, _add_to_visited,
@@ -40,9 +36,7 @@ class NeuronTrackingEnvironment:
                  radius: int = 17, target_step_len: float = 4.0, step_width: float = 4.0,
                  max_len: int = 10000, max_paths: int = 1000, gamma=0.99, branching: bool = False,
                  repeat_starts: bool = False, start_idx: int = 0,
-                 inference_mode: bool = False, seeds_path: Optional[str] = None,
-                 auto_seed_selection_mode: Literal["remote_endnode", "root_nodes"] = "remote_endnode",
-                 seed_points_by_image: Optional[Dict[str, List[List[float]]]] = None):
+                 inference_mode: bool = False):
         """
         Initialize the enhanced SAC tracking environment.
         
@@ -66,16 +60,6 @@ class NeuronTrackingEnvironment:
             Whether to enable branching during training
         repeat_starts : bool
             Whether to repeatedly restart at the beginning of a completed path
-        seeds_path : Optional[str]
-            Optional path to a seed JSON file keyed by relative image path.
-        auto_seed_selection_mode : Literal["remote_endnode", "root_nodes"]
-            Automatic seed strategy when configured seeds are unavailable.
-            - "remote_endnode": pick end node farthest from branch points (current behavior)
-            - "root_nodes": use all nodes whose parent id is -1
-        seed_points_by_image : Optional[Dict[str, List[List[float]]]]
-            Optional in-memory seeds keyed by relative image path.
-        section_masking : bool
-            Whether to mask out all sections except the current section and its descendants
         """
         self.dataset = dataset
         self.current_patch_idx = start_idx
@@ -84,27 +68,14 @@ class NeuronTrackingEnvironment:
         # Store initialization parameters
         self.radius = radius
         self.target_step_len = target_step_len
-        self.step_width = step_width
+        dataset_step_width = getattr(dataset, "step_width", None)
+        self.step_width = float(dataset_step_width) if dataset_step_width is not None else step_width
         self.max_len = max_len
         self.max_paths = max_paths
         self.gamma = gamma
         self.branching = branching
         self.repeat_starts = repeat_starts
         self.inference_mode = inference_mode
-        self.seeds_path = seeds_path
-        self.auto_seed_selection_mode = "remote_endnode" if auto_seed_selection_mode == "remote_end_node" else auto_seed_selection_mode
-        allowed_seed_modes = {"remote_endnode", "root_nodes"}
-        if self.auto_seed_selection_mode not in allowed_seed_modes:
-            raise ValueError(
-                f"auto_seed_selection_mode must be one of {sorted(allowed_seed_modes)} but got "
-                f"'{auto_seed_selection_mode}'."
-            )
-        if seed_points_by_image is not None:
-            self.seed_points_by_image = dict(seed_points_by_image)
-        elif seeds_path is not None:
-            self.seed_points_by_image = load_seeds_json(seeds_path)
-        else:
-            self.seed_points_by_image = {}
         
         # Initialize other attributes that will be set when neuron data is loaded
         self.img = None
@@ -189,61 +160,16 @@ class NeuronTrackingEnvironment:
             self.unvisited_tree = self.full_tree.clone()
             self.id_to_idx = {}
 
-        # Determine seed point(s)
-        seeds = None
-        relative_image_path = patch_data.get('relative_image_path', None)
-        if relative_image_path is not None:
-            _seed_data = flexible_image_key_lookup(self.seed_points_by_image, relative_image_path)
-            if _seed_data is not None:
-                seeds = torch.as_tensor(_seed_data, dtype=torch.float32)
-                if seeds.ndim != 2 or seeds.shape[1] != 3:
-                    raise ValueError(
-                        f"Seed points for '{relative_image_path}' must have shape (N, 3) in (z, y, x) order."
-                    )
+        # Determine seed point(s) from dataset output only.
+        seed_points_data = patch_data.get('seed_points', None)
+        if seed_points_data is None:
+            raise ValueError("patch_data must include 'seed_points' with shape (N, 3) in (z, y, x) order.")
 
-        if seeds is None:
-            if self.seeds_path is not None:
-                warnings.warn(
-                    "No configured seeds were found for this patch; falling back to automatic seed selection.",
-                    RuntimeWarning,
-                )
-
-            if self.has_ground_truth and len(self.adj_dict) > 0:
-                seed_mode = self.auto_seed_selection_mode
-                if seed_mode == "root_nodes":
-                    root_mask = self.full_tree[:, 6] == -1
-                    root_coords = self.full_tree[root_mask][:, 2:5]
-                    if root_coords.shape[0] > 0:
-                        seeds = root_coords
-                    else:
-                        warnings.warn(
-                            "auto_seed_selection_mode='root_nodes' found no root nodes; "
-                            "falling back to remote end-node selection.",
-                            RuntimeWarning,
-                        )
-                        seed_mode = "remote_endnode"
-
-                if seeds is None and seed_mode == "remote_endnode":
-                    branch_nodes = [k for k, v in self.adj_dict.items() if len(v) > 2]
-                    end_nodes = [k for k, v in self.adj_dict.items() if len(v) == 1]
-                    branch_indices = [self.id_to_idx[int(n)] for n in branch_nodes]
-                    end_indices = [self.id_to_idx[int(n)] for n in end_nodes]
-                    branch_coords = self.full_tree[branch_indices, 2:5]
-                    end_coords = self.full_tree[end_indices, 2:5]
-                    if branch_coords.shape[0] == 0:
-                        seeds = end_coords[0].unsqueeze(0)
-                    else:
-                        compare_coords = branch_coords
-                        if branch_coords.shape[0] > 30:
-                            indices = torch.randperm(branch_coords.shape[0], device=branch_coords.device)[:30]
-                            compare_coords = branch_coords[indices]
-                        dists_sq = torch.sum((end_coords.float().unsqueeze(1) - compare_coords.float().unsqueeze(0)) ** 2, dim=2)
-                        min_dists_sq, _ = torch.min(dists_sq, dim=1)
-                        farthest_end_idx = torch.argmax(min_dists_sq)
-                        seeds = end_coords[farthest_end_idx].unsqueeze(0)
-            else:
-                spatial_shape = torch.tensor(self.img.data.shape[1:], dtype=torch.float32)
-                seeds = (spatial_shape / 2.0).unsqueeze(0)
+        seeds = torch.as_tensor(seed_points_data, dtype=torch.float32)
+        if seeds.ndim == 1:
+            seeds = seeds.unsqueeze(0)
+        if seeds.ndim != 2 or seeds.shape[1] != 3:
+            raise ValueError("patch_data['seed_points'] must have shape (N, 3) in (z, y, x) order.")
         
         self.paths = [[p] for p in seeds.unbind(0)]
         self._set_roots(list(seeds.unbind(0)))
@@ -260,13 +186,6 @@ class NeuronTrackingEnvironment:
             self.section_nodes = None
             self.section_assigned = False
 
-        # Add channel for path visualization
-        if self.img.data.shape[0] == 1:
-            self.img.data = torch.cat((
-                self.img.data, 
-                torch.zeros((1,) + self.img.data.shape[1:], dtype=self.img.data.dtype)
-            ), dim=0)
-        
         if self.paths:
             self.img.draw_point(
                 self.paths[0][-1], 

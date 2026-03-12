@@ -1,15 +1,17 @@
 from collections import deque
 import numpy as np
-import os
 from pathlib import Path
 from typing import List, Tuple, Optional, Dict, Union
+import warnings
 import torch
 from torch.utils.data import Dataset as TorchDataset
 from torch.utils.data import Sampler
 import tifffile as tf
+from neurotrack.core.pipeline_config import flexible_image_key_lookup
 from neurotrack.data import loading as load
 from neurotrack.data import rendering as draw
-from neurotrack.data.image import to_uint8
+from neurotrack.data.image import Image, to_uint8
+from neurotrack.data.seed_io import load_seeds_json
 
 
 class NeuronPatchDataset(TorchDataset):
@@ -31,12 +33,16 @@ class NeuronPatchDataset(TorchDataset):
         self,
         swc_dir: Optional[Union[str, Path]],
         img_dir: Union[str, Path],
-        crop_size: int = 128,
+        crop_size: int = 64,
         patches_per_image: int = 10,
         alpha: float = 0.5,
+        step_width: float = 4.0,
         rng: Optional[np.random.Generator] = None,
         crop_patches: bool = True,
-        inference_mode: bool = False
+        inference_mode: bool = False,
+        seeds_path: Optional[Union[str, Path]] = None,
+        seed_points_by_image: Optional[Dict[str, List[List[float]]]] = None,
+        root_sampling_probability: Optional[float] = None,
     ):
         """
         Initialize the dataset.
@@ -53,12 +59,23 @@ class NeuronPatchDataset(TorchDataset):
             Number of patches to extract from each image before moving to next
         alpha : float
             opacity for rendering neuron masks
+        step_width : float
+            Width used for initialization path rendering in dataset-generated
+            predicted path channel.
         rng : np.random.Generator, optional
             Random number generator for reproducibility
         crop_patches : bool
             If True, extract random patches. If False, return full images.
         inference_mode : bool
             If True, do not extract SWC data and do not generate neuron masks.
+        seeds_path : Optional[str or Path]
+            Optional path to a seed JSON file keyed by relative image path.
+        seed_points_by_image : Optional[Dict[str, List[List[float]]]]
+            Optional in-memory seeds keyed by relative image path.
+        root_sampling_probability : Optional[float]
+            If set, probability of sampling the subtree center from root nodes
+            (parent_id == -1) instead of all SWC nodes when extracting cropped
+            patches. If None, center sampling is fully random over all SWC nodes.
         """
         self.swc_files = []
         if swc_dir is not None:
@@ -94,20 +111,32 @@ class NeuronPatchDataset(TorchDataset):
         self.patches_per_image = patches_per_image
         self.rng = rng or np.random.default_rng(0)
         self.alpha = alpha
+        self.step_width = float(step_width)
         self.crop_patches = crop_patches
         self.has_swc = len(self.swc_files) > 0
         self.inference_mode = inference_mode
+        self.root_sampling_probability = None if root_sampling_probability is None else float(root_sampling_probability)
+        self.seeds_path = str(seeds_path) if seeds_path is not None else None
+        if seed_points_by_image is not None:
+            self.seed_points_by_image = dict(seed_points_by_image)
+        elif seeds_path is not None:
+            self.seed_points_by_image = load_seeds_json(seeds_path)
+        else:
+            self.seed_points_by_image = {}
 
         if self.crop_patches and not self.has_swc:
             raise ValueError("crop_patches=True requires SWC files.")
 
         if not (0.0 <= self.alpha <= 1.0):
             raise ValueError("Alpha must be between 0.0 and 1.0")
+        if self.root_sampling_probability is not None and not (0.0 <= self.root_sampling_probability <= 1.0):
+            raise ValueError("root_sampling_probability must be between 0.0 and 1.0")
         
         # Cache for currently loaded image
         self._cached_image_idx: Optional[int] = None
         self._cached_image: Optional[torch.Tensor] = None
         self._cached_swc_data: Optional[Dict] = None
+        self._warned_center_seed_fallback_no_swc = False
         
         # Total dataset size = number of images * patches per image (or just images if not cropping)
         if self.crop_patches:
@@ -118,6 +147,142 @@ class NeuronPatchDataset(TorchDataset):
         # Base seed for reproducibility
         self._base_seed = self.rng.integers(0, 2**31)
         self.renderer = draw.NeuronRenderer(rng=self.rng)
+
+    def _normalize_seed_rows(self, seed_rows: List[List[float]], context: str) -> torch.Tensor:
+        """Validate and convert seed rows to a float32 tensor in (z, y, x) order."""
+        seeds = torch.as_tensor(seed_rows, dtype=torch.float32)
+        if seeds.ndim == 1:
+            seeds = seeds.unsqueeze(0)
+        if seeds.ndim != 2 or seeds.shape[1] != 3:
+            raise ValueError(f"Seed points for '{context}' must have shape (N, 3) in (z, y, x) order.")
+        return seeds
+
+    def _get_configured_seed_points(self, relative_image_path: str) -> Optional[torch.Tensor]:
+        """Return configured seeds for an image path if available."""
+        seed_rows = flexible_image_key_lookup(self.seed_points_by_image, relative_image_path)
+        if seed_rows is None:
+            return None
+        return self._normalize_seed_rows(seed_rows, context=relative_image_path)
+
+    @staticmethod
+    def _get_root_seed_points_from_swc(swc_data: List) -> Optional[torch.Tensor]:
+        """Return root node coordinates from SWC as seeds in (z, y, x) order."""
+        if swc_data is None or len(swc_data) == 0:
+            return None
+        swc_array = np.array(swc_data)
+        root_rows = swc_array[swc_array[:, 6] == -1]
+        if len(root_rows) == 0:
+            return None
+        root_xyz = torch.as_tensor(root_rows[:, 2:5], dtype=torch.float32)
+        return root_xyz.flip(dims=(1,))
+
+    @staticmethod
+    def _get_center_seed_point_from_shape(shape_zyx: torch.Size) -> torch.Tensor:
+        """Return one center seed in (z, y, x) for a 3D shape."""
+        return (torch.as_tensor(shape_zyx, dtype=torch.float32) / 2.0).unsqueeze(0)
+
+    @staticmethod
+    def _find_path_ids(
+        adjacency: Dict[int, List[int]],
+        start_node_id: int,
+        target_node_id: int,
+    ) -> List[int]:
+        """Find a path between two node ids in an undirected adjacency graph."""
+        start = int(start_node_id)
+        target = int(target_node_id)
+        if start == target:
+            return [start]
+
+        parents = {start: None}
+        queue = deque([start])
+
+        while queue:
+            node = queue.popleft()
+            for neighbor in adjacency.get(node, []):
+                neighbor = int(neighbor)
+                if neighbor in parents:
+                    continue
+                parents[neighbor] = node
+                if neighbor == target:
+                    queue.clear()
+                    break
+                queue.append(neighbor)
+
+        if target not in parents:
+            return []
+
+        path_ids = []
+        current = target
+        while current is not None:
+            path_ids.append(int(current))
+            current = parents[current]
+        path_ids.reverse()
+        return path_ids
+
+    def _build_predicted_path_channel(
+        self,
+        subtree: List,
+        seed_node_id: int,
+        spatial_shape_zyx: torch.Size,
+    ) -> torch.Tensor:
+        """Build path channel from smallest-id subtree node to the seed node."""
+        spatial_shape = tuple(int(v) for v in spatial_shape_zyx)
+        path_channel = torch.zeros(spatial_shape, dtype=torch.uint8)
+
+        if not subtree:
+            return path_channel
+
+        id_to_node = {int(node[0]): node for node in subtree}
+        seed_id = int(seed_node_id)
+        seed_node = id_to_node.get(seed_id)
+        if seed_node is None:
+            return path_channel
+
+        # If seed is a root node, draw a seed marker instead of a path.
+        if int(seed_node[6]) == -1:
+            seed_point = torch.as_tensor((seed_node[4], seed_node[3], seed_node[2]), dtype=torch.float32)
+            path_image = Image(torch.zeros((1,) + spatial_shape, dtype=torch.uint8))
+            path_image.draw_point(seed_point, radius=self.step_width, channel=0, mode="mask")
+            return path_image.data[0]
+
+        start_node_id = min(id_to_node.keys())
+        path_ids = self._find_path_ids(
+            adjacency=load.adjacency_dict(subtree),
+            start_node_id=start_node_id,
+            target_node_id=seed_id,
+        )
+        if len(path_ids) < 2:
+            return path_channel
+
+        path_image = Image(torch.zeros((1,) + spatial_shape, dtype=torch.uint8))
+        for idx in range(len(path_ids) - 1):
+            node_a = id_to_node[path_ids[idx]]
+            node_b = id_to_node[path_ids[idx + 1]]
+            point_a = torch.as_tensor((node_a[4], node_a[3], node_a[2]), dtype=torch.float32)
+            point_b = torch.as_tensor((node_b[4], node_b[3], node_b[2]), dtype=torch.float32)
+            segment = torch.stack((point_a, point_b), dim=0)
+            path_image.draw_line_segment(segment, width=self.step_width, channel=0, mask=True)
+
+        return path_image.data[0]
+
+    @staticmethod
+    def _append_path_channel(image: torch.Tensor, path_channel: Optional[torch.Tensor] = None) -> torch.Tensor:
+        """Append a path channel to image tensor with shape [C,Z,Y,X] or [Z,Y,X]."""
+        if image.ndim == 3:
+            image_cf = image.unsqueeze(0)
+        elif image.ndim == 4:
+            image_cf = image
+        else:
+            raise ValueError(f"Image must be 3D or 4D, got shape {tuple(image.shape)}")
+
+        if path_channel is None:
+            path_channel = torch.zeros(image_cf.shape[-3:], dtype=image_cf.dtype, device=image_cf.device)
+        else:
+            if path_channel.ndim != 3:
+                raise ValueError(f"Path channel must be 3D [Z,Y,X], got shape {tuple(path_channel.shape)}")
+            path_channel = path_channel.to(device=image_cf.device, dtype=image_cf.dtype)
+
+        return torch.cat((image_cf, path_channel.unsqueeze(0)), dim=0)
         
     def _load_image(self, idx: int) -> torch.Tensor:
         """Load a full image."""
@@ -142,11 +307,10 @@ class NeuronPatchDataset(TorchDataset):
         
         return swc_data
     
-    def _extract_random_subtree(self, swc_data: List, patch_rng: np.random.Generator) -> List:
-        """Extract a random subtree using the provided RNG for reproducibility."""
+    def _extract_subtree(self, swc_data: List, center_node: np.ndarray) -> List:
+        """Extract the connected subtree within crop bounds around a center SWC node."""
         swc_array = np.array(swc_data)
-        center = swc_array[patch_rng.integers(len(swc_array))]
-        center_point = center[2:5]
+        center_point = center_node[2:5]
         in_box_mask = np.all(
             (swc_array[:, 2:5] >= (center_point - self.crop_size/2)) &
             (swc_array[:, 2:5] <= (center_point + self.crop_size/2)),
@@ -155,23 +319,27 @@ class NeuronPatchDataset(TorchDataset):
         subtree = swc_array[in_box_mask].tolist()
         subtree_adj_dict = load.adjacency_dict(subtree)
         # only keep tree connected to the center node
-        center_node = center[0]
+        center_id = int(center_node[0])
         visited = set()
-        to_visit = [center_node]
+        to_visit = [center_id]
         while to_visit:
             node = to_visit.pop()
             if node not in visited:
                 visited.add(node)
                 neighbors = subtree_adj_dict.get(node, [])
                 to_visit.extend(neighbors)
-        subtree = [node for node in subtree if node[0] in visited]
+        subtree = [node for node in subtree if int(node[0]) in visited]
 
         return subtree
     
-    def _extract_random_patch(self, image: torch.Tensor, swc_data: List, 
-                              patch_rng: np.random.Generator, pad: int = 10) -> Dict[str, torch.Tensor]:
+    def _extract_random_patch(
+        self,
+        image: torch.Tensor,
+        swc_data: List,
+        patch_rng: np.random.Generator,
+    ) -> Dict[str, torch.Tensor]:
         """
-        Extract a random cropped patch from the given image using provided RNG.
+        Extract a cropped patch using RNG-selected center with optional root bias.
         
         Parameters:
         -----------
@@ -189,32 +357,58 @@ class NeuronPatchDataset(TorchDataset):
             - 'neuron_tree': Associated subtree data
             - 'neuron_mask': Neuron area mask
         """
-        # extract subtrees from one example
-        subtree = self._extract_random_subtree(swc_data, patch_rng)
+        # Choose center node (default random over all nodes, with optional root bias)
+        swc_array = np.array(swc_data)
+        center_node = swc_array[patch_rng.integers(len(swc_array))]
+        root_prob = self.root_sampling_probability
+        if root_prob is not None and root_prob > 0.0 and patch_rng.random() < root_prob:
+            root_nodes = swc_array[swc_array[:, 6] == -1]
+            if len(root_nodes) > 0:
+                center_node = root_nodes[patch_rng.integers(len(root_nodes))]
+        seed_node_id = int(center_node[0])
 
-        cropped_img, cropped_subtree = crop_around_subtree(image, subtree, padding=1) # pad=1 to ensure cropped img never has zero size in any dim
-        padded_img, padded_subtree = pad_with_noise(cropped_img, cropped_subtree)
+        subtree = self._extract_subtree(swc_data, center_node=center_node)
+    
+
+        cropped_img, shifted_subtree = crop_around_subtree(image, subtree, center_node=center_node, size=self.crop_size)
+
+        seed_xyz = None
+        for node in shifted_subtree:
+            if int(node[0]) == seed_node_id:
+                seed_xyz = torch.as_tensor(node[2:5], dtype=torch.float32)
+                break
+        if seed_xyz is None:
+            raise RuntimeError(f"Seed node {seed_node_id} was not found in cropped subtree.")
 
         if self.inference_mode:
-            image = padded_img
+            image = cropped_img
             neuron_area_mask = None
     
         else:    
             # create mask
-            sections, _ = load.parse_swc(padded_subtree, verbose=False, transpose=True)
-            neuron_area_mask = self.renderer.draw_density(sections, padded_img.shape[-3:], width=35.0, mask=True)
+            sections, _ = load.parse_swc(shifted_subtree, verbose=False, transpose=True)
+            neuron_area_mask = self.renderer.draw_density(sections, cropped_img.shape[-3:], width=35.0, mask=True)
             neuron_area_mask = neuron_area_mask.data
             if self.alpha < 1.0:
-                neuron_mask = self.renderer.draw_density(sections, padded_img.shape[-3:], width=3.0, mask=True)
-                image = self.alpha * padded_img + (1 - self.alpha) * neuron_mask.data
+                neuron_mask = self.renderer.draw_density(sections, cropped_img.shape[-3:], width=3.0, mask=True)
+                image = self.alpha * cropped_img + (1 - self.alpha) * neuron_mask.data
             else:
-                image = padded_img
+                image = cropped_img
+
+        path_channel = self._build_predicted_path_channel(
+            subtree=shifted_subtree,
+            seed_node_id=seed_node_id,
+            spatial_shape_zyx=cropped_img.shape[-3:],
+        )
+        image = self._append_path_channel(image, path_channel=path_channel)
 
         
         return {
             'image': image,
-            'neuron_tree': padded_subtree,
-            'neuron_mask': neuron_area_mask
+            'neuron_tree': shifted_subtree,
+            'neuron_mask': neuron_area_mask,
+            'seed_point_xyz': seed_xyz,
+            'seed_node_id': seed_node_id,
         }
     
     def __len__(self) -> int:
@@ -260,12 +454,15 @@ class NeuronPatchDataset(TorchDataset):
             patch = self._extract_random_patch(
                 self._cached_image, 
                 self._cached_swc_data,
-                patch_rng
+                patch_rng,
             )
+
+            seed_xyz = patch.pop('seed_point_xyz')
+            patch['seed_points'] = seed_xyz.flip(dims=(0,)).unsqueeze(0)
             
             # Add metadata
             patch['neuron_name'] = self.img_files[image_idx].stem
-            patch['relative_image_path'] = str(self.img_files[image_idx].relative_to(self.img_dir))
+            patch['relative_image_path'] = self.img_files[image_idx].relative_to(self.img_dir).as_posix()
             patch['image_idx'] = image_idx
             patch['global_idx'] = idx
             
@@ -297,13 +494,35 @@ class NeuronPatchDataset(TorchDataset):
                 neuron_tree = None
                 neuron_mask_data = None
                 neuron_name = self.img_files[image_idx].stem
+
+            relative_image_path = self.img_files[image_idx].relative_to(self.img_dir).as_posix()
+
+            configured_seeds = self._get_configured_seed_points(relative_image_path)
+
+            if configured_seeds is not None:
+                seed_points = configured_seeds
+            elif self.has_swc and self._cached_swc_data is not None:
+                root_seeds = self._get_root_seed_points_from_swc(self._cached_swc_data)
+                if root_seeds is not None:
+                    seed_points = root_seeds
+                else:
+                    seed_points = self._get_center_seed_point_from_shape(self._cached_image.shape[-3:])
+            else:
+                if not self._warned_center_seed_fallback_no_swc:
+                    warnings.warn(
+                        "No SWC and no configured seeds were provided; using image center as fallback seed.",
+                        RuntimeWarning,
+                    )
+                    self._warned_center_seed_fallback_no_swc = True
+                seed_points = self._get_center_seed_point_from_shape(self._cached_image.shape[-3:])
             
             result = {
-                'image': composite_img,
+                'image': self._append_path_channel(composite_img),
                 'neuron_tree': neuron_tree,
                 'neuron_mask': neuron_mask_data,
                 'neuron_name': neuron_name,
-                'relative_image_path': str(self.img_files[image_idx].relative_to(self.img_dir)),
+                'relative_image_path': relative_image_path,
+                'seed_points': seed_points,
                 'image_idx': image_idx,
                 'global_idx': idx
             }
@@ -386,7 +605,7 @@ class ShuffledPatchSampler(Sampler):
 
 
 def crop_around_subtree(image: torch.Tensor, subtree: List, 
-                        padding: int = 10) -> Tuple[torch.Tensor, List]:
+                        center_node: np.ndarray, size: int) -> Tuple[torch.Tensor, List]:
     """
     Crop image around subtree coordinates and shift subtree coordinates.
     """
@@ -396,25 +615,19 @@ def crop_around_subtree(image: torch.Tensor, subtree: List,
     
     # Get coordinates from subtree
     subtree_array = np.array(subtree)
-    coords = subtree_array[:, 2:5]  # x, y, z columns
     
-    # Calculate bounding box with padding
-    min_coords = np.min(coords, axis=0) - padding
-    max_coords = np.max(coords, axis=0) + padding
+    # Crop around the center of the subtree with given size
+    center_point = center_node[2:5] # X, Y, Z order from SWC
+    if np.any(center_point < 0):
+        raise ValueError(f"Center point has negative coordinates: {center_point}")
+    min_coords = np.floor(center_point - size // 2).astype(int)
+    max_coords = np.ceil(center_point + size // 2).astype(int)
     
-    # Convert to integers and ensure within bounds
-    image_shape = image.shape
-    min_coords = np.maximum(0, min_coords.astype(int))
-    max_coords = np.minimum(image_shape[-3:][::-1], max_coords.astype(int))
-    
-    # Validate that crop will have positive dimensions
-    crop_shape = max_coords - min_coords
-    if np.any(crop_shape <= 0):
-        raise ValueError(
-            f"Crop would result in empty or invalid dimensions. "
-            f"Bounding box: min={min_coords}, max={max_coords}, "
-            f"crop_shape={crop_shape}, image_shape={image_shape[-3:][::-1]}"
-        )
+    # Compute padding if crop goes out of bounds
+    image_shape = image.shape[-3:][::-1] # convert to X, Y, Z order
+
+    min_coords = np.maximum(0, min_coords)
+    max_coords = np.minimum(image_shape, max_coords)
     
     # Crop the image
     cropped_image = image[..., min_coords[2]:max_coords[2], 
@@ -427,9 +640,9 @@ def crop_around_subtree(image: torch.Tensor, subtree: List,
         shifted_node = (
             node[0],  # node_id
             node[1],  # node_type  
-            node[2] - min_coords[0],  # x
-            node[3] - min_coords[1],  # y
-            node[4] - min_coords[2],  # z
+            node[2] - min_coords[0], # x
+            node[3] - min_coords[1], # y
+            node[4] - min_coords[2], # z
             node[5],  # radius
             node[6]   # parent_id
         )
@@ -437,48 +650,3 @@ def crop_around_subtree(image: torch.Tensor, subtree: List,
     
     return cropped_image, shifted_subtree
 
-
-def pad_with_noise(cropped_image, subtree, pad=10):
-    # pad after cropping
-    # pad image with random noise based on image stats
-    # Ensure cropped image is uint8 so padded output is always uint8
-    cropped_image = to_uint8(cropped_image)
-
-    # img_mean = float(torch.mean(cropped_image.float()))
-    # img_std = float(torch.std(cropped_image.float()))
-    # if img_std == 0.0:
-    #     img_std = 1e-6
-    img_median = float(torch.median(cropped_image.float()))
-    img_mad = float(torch.median(torch.abs(cropped_image.float() - img_median)))
-    
-    # Handle NaN or zero MAD cases
-    if torch.isnan(torch.tensor(img_mad)) or img_mad == 0.0 or img_mad < 0.0:
-        print(f"Warning: Image MAD is invalid ({img_mad}). Setting to small constant.")
-        img_mad = 1e-6
-
-    device = cropped_image.device
-
-    # Compute padded shape (assumes cropped_image shape is [C, Z, Y, X])
-    padded_shape = torch.tensor(cropped_image.shape)
-    padded_shape[-3:] += torch.tensor((2*pad,)*3)
-
-    # Create noise in float on the correct device, clamp and cast once
-    # noise = torch.normal(mean=img_mean, std=img_std, size=tuple(padded_shape), device=device)
-    noise = torch.normal(mean=img_median, std=img_mad, size=tuple(padded_shape), device=device)
-    noise = noise.clamp(0, 255).to(torch.uint8)
-
-    # Copy original image into the center of the noisy padded tensor (in-place)
-    z0, y0, x0 = pad, pad, pad
-    zdim, ydim, xdim = (0,1,2) if len(cropped_image.shape) == 3 else (1,2,3)
-    z1 = z0 + cropped_image.shape[zdim]
-    y1 = y0 + cropped_image.shape[ydim]
-    x1 = x0 + cropped_image.shape[xdim]
-    noise[..., z0:z1, y0:y1, x0:x1] = cropped_image
-    cropped_image = noise
-
-    # Shift subtree coordinates accordingly
-    subtree = np.array(subtree)
-    subtree[:, 2:5] = subtree[:, 2:5] + pad
-    subtree = subtree.tolist()
-
-    return cropped_image, subtree

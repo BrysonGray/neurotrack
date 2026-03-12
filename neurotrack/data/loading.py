@@ -126,7 +126,7 @@ def swc(labels_file, rotate=False, verbose=False):
     return swc_list
 
 
-def map_tiff_to_swc(image_root, swc_root, use_fixed=False, verbose=True,
+def map_tiff_to_swc(image_root, swc_root, use_fixed=False, verbose=False,
                     fixed_suffix="_FIXED_PARENT_CONNECTIONS.swc"):
     """
     Build a mapping from TIFF files to matching SWC files. Specific to Gold166 challenge data file naming conventions. 

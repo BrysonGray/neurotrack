@@ -58,14 +58,14 @@ def sample_from_output(out):
     meannorm = torch.linalg.norm(mean, dim=-1, keepdim=True)
     meannorm_ = torch.tanh(meannorm)*10 # maximum of 10
     mean = mean * meannorm_/(meannorm + torch.finfo(torch.float).eps)
-    logvar = torch.tanh(logvar)*3 + 1 # no very low variance (std is order of 1 pixel) 
+    logvar = torch.tanh(logvar)*3 - 1 # logvar between -4 and 2
     direction_dist = torch.distributions.MultivariateNormal(mean[:,:3], torch.exp(logvar)[:,None]*torch.eye(3, device=out.device)[None])
 
     return direction_dist
 
 
 def update_Q(actor, Q1, Q1_target, Q2, Q2_target,
-             obs, actions, next_target_vecs, next_obs, dones,
+             obs, actions, next_target_vecs, next_target_masks, next_obs, dones,
              Q1_optimizer, Q2_optimizer, gamma,
              log_alpha, weights=None):
     """
@@ -88,7 +88,9 @@ def update_Q(actor, Q1, Q1_target, Q2, Q2_target,
     actions : torch.Tensor
         The actions taken.
     next_target_vecs : torch.Tensor
-        The target vectors at the next states.
+        The target vector candidates at the next states.
+    next_target_masks : torch.Tensor
+        Boolean masks selecting valid next-state target vector candidates.
     next_obs : torch.Tensor
         The next observations.
     dones : torch.Tensor
@@ -123,7 +125,13 @@ def update_Q(actor, Q1, Q1_target, Q2, Q2_target,
         next_states = torch.cat((next_obs, torch.ones((next_obs.shape[0], 1, next_obs.shape[2], next_obs.shape[3], next_obs.shape[4]), 
                                             device=DEVICE)*next_directions[:,:,None,None,None]), dim=1)
 
-        next_rewards = distance_reward(next_directions, next_target_vecs, terminated=dones, gamma=gamma)
+        next_rewards = distance_reward(
+            next_directions,
+            next_target_vecs,
+            terminated=dones,
+            gamma=gamma,
+            valid_mask=next_target_masks,
+        )
         Q1_target_vals = Q1_target(next_states) - next_rewards.unsqueeze(-1) # vector of q-values for each choice
         Q2_target_vals = Q2_target(next_states) - next_rewards.unsqueeze(-1)
         targets = gamma * torch.logical_not(dones) * (torch.minimum(Q1_target_vals, Q2_target_vals) - log_alpha.exp() * logprobs[:,None])
@@ -178,7 +186,7 @@ def update_Q(actor, Q1, Q1_target, Q2, Q2_target,
     return td_error
 
 
-def update_actor(obs, target_vecs, dones, gamma, actor,
+def update_actor(obs, target_vecs, target_masks, dones, gamma, actor,
                  actor_optimizer, Q1, Q2, log_alpha,
                  log_alpha_optimizer, target_entropy, update_alpha=True):
     """
@@ -189,7 +197,9 @@ def update_actor(obs, target_vecs, dones, gamma, actor,
     obs : torch.Tensor
         The observations from the environment.
     target_vecs : torch.Tensor
-        The target vectors from the environment.
+        The target vector candidates from the environment.
+    target_masks : torch.Tensor
+        Boolean masks selecting valid target vector candidates.
     actor : torch.nn.Module
         The actor network.
     actor_optimizer : torch.optim.Optimizer
@@ -212,19 +222,24 @@ def update_actor(obs, target_vecs, dones, gamma, actor,
     """
 
     actor_out = actor(obs)
-    # direction_dist = sample_from_output(actor_out.detach().cpu(), random=False)
-    direction_dist = sample_from_output(actor_out, random=False)
+    direction_dist = sample_from_output(actor_out)
     directions = direction_dist.rsample()
     logprobs = direction_dist.log_prob(directions)
     directions = directions.to(DEVICE)
     logprobs = logprobs.to(DEVICE)
     # compute rewards
-    rewards = distance_reward(directions, target_vecs, terminated=dones, gamma=gamma)
+    rewards = distance_reward(
+        directions,
+        target_vecs,
+        terminated=dones,
+        gamma=gamma,
+        valid_mask=target_masks,
+    ).unsqueeze(-1)
     if gamma > 0:
         # get expected Q-vals
         current_state = torch.cat((obs, torch.ones((obs.shape[0], 1, obs.shape[2], obs.shape[3], obs.shape[4]),device=DEVICE)*directions[:,:,None,None,None]), dim=1)
-        Q1_vals = Q1(current_state)[:,0]
-        Q2_vals = Q2(current_state)[:,0]
+        Q1_vals = Q1(current_state)
+        Q2_vals = Q2(current_state)
         # entropy regularized Q values
         loss = -torch.mean(torch.minimum(Q1_vals, Q2_vals) + rewards - log_alpha.exp().detach() * logprobs[:,None]) # The loss function is multiplied by -1 to do gradient ascent instead of decent.
     else:
@@ -426,10 +441,10 @@ def train(env,
             steps_done += 1
             # take step, get observation and reward, and move index to next streamline
             next_obs, reward, terminated, truncated, info = env.step(action)
-            current_target_vector = info['current_target_vector']
-            next_target_vector = info['next_target_vector'] # this will be None only if path terminates
-            if next_target_vector is None:
-                next_target_vector = current_target_vector
+            current_target_vectors = info['current_target_vectors']
+            next_target_vectors = info['next_target_vectors'] # this will be None only if path terminates
+            if next_target_vectors is None:
+                next_target_vectors = current_target_vectors
 
             ep_return += reward.cpu().item()
 
@@ -455,25 +470,47 @@ def train(env,
             moving_avg_reward = sum(reward_cache) / len(reward_cache)
 
             # Store the transition in memory
-            memory.push(obs.cpu(), action.cpu(), next_obs.cpu(), reward.cpu(), current_target_vector.cpu(), next_target_vector.cpu(), terminated)
+            memory.push(obs.cpu(), action.cpu(), next_obs.cpu(), reward.cpu(), current_target_vectors.cpu(), next_target_vectors.cpu(), terminated)
             
             if learning_started and steps_done % update_every == 0:
                 # Perform updates once there is sufficient transitions saved.
                 for j in range(updates_per_step):
                     if isinstance(memory, ReplayBuffer):
-                        batch_obs, batch_actions, batch_next_obs, batch_rewards, batch_target_vecs, batch_next_target_vecs, batch_dones = memory.sample(batch_size, transform=True)
+                        (
+                            batch_obs,
+                            batch_actions,
+                            batch_next_obs,
+                            batch_rewards,
+                            batch_target_vecs,
+                            batch_target_masks,
+                            batch_next_target_vecs,
+                            batch_next_target_masks,
+                            batch_dones,
+                        ) = memory.sample(batch_size, transform=True)
                         if gamma > 0: # skip Q updates if gamma is 0
                             td_error = update_Q(actor, Q1, Q1_target, Q2, Q2_target,
-                                                batch_obs, batch_actions, batch_next_target_vecs,
+                                                batch_obs, batch_actions, batch_next_target_vecs, batch_next_target_masks,
                                                 batch_next_obs, batch_dones, Q1_optimizer,
                                                 Q2_optimizer, gamma, log_alpha, weights=None)
                             target_update(Q1, Q2, Q1_target, Q2_target, tau)
 
                     elif isinstance(memory, PrioritizedReplayBuffer):
-                        batch_obs, batch_actions, batch_next_obs, batch_rewards, batch_target_vecs, batch_next_target_vecs, batch_dones, weights, tree_idxs = memory.sample(batch_size, transform=True)
+                        (
+                            batch_obs,
+                            batch_actions,
+                            batch_next_obs,
+                            batch_rewards,
+                            batch_target_vecs,
+                            batch_target_masks,
+                            batch_next_target_vecs,
+                            batch_next_target_masks,
+                            batch_dones,
+                            weights,
+                            tree_idxs,
+                        ) = memory.sample(batch_size, transform=True)
                         if gamma > 0:
                             td_error = update_Q(actor, Q1, Q1_target, Q2, Q2_target,
-                                                batch_obs, batch_actions, batch_next_target_vecs,
+                                                batch_obs, batch_actions, batch_next_target_vecs, batch_next_target_masks,
                                                 batch_next_obs, batch_dones, Q1_optimizer,
                                                 Q2_optimizer, gamma, log_alpha, weights=weights)
                             target_update(Q1, Q2, Q1_target, Q2_target, tau)
@@ -482,10 +519,15 @@ def train(env,
                         raise RuntimeError("Unknown memory buffer")
                         
                     # Perform one step of optimization on the policy network
-                    loss = update_actor(batch_obs, batch_target_vecs, batch_dones, gamma,
+                    loss = update_actor(batch_obs, batch_target_vecs, batch_target_masks, batch_dones, gamma,
                                         actor, actor_optimizer, Q1, Q2, log_alpha,
                                         log_alpha_optimizer, target_entropy, update_alpha=update_alpha)
-                    policy_loss.append(loss)
+                    
+                    #TODO: Should we update priorities in memory based on reward if not using TD error?
+                    # if gamma == 0:
+                    #     if isinstance(memory, PrioritizedReplayBuffer):
+                    #         memory.update_priorities(tree_idxs, batch_rewards.cpu().numpy())
+                    # policy_loss.append(loss)
 
                     
             if info["terminate_episode"]:

@@ -11,6 +11,99 @@ from neurotrack.training.tree import SumTree
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+
+def _normalize_target_vectors(target_vectors):
+    """Convert a target vector set to a contiguous CPU tensor of shape (K, 3)."""
+    if isinstance(target_vectors, torch.Tensor):
+        target_t = target_vectors.detach().to(device="cpu", dtype=torch.float32)
+    else:
+        target_t = torch.as_tensor(target_vectors, dtype=torch.float32, device="cpu")
+    if target_t.ndim == 1:
+        target_t = target_t.unsqueeze(0)
+    if target_t.ndim != 2 or target_t.shape[1] != 3:
+        raise ValueError(f"target_vectors must have shape (K, 3), got {tuple(target_t.shape)}")
+    return target_t.contiguous()
+
+
+def _pad_target_vector_sets(target_vector_sets, device):
+    """Pad a batch of variable-length target vector sets and return a validity mask."""
+    batch_size = len(target_vector_sets)
+    if batch_size == 0:
+        return (
+            torch.empty((0, 0, 3), dtype=torch.float32, device=device),
+            torch.empty((0, 0), dtype=torch.bool, device=device),
+        )
+
+    max_targets = max(target_vectors.shape[0] for target_vectors in target_vector_sets)
+    padded = torch.zeros((batch_size, max_targets, 3), dtype=torch.float32, device=device)
+    valid_mask = torch.zeros((batch_size, max_targets), dtype=torch.bool, device=device)
+
+    for row, target_vectors in enumerate(target_vector_sets):
+        target_vectors = target_vectors.to(device=device)
+        count = target_vectors.shape[0]
+        padded[row, :count] = target_vectors
+        valid_mask[row, :count] = True
+
+    return padded, valid_mask
+
+
+def _permute_vector_components(vectors, component_indices):
+    """Permute the coordinate dimension of action or target-vector tensors."""
+    index = torch.tensor(component_indices, dtype=torch.long, device=vectors.device)
+    return vectors.index_select(-1, index)
+
+
+def _transform_batch(
+    obs,
+    actions,
+    next_obs,
+    current_target_vectors,
+    current_target_mask,
+    next_target_vectors,
+    next_target_mask,
+    include_z_flip,
+):
+    """Apply the same spatial augmentation to observations, actions, and target vectors."""
+    perm = torch.randperm(2) + 3
+    obs = obs.permute([0, 1, 2, *perm])
+    next_obs = next_obs.permute([0, 1, 2, *perm])
+    i, j = [x.item() - 2 for x in perm]
+    component_indices = [0, i, j]
+    actions = _permute_vector_components(actions, component_indices)
+    current_target_vectors = _permute_vector_components(current_target_vectors, component_indices)
+    next_target_vectors = _permute_vector_components(next_target_vectors, component_indices)
+
+    if torch.rand(1) > 0.5:
+        obs = obs.flip(-1)
+        next_obs = next_obs.flip(-1)
+        actions[..., -1] = -actions[..., -1]
+        current_target_vectors[..., -1] = -current_target_vectors[..., -1]
+        next_target_vectors[..., -1] = -next_target_vectors[..., -1]
+
+    if torch.rand(1) > 0.5:
+        obs = obs.flip(-2)
+        next_obs = next_obs.flip(-2)
+        actions[..., -2] = -actions[..., -2]
+        current_target_vectors[..., -2] = -current_target_vectors[..., -2]
+        next_target_vectors[..., -2] = -next_target_vectors[..., -2]
+
+    if include_z_flip and torch.rand(1) > 0.5:
+        obs = obs.flip(-3)
+        next_obs = next_obs.flip(-3)
+        actions[..., -3] = -actions[..., -3]
+        current_target_vectors[..., -3] = -current_target_vectors[..., -3]
+        next_target_vectors[..., -3] = -next_target_vectors[..., -3]
+
+    return (
+        obs,
+        actions,
+        next_obs,
+        current_target_vectors,
+        current_target_mask,
+        next_target_vectors,
+        next_target_mask,
+    )
+
 class ReplayBuffer():
     """
     A buffer to store and sample transitions for reinforcement learning.
@@ -54,22 +147,22 @@ class ReplayBuffer():
         self.actions = torch.empty((capacity, *action_shape), dtype=torch.float32, device='cpu')
         self.next_obs = torch.empty((capacity, *obs_shape), dtype=torch.float32, device='cpu')
         self.rewards = torch.empty((capacity, 1), dtype=torch.float32, device='cpu')
-        self.current_target_vectors = torch.empty((capacity, *action_shape), dtype=torch.float32, device='cpu')
-        self.next_target_vectors = torch.empty((capacity, *action_shape), dtype=torch.float32, device='cpu')
+        self.current_target_vectors = [None] * capacity
+        self.next_target_vectors = [None] * capacity
         self.dones = torch.empty((capacity, 1), dtype=torch.bool, device='cpu')
 
         self.idx = 0
         self.full = False
         self.capacity = capacity
 
-    def push(self, obs, action, next_obs, reward, current_target_vector, next_target_vector, done):
+    def push(self, obs, action, next_obs, reward, current_target_vectors, next_target_vectors, done):
         """Save a transition to replay memory"""
         self.obs[self.idx] = obs
         self.actions[self.idx] = action
         self.next_obs[self.idx] = next_obs
         self.rewards[self.idx] = reward
-        self.current_target_vectors[self.idx] = current_target_vector
-        self.next_target_vectors[self.idx] = next_target_vector
+        self.current_target_vectors[self.idx] = _normalize_target_vectors(current_target_vectors)
+        self.next_target_vectors[self.idx] = _normalize_target_vectors(next_target_vectors)
         self.dones[self.idx] = done
 
         self.idx = (self.idx + 1) % self.capacity
@@ -87,45 +180,39 @@ class ReplayBuffer():
         actions = self.actions[idxs].to(device=DEVICE)
         next_obs = self.next_obs[idxs].to(device=DEVICE)
         rewards = self.rewards[idxs].to(device=DEVICE)
-        current_target_vectors = self.current_target_vectors[idxs].to(device=DEVICE)
-        next_target_vectors = self.next_target_vectors[idxs].to(device=DEVICE)
+        current_target_vectors, current_target_mask = _pad_target_vector_sets(
+            [self.current_target_vectors[int(idx)] for idx in idxs.tolist()],
+            device=DEVICE,
+        )
+        next_target_vectors, next_target_mask = _pad_target_vector_sets(
+            [self.next_target_vectors[int(idx)] for idx in idxs.tolist()],
+            device=DEVICE,
+        )
         dones = self.dones[idxs].to(device=DEVICE)
 
         if transform:
-            # perm = torch.randperm(3) + 2
-            # obs = obs.permute([0, 1, *perm])
-            # next_obs = next_obs.permute([0, 1, *perm])
-            # i,j,k = [x.item() - 2 for x in perm]
-            # actions = torch.stack((actions[:,i], actions[:,j], actions[:,k]), dim=1)
-            # current_target_vectors = torch.stack((current_target_vectors[:,i], current_target_vectors[:,j], current_target_vectors[:,k]), dim=1)
-            # next_target_vectors = torch.stack((next_target_vectors[:,i], next_target_vectors[:,j], next_target_vectors[:,k]), dim=1)
-            perm = torch.randperm(2) + 3
-            obs = obs.permute([0, 1, 2, *perm])
-            next_obs = next_obs.permute([0, 1, 2, *perm])
-            i,j = [x.item() - 2 for x in perm]
-            actions = torch.stack((actions[:,0], actions[:,i], actions[:,j]), dim=1)
-            current_target_vectors = torch.stack((current_target_vectors[:,0], current_target_vectors[:,i], current_target_vectors[:,j]), dim=1)
-            next_target_vectors = torch.stack((next_target_vectors[:,0], next_target_vectors[:,i], next_target_vectors[:,j]), dim=1)
-            if torch.rand(1)>0.5:
-                obs = obs.flip(-1) # x-axis flip
-                next_obs = next_obs.flip(-1)
-                actions[:,-1] = -1*actions[:,-1]
-                current_target_vectors[:,-1] = -1*current_target_vectors[:,-1]
-                next_target_vectors[:,-1] = -1*next_target_vectors[:,-1]
-            if torch.rand(1)>0.5: # y-axis flip
-                obs = obs.flip(-2)
-                next_obs = next_obs.flip(-2)
-                actions[:,-2] = -1*actions[:,-2]
-                current_target_vectors[:,-2] = -1*current_target_vectors[:,-2]
-                next_target_vectors[:,-2] = -1*next_target_vectors[:,-2]
-            # if torch.rand(1)>0.5: # z-axis flip
-            #     obs = obs.flip(-3)
-            #     next_obs = next_obs.flip(-3)
-            #     actions[:,-3] = -1*actions[:,-3]
-            #     current_target_vectors[:,-3] = -1*current_target_vectors[:,-3]
-            #     next_target_vectors[:,-3] = -1*next_target_vectors[:,-3]
+            obs, actions, next_obs, current_target_vectors, current_target_mask, next_target_vectors, next_target_mask = _transform_batch(
+                obs,
+                actions,
+                next_obs,
+                current_target_vectors,
+                current_target_mask,
+                next_target_vectors,
+                next_target_mask,
+                include_z_flip=False,
+            )
 
-        return obs, actions, next_obs, rewards, current_target_vectors, next_target_vectors, dones
+        return (
+            obs,
+            actions,
+            next_obs,
+            rewards,
+            current_target_vectors,
+            current_target_mask,
+            next_target_vectors,
+            next_target_mask,
+            dones,
+        )
 
     def __len__(self):
         return self.capacity if self.full else self.idx
@@ -194,15 +281,15 @@ class PrioritizedReplayBuffer:
         self.actions = torch.empty((capacity, *action_shape), dtype=torch.float32, device='cpu')
         self.next_obs = torch.empty((capacity, *obs_shape), dtype=torch.float32, device='cpu')
         self.rewards = torch.empty((capacity, 1), dtype=torch.float32, device='cpu')
-        self.current_target_vectors = torch.empty((capacity, *action_shape), dtype=torch.float32, device='cpu')
-        self.next_target_vectors = torch.empty((capacity, *action_shape), dtype=torch.float32, device='cpu')
+        self.current_target_vectors = [None] * capacity
+        self.next_target_vectors = [None] * capacity
         self.dones = torch.empty((capacity, 1), dtype=torch.bool, device='cpu')
 
         self.idx = 0
         self.full = False
         self.capacity = capacity
     
-    def push(self, obs, action, next_obs, reward, current_target_vector, next_target_vector, done):
+    def push(self, obs, action, next_obs, reward, current_target_vectors, next_target_vectors, done):
         """
         Add a new experience to the buffer.
         Parameters
@@ -216,9 +303,9 @@ class PrioritizedReplayBuffer:
         reward : float
             The reward received after taking the action.
         current_target_vectors : object
-            The current target vector associated with the transition.
+            The current target vector candidates associated with the transition.
         next_target_vectors : object
-            The next target vector associated with the transition.
+            The next target vector candidates associated with the transition.
         done : bool
             Whether the episode has ended.
         """
@@ -229,8 +316,8 @@ class PrioritizedReplayBuffer:
         self.actions[self.idx] = action
         self.next_obs[self.idx] = next_obs
         self.rewards[self.idx] = reward
-        self.current_target_vectors[self.idx] = current_target_vector
-        self.next_target_vectors[self.idx] = next_target_vector
+        self.current_target_vectors[self.idx] = _normalize_target_vectors(current_target_vectors)
+        self.next_target_vectors[self.idx] = _normalize_target_vectors(next_target_vectors)
         self.dones[self.idx] = done
 
         self.idx = (self.idx + 1) % self.capacity
@@ -309,45 +396,41 @@ class PrioritizedReplayBuffer:
         actions = self.actions[sample_idxs].to(DEVICE)
         next_obs = self.next_obs[sample_idxs].to(DEVICE)
         rewards = self.rewards[sample_idxs].to(DEVICE)
-        current_target_vectors = self.current_target_vectors[sample_idxs].to(DEVICE)
-        next_target_vectors = self.next_target_vectors[sample_idxs].to(DEVICE)
+        current_target_vectors, current_target_mask = _pad_target_vector_sets(
+            [self.current_target_vectors[int(idx)] for idx in sample_idxs],
+            device=DEVICE,
+        )
+        next_target_vectors, next_target_mask = _pad_target_vector_sets(
+            [self.next_target_vectors[int(idx)] for idx in sample_idxs],
+            device=DEVICE,
+        )
         dones = self.dones[sample_idxs].to(DEVICE)
 
         if transform:
-            # perm = torch.randperm(3) + 2
-            # obs = obs.permute([0, 1, *perm])
-            # next_obs = next_obs.permute([0, 1, *perm])
-            # i,j,k = [x.item() - 2 for x in perm]
-            # actions = torch.stack((actions[:,i], actions[:,j], actions[:,k]), dim=1)
-            # current_target_vectors = torch.stack((current_target_vectors[:,i], current_target_vectors[:,j], current_target_vectors[:,k]), dim=1)
-            # next_target_vectors = torch.stack((next_target_vectors[:,i], next_target_vectors[:,j], next_target_vectors[:,k]), dim=1)
-            perm = torch.randperm(2) + 3
-            obs = obs.permute([0, 1, 2, *perm])
-            next_obs = next_obs.permute([0, 1, 2, *perm])
-            i,j = [x.item() - 2 for x in perm]
-            actions = torch.stack((actions[:,0], actions[:,i], actions[:,j]), dim=1)
-            current_target_vectors = torch.stack((current_target_vectors[:,0], current_target_vectors[:,i], current_target_vectors[:,j]), dim=1)
-            next_target_vectors = torch.stack((next_target_vectors[:,0], next_target_vectors[:,i], next_target_vectors[:,j]), dim=1)
-            if torch.rand(1)>0.5: # x-axis flip
-                obs = obs.flip(-1)
-                next_obs = next_obs.flip(-1)
-                actions[:,-1] = -1*actions[:,-1]
-                current_target_vectors[:,-1] = -1*current_target_vectors[:,-1]
-                next_target_vectors[:,-1] = -1*next_target_vectors[:,-1]
-            if torch.rand(1)>0.5: # y-axis flip
-                obs = obs.flip(-2)
-                next_obs = next_obs.flip(-2)
-                actions[:,-2] = -1*actions[:,-2]
-                current_target_vectors[:,-2] = -1*current_target_vectors[:,-2]
-                next_target_vectors[:,-2] = -1*next_target_vectors[:,-2]
-            if torch.rand(1)>0.5: # z-axis flip
-                obs = obs.flip(-3)
-                next_obs = next_obs.flip(-3)
-                actions[:,-3] = -1*actions[:,-3]
-                current_target_vectors[:,-3] = -1*current_target_vectors[:,-3]
-                next_target_vectors[:,-3] = -1*next_target_vectors[:,-3]
+            obs, actions, next_obs, current_target_vectors, current_target_mask, next_target_vectors, next_target_mask = _transform_batch(
+                obs,
+                actions,
+                next_obs,
+                current_target_vectors,
+                current_target_mask,
+                next_target_vectors,
+                next_target_mask,
+                include_z_flip=True,
+            )
 
-        return obs, actions, next_obs, rewards, current_target_vectors, next_target_vectors, dones, weights, tree_idxs
+        return (
+            obs,
+            actions,
+            next_obs,
+            rewards,
+            current_target_vectors,
+            current_target_mask,
+            next_target_vectors,
+            next_target_mask,
+            dones,
+            weights,
+            tree_idxs,
+        )
     
 
     def update_priorities(self, data_idxs, priorities):

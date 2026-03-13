@@ -446,7 +446,7 @@ class DataGenerator:
                     attempts += 1
                     
                     # Get all neighbors of the branch point
-                    neighbors = edge_list[start_node]
+                    neighbors = adj_dict[start_node]
                     
                     # Initialize the path with the branch point
                     path = [start_node]
@@ -475,7 +475,7 @@ class DataGenerator:
                         # Continue walking this branch until we hit the limit or an endpoint
                         # while len(branch_path) < edges_per_branch and remaining_nodes > 0:
                         while branch_len < len_per_branch and remaining_len > 0:
-                            next_neighbors = [n for n in edge_list[current_node] if n not in path]
+                            next_neighbors = [n for n in adj_dict[current_node] if n not in path]
                             
                             # Stop if we reach an endpoint or have no more neighbors
                             if not next_neighbors:
@@ -512,7 +512,7 @@ class DataGenerator:
                         # Get all neighbors for current active nodes
                         all_next_nodes = []
                         for current_node in current_nodes:
-                            neighbors = edge_list[current_node]
+                            neighbors = adj_dict[current_node]
                             next_nodes = [n for n in neighbors if n not in path]
                             all_next_nodes.extend(next_nodes)
                         
@@ -531,7 +531,7 @@ class DataGenerator:
                         # Update current_nodes - keep nodes with unexplored neighbors
                         new_current_nodes = []
                         for current_node in current_nodes:
-                            neighbors = edge_list[current_node]
+                            neighbors = adj_dict[current_node]
                             available_neighbors = [n for n in neighbors if n not in path]
                             # Keep node active if it has unexplored neighbors and isn't an endpoint
                             if available_neighbors and current_node not in end_points:

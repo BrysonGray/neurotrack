@@ -389,6 +389,9 @@ def train(env,
     pause_after_step : bool, optional
         Whether to pause after each step (default is False).
     """
+    # TODO: get a warm start by adding transitions to memory from ground truth streamlines.
+    # This could be done by running the environment with an oracle that follows the ground truth streamlines and adding those transitions to the replay buffer before training starts.
+    # This would help the agent learn from good examples and potentially speed up training, especially in the early stages when it is mostly taking random actions.
 
     COMPLEXITY_INCREASE_FREQUENCY = 300  # Incease complexity after this many episodes
     COMPLEXITY_INCREMENT = 0.1  # Amount to increase complexity by
@@ -424,8 +427,10 @@ def train(env,
         
         env.reset()
         policy_loss = []
-        obs = env.get_state()
+        ep_variance = []
+        ep_rewards = []
         ep_return = 0
+        obs = env.get_state()
         for t in count():
             # Determine if we have enough samples to start learning updates
             learning_started = steps_done >= update_after
@@ -437,7 +442,8 @@ def train(env,
                 actor_out = actor(obs.to(DEVICE))
                 direction_dist = sample_from_output(actor_out.detach().cpu())
                 action = direction_dist.rsample()[0]
-                
+                var = direction_dist.covariance_matrix.diagonal().mean().item()
+                ep_variance.append(var)
             steps_done += 1
             # take step, get observation and reward, and move index to next streamline
             next_obs, reward, terminated, truncated, info = env.step(action)
@@ -446,6 +452,7 @@ def train(env,
             if next_target_vectors is None:
                 next_target_vectors = current_target_vectors
 
+            ep_rewards.append(reward.cpu().item())
             ep_return += reward.cpu().item()
 
             # Show state after every step
@@ -522,12 +529,12 @@ def train(env,
                     loss = update_actor(batch_obs, batch_target_vecs, batch_target_masks, batch_dones, gamma,
                                         actor, actor_optimizer, Q1, Q2, log_alpha,
                                         log_alpha_optimizer, target_entropy, update_alpha=update_alpha)
+                    policy_loss.append(loss)
                     
                     #TODO: Should we update priorities in memory based on reward if not using TD error?
                     # if gamma == 0:
                     #     if isinstance(memory, PrioritizedReplayBuffer):
                     #         memory.update_priorities(tree_idxs, batch_rewards.cpu().numpy())
-                    # policy_loss.append(loss)
 
                     
             if info["terminate_episode"]:
@@ -587,14 +594,15 @@ def train(env,
                         with open(csv_file_path, "a", newline='') as f:
                             writer = csv.writer(f)
                             if not file_exists:
-                                writer.writerow(['episode', 'image_file', 'num_branches', 'episode_return', 'episode_avg_policy_loss', 'moving_avg_reward', 'complexity'])
+                                writer.writerow(['episode', 'image_file', 'num_branches', 'episode_avg_reward', 'episode_avg_var', 'episode_return', 'episode_avg_policy_loss', 'moving_avg_reward', 'complexity'])
                             num_roots = int(env.roots.shape[0])
                             num_branches = len(env.finished_paths) - num_roots
                             writer.writerow([
                                 ep,
                                 env.current_neuron_info["neuron_name"],
                                 num_branches,
-                                len(env.finished_paths),
+                                np.mean(ep_rewards) if ep_rewards else 0,
+                                np.mean(ep_variance) if ep_variance else 0,
                                 ep_return,
                                 episode_avg_loss,
                                 moving_avg_reward,

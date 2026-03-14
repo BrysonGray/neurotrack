@@ -135,7 +135,9 @@ class NeuronPatchDataset(TorchDataset):
         # Cache for currently loaded image
         self._cached_image_idx: Optional[int] = None
         self._cached_image: Optional[torch.Tensor] = None
-        self._cached_swc_data: Optional[Dict] = None
+        self._cached_swc_data: Optional[List] = None
+        self._cached_swc_array: Optional[np.ndarray] = None
+        self._cached_swc_adj_dict: Optional[Dict[int, List[int]]] = None
         self._warned_center_seed_fallback_no_swc = False
         
         # Total dataset size = number of images * patches per image (or just images if not cropping)
@@ -169,7 +171,7 @@ class NeuronPatchDataset(TorchDataset):
         """Return root node coordinates from SWC as seeds in (z, y, x) order."""
         if swc_data is None or len(swc_data) == 0:
             return None
-        swc_array = np.array(swc_data)
+        swc_array = np.asarray(swc_data)
         root_rows = swc_array[swc_array[:, 6] == -1]
         if len(root_rows) == 0:
             return None
@@ -180,6 +182,81 @@ class NeuronPatchDataset(TorchDataset):
     def _get_center_seed_point_from_shape(shape_zyx: torch.Size) -> torch.Tensor:
         """Return one center seed in (z, y, x) for a 3D shape."""
         return (torch.as_tensor(shape_zyx, dtype=torch.float32) / 2.0).unsqueeze(0)
+
+    @staticmethod
+    def _filter_adjacency(
+        adjacency: Optional[Dict[int, List[int]]],
+        node_ids: set[int],
+    ) -> Dict[int, List[int]]:
+        """Restrict an adjacency map to the given node-id subset."""
+        if not adjacency:
+            return {}
+        filtered: Dict[int, List[int]] = {}
+        for node_id in node_ids:
+            neighbors = adjacency.get(int(node_id), [])
+            filtered[int(node_id)] = [int(neighbor) for neighbor in neighbors if int(neighbor) in node_ids]
+        return filtered
+
+    @staticmethod
+    def _segments_from_swc_rows(
+        swc_rows: Union[List, np.ndarray],
+        adjacency: Optional[Dict[int, List[int]]] = None,
+        transpose: bool = True,
+    ) -> np.ndarray:
+        """Build edge segments from SWC rows as an array with shape (N, 2, 4)."""
+        swc_array = np.asarray(swc_rows, dtype=np.float32)
+        if swc_array.size == 0:
+            return np.empty((0, 2, 4), dtype=np.float32)
+
+        if swc_array.ndim != 2 or swc_array.shape[1] < 7:
+            raise ValueError(f"Expected SWC rows with shape (M, >=7), got {tuple(swc_array.shape)}")
+
+        node_ids = swc_array[:, 0].astype(np.int64)
+        id_to_idx = {int(node_id): idx for idx, node_id in enumerate(node_ids.tolist())}
+
+        if adjacency:
+            parent_idxs: List[int] = []
+            child_idxs: List[int] = []
+            for parent_id, neighbors in adjacency.items():
+                parent_idx = id_to_idx.get(int(parent_id))
+                if parent_idx is None:
+                    continue
+                for child_id in neighbors:
+                    child_idx = id_to_idx.get(int(child_id))
+                    if child_idx is None or child_idx <= parent_idx:
+                        continue
+                    parent_idxs.append(parent_idx)
+                    child_idxs.append(child_idx)
+            if len(parent_idxs) == 0:
+                return np.empty((0, 2, 4), dtype=np.float32)
+            parent_idx_arr = np.asarray(parent_idxs, dtype=np.int64)
+            child_idx_arr = np.asarray(child_idxs, dtype=np.int64)
+        else:
+            parent_ids = swc_array[:, 6].astype(np.int64)
+            sort_idx = np.argsort(node_ids, kind="stable")
+            sorted_ids = node_ids[sort_idx]
+
+            loc = np.searchsorted(sorted_ids, parent_ids, side="left")
+            in_bounds = loc < sorted_ids.shape[0]
+            valid_parent = np.zeros_like(in_bounds, dtype=bool)
+            valid_parent[in_bounds] = sorted_ids[loc[in_bounds]] == parent_ids[in_bounds]
+            edge_mask = (parent_ids != -1) & valid_parent
+            if not np.any(edge_mask):
+                return np.empty((0, 2, 4), dtype=np.float32)
+
+            child_idx_arr = np.nonzero(edge_mask)[0].astype(np.int64)
+            parent_idx_arr = sort_idx[loc[child_idx_arr]].astype(np.int64)
+
+        segments = np.stack(
+            (swc_array[parent_idx_arr, 2:6], swc_array[child_idx_arr, 2:6]),
+            axis=1,
+        ).astype(np.float32, copy=False)
+
+        if transpose:
+            xyz = segments[:, :, :3][:, :, ::-1]
+            segments = np.concatenate((xyz, segments[:, :, 3:4]), axis=-1)
+
+        return segments
 
     @staticmethod
     def _find_path_ids(
@@ -224,6 +301,7 @@ class NeuronPatchDataset(TorchDataset):
         subtree: List,
         seed_node_id: int,
         spatial_shape_zyx: torch.Size,
+        adjacency: Optional[Dict[int, List[int]]] = None,
     ) -> torch.Tensor:
         """Build path channel from smallest-id subtree node to the seed node."""
         spatial_shape = tuple(int(v) for v in spatial_shape_zyx)
@@ -246,8 +324,9 @@ class NeuronPatchDataset(TorchDataset):
             return path_image.data[0]
 
         start_node_id = min(id_to_node.keys())
+        adjacency_map = adjacency if adjacency is not None else load.adjacency_dict(subtree)
         path_ids = self._find_path_ids(
-            adjacency=load.adjacency_dict(subtree),
+            adjacency=adjacency_map,
             start_node_id=start_node_id,
             target_node_id=seed_id,
         )
@@ -297,7 +376,7 @@ class NeuronPatchDataset(TorchDataset):
         
         return img
     
-    def _load_swc(self, idx: int) -> Dict:
+    def _load_swc(self, idx: int) -> List:
         """Load SWC neuron data."""
         if not self.has_swc:
             raise RuntimeError("SWC data requested but dataset was initialized without SWC files")
@@ -307,36 +386,57 @@ class NeuronPatchDataset(TorchDataset):
         
         return swc_data
     
-    def _extract_subtree(self, swc_data: List, center_node: np.ndarray) -> List:
+    def _extract_subtree(
+        self,
+        swc_data: Union[List, np.ndarray],
+        center_node: np.ndarray,
+        swc_adj_dict: Optional[Dict[int, List[int]]] = None,
+    ) -> List:
         """Extract the connected subtree within crop bounds around a center SWC node."""
-        swc_array = np.array(swc_data)
+        swc_array = np.asarray(swc_data)
         center_point = center_node[2:5]
         in_box_mask = np.all(
             (swc_array[:, 2:5] >= (center_point - self.crop_size/2)) &
             (swc_array[:, 2:5] <= (center_point + self.crop_size/2)),
             axis=1
         )
-        subtree = swc_array[in_box_mask].tolist()
-        subtree_adj_dict = load.adjacency_dict(subtree)
-        # only keep tree connected to the center node
+        in_box_nodes = swc_array[in_box_mask]
+        if in_box_nodes.shape[0] == 0:
+            return []
+
+        if swc_adj_dict is None:
+            swc_adj_dict = load.adjacency_dict(swc_array)
+
+        # Keep only the connected component containing center_id under in-box node constraints.
+        in_box_ids = set(in_box_nodes[:, 0].astype(np.int64).tolist())
         center_id = int(center_node[0])
+        if center_id not in in_box_ids:
+            return in_box_nodes.tolist()
+
         visited = set()
         to_visit = [center_id]
         while to_visit:
             node = to_visit.pop()
-            if node not in visited:
-                visited.add(node)
-                neighbors = subtree_adj_dict.get(node, [])
-                to_visit.extend(neighbors)
-        subtree = [node for node in subtree if int(node[0]) in visited]
+            if node in visited:
+                continue
+            visited.add(node)
+            neighbors = swc_adj_dict.get(node, [])
+            for neighbor in neighbors:
+                if neighbor in in_box_ids and neighbor not in visited:
+                    to_visit.append(neighbor)
+
+        connected_ids = np.array(list(visited), dtype=np.int64)
+        connected_mask = np.isin(in_box_nodes[:, 0].astype(np.int64), connected_ids)
+        subtree = in_box_nodes[connected_mask].tolist()
 
         return subtree
     
     def _extract_random_patch(
         self,
         image: torch.Tensor,
-        swc_data: List,
+        swc_data: Union[List, np.ndarray],
         patch_rng: np.random.Generator,
+        swc_adj_dict: Optional[Dict[int, List[int]]] = None,
     ) -> Dict[str, torch.Tensor]:
         """
         Extract a cropped patch using RNG-selected center with optional root bias.
@@ -358,7 +458,7 @@ class NeuronPatchDataset(TorchDataset):
             - 'neuron_mask': Neuron area mask
         """
         # Choose center node (default random over all nodes, with optional root bias)
-        swc_array = np.array(swc_data)
+        swc_array = np.asarray(swc_data)
         center_node = swc_array[patch_rng.integers(len(swc_array))]
         root_prob = self.root_sampling_probability
         if root_prob is not None and root_prob > 0.0 and patch_rng.random() < root_prob:
@@ -367,10 +467,16 @@ class NeuronPatchDataset(TorchDataset):
                 center_node = root_nodes[patch_rng.integers(len(root_nodes))]
         seed_node_id = int(center_node[0])
 
-        subtree = self._extract_subtree(swc_data, center_node=center_node)
+        subtree = self._extract_subtree(swc_array, center_node=center_node, swc_adj_dict=swc_adj_dict)
     
 
         cropped_img, shifted_subtree = crop_around_subtree(image, subtree, center_node=center_node, size=self.crop_size)
+
+        node_ids = {int(node[0]) for node in shifted_subtree}
+        if swc_adj_dict is not None:
+            subtree_adj_dict = self._filter_adjacency(swc_adj_dict, node_ids)
+        else:
+            subtree_adj_dict = load.adjacency_dict(shifted_subtree)
 
         seed_xyz = None
         for node in shifted_subtree:
@@ -385,20 +491,27 @@ class NeuronPatchDataset(TorchDataset):
             neuron_area_mask = None
     
         else:    
-            # create mask
-            sections, _ = load.parse_swc(shifted_subtree, verbose=False, transpose=True)
-            neuron_area_mask = self.renderer.draw_density(sections, cropped_img.shape[-3:], width=35.0, mask=True)
-            neuron_area_mask = neuron_area_mask.data
+            # Draw masks from SWC segments and reuse a single traversal when both widths are needed.
+            segments = self._segments_from_swc_rows(shifted_subtree, adjacency=subtree_adj_dict, transpose=True)
             if self.alpha < 1.0:
-                neuron_mask = self.renderer.draw_density(sections, cropped_img.shape[-3:], width=3.0, mask=True)
+                neuron_area_img, neuron_mask = self.renderer.draw_density_pair(
+                    segments,
+                    cropped_img.shape[-3:],
+                    widths=(35.0, 3.0),
+                    mask=True,
+                )
+                neuron_area_mask = neuron_area_img.data
                 image = self.alpha * cropped_img + (1 - self.alpha) * neuron_mask.data
             else:
+                neuron_area_img = self.renderer.draw_density(segments, cropped_img.shape[-3:], width=35.0, mask=True)
+                neuron_area_mask = neuron_area_img.data
                 image = cropped_img
 
         path_channel = self._build_predicted_path_channel(
             subtree=shifted_subtree,
             seed_node_id=seed_node_id,
             spatial_shape_zyx=cropped_img.shape[-3:],
+            adjacency=subtree_adj_dict,
         )
         image = self._append_path_channel(image, path_channel=path_channel)
 
@@ -406,6 +519,7 @@ class NeuronPatchDataset(TorchDataset):
         return {
             'image': image,
             'neuron_tree': shifted_subtree,
+            'adj_dict': subtree_adj_dict,
             'neuron_mask': neuron_area_mask,
             'seed_point_xyz': seed_xyz,
             'seed_node_id': seed_node_id,
@@ -448,13 +562,20 @@ class NeuronPatchDataset(TorchDataset):
             if self._cached_image_idx != image_idx:
                 self._cached_image = self._load_image(image_idx)
                 self._cached_swc_data = self._load_swc(image_idx)
+                self._cached_swc_array = np.asarray(self._cached_swc_data, dtype=np.float32)
+                self._cached_swc_adj_dict = load.adjacency_dict(self._cached_swc_array)
                 self._cached_image_idx = image_idx
+
+            swc_data = self._cached_swc_array if self._cached_swc_array is not None else self._cached_swc_data
+            if swc_data is None:
+                raise RuntimeError("SWC cache is unexpectedly empty for crop_patches mode")
             
             # Extract patch using the deterministic RNG
             patch = self._extract_random_patch(
                 self._cached_image, 
-                self._cached_swc_data,
+                swc_data,
                 patch_rng,
+                swc_adj_dict=self._cached_swc_adj_dict,
             )
 
             seed_xyz = patch.pop('seed_point_xyz')
@@ -475,19 +596,35 @@ class NeuronPatchDataset(TorchDataset):
             if self._cached_image_idx != image_idx:
                 self._cached_image = self._load_image(image_idx)
                 self._cached_swc_data = self._load_swc(image_idx) if self.has_swc else None
+                if self._cached_swc_data is not None:
+                    self._cached_swc_array = np.asarray(self._cached_swc_data, dtype=np.float32)
+                    self._cached_swc_adj_dict = load.adjacency_dict(self._cached_swc_array)
+                else:
+                    self._cached_swc_array = None
+                    self._cached_swc_adj_dict = None
                 self._cached_image_idx = image_idx
 
             if self.has_swc and not self.inference_mode:
-                # Create full neuron mask and composite
-                sections, _ = load.parse_swc(self._cached_swc_data, verbose=False, transpose=True)
-                neuron_area_mask = self.renderer.draw_density(sections, self._cached_image.shape[-3:], width=35.0, mask=True)
+                # Create full neuron mask and composite directly from cached SWC segments.
+                swc_source = self._cached_swc_array if self._cached_swc_array is not None else self._cached_swc_data
+                segments = self._segments_from_swc_rows(
+                    swc_source,
+                    adjacency=self._cached_swc_adj_dict,
+                    transpose=True,
+                )
                 if self.alpha < 1.0:
-                    neuron_mask = self.renderer.draw_density(sections, self._cached_image.shape[-3:], width=3.0, mask=True)
+                    neuron_area_img, neuron_mask = self.renderer.draw_density_pair(
+                        segments,
+                        self._cached_image.shape[-3:],
+                        widths=(35.0, 3.0),
+                        mask=True,
+                    )
                     composite_img = self.alpha * self._cached_image + (1 - self.alpha) * neuron_mask.data
                 else:
+                    neuron_area_img = self.renderer.draw_density(segments, self._cached_image.shape[-3:], width=35.0, mask=True)
                     composite_img = self._cached_image
                 neuron_tree = self._cached_swc_data
-                neuron_mask_data = neuron_area_mask.data
+                neuron_mask_data = neuron_area_img.data
                 neuron_name = self.swc_files[image_idx].stem
             else:
                 composite_img = self._cached_image

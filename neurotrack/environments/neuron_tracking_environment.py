@@ -167,9 +167,16 @@ class NeuronTrackingEnvironment:
                 self.neuron_mask = self.neuron_mask[0]  # Remove channel dimension if present
 
             # Get subtree - already in proper format from dataset
-            subtree = torch.tensor(neuron_tree_data)  # Already in x,y,z order
-            self.adj_dict = load.adjacency_dict(subtree)
-            self.full_tree = subtree
+            subtree = torch.as_tensor(neuron_tree_data, dtype=torch.float32)  # Already in x,y,z order
+            adj_dict_data = patch_data.get('adj_dict', None)
+            if adj_dict_data is not None:
+                self.adj_dict = {
+                    int(node_id): [int(neighbor) for neighbor in neighbors]
+                    for node_id, neighbors in adj_dict_data.items()
+                }
+            else:
+                self.adj_dict = load.adjacency_dict(subtree)
+            self.full_tree = subtree.clone()
             self.full_tree[:, 2:5] = self.full_tree[:, 2:5].flip(dims=(1,))  # Convert to z, y, x order
             self.unvisited_tree = self.full_tree.clone()
             self.id_to_idx = {int(node_id): idx for idx, node_id in enumerate(self.unvisited_tree[:, 0].tolist())}
@@ -562,7 +569,7 @@ class NeuronTrackingEnvironment:
         return observation, reward, terminated, truncated, info
 
     
-    def reset(self, move_to_next: bool = True, dataset_index=None):
+    def reset(self, move_to_next: bool = True, dataset_index=None, return_state: bool = False):
         """
         Reset environment state by sampling new neuron data from dataloader.
         
@@ -599,7 +606,6 @@ class NeuronTrackingEnvironment:
             else:
                 # Move to next patch
                 self.current_patch_idx += 1
-            
             patch_data = self.dataset[self.current_patch_idx]
         else:
             # Reuse current patch
@@ -614,6 +620,10 @@ class NeuronTrackingEnvironment:
 
         # Setup environment with patch data
         self._setup_environment(patch_data)
+
+        if return_state:
+            return self.get_state()
+        return None
     
 
     def get_state(self, terminate=False):
@@ -639,6 +649,13 @@ class NeuronTrackingEnvironment:
             else:
                 center = self.paths[0][-1]
                 radius = int(self.radius)
+                # Clamp before crop to avoid repeated out-of-bounds warning work in hot paths.
+                max_coords = torch.as_tensor(
+                    self.img.data.shape[1:],
+                    dtype=center.dtype,
+                    device=center.device,
+                ) - 1.0
+                center = torch.minimum(torch.maximum(center, torch.zeros_like(max_coords)), max_coords)
                 patch, _ = self.img.crop(center, radius, pad=True, value=0.0)
                 if patch.dtype == torch.uint8:
                     patch = patch.to(dtype=torch.float32) * (1.0 / 255.0)

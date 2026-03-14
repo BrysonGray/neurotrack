@@ -57,11 +57,17 @@ def sample_from_output(out):
 
     meannorm = torch.linalg.norm(mean, dim=-1, keepdim=True)
     meannorm_ = torch.tanh(meannorm)*10 # maximum of 10
-    mean = mean * meannorm_/(meannorm + torch.finfo(torch.float).eps)
+    mean = mean * meannorm_/(meannorm + torch.finfo(out.dtype).eps)
     logvar = torch.tanh(logvar)*3 - 1 # logvar between -4 and 2
     direction_dist = torch.distributions.MultivariateNormal(mean[:,:3], torch.exp(logvar)[:,None]*torch.eye(3, device=out.device)[None])
 
     return direction_dist
+
+
+def _concat_obs_with_action(obs, action):
+    """Append action components as constant channels to the observation volume."""
+    action_channels = action[:, :, None, None, None].expand(-1, -1, obs.shape[2], obs.shape[3], obs.shape[4])
+    return torch.cat((obs, action_channels), dim=1)
 
 
 def update_Q(actor, Q1, Q1_target, Q2, Q2_target,
@@ -116,14 +122,11 @@ def update_Q(actor, Q1, Q1_target, Q2, Q2_target,
     with torch.no_grad():
         # sample next actions from the current policy
         actor_out = actor(next_obs)
-        direction_dist = sample_from_output(actor_out.detach().cpu())
+        direction_dist = sample_from_output(actor_out)
         next_directions = direction_dist.rsample()
         logprobs = direction_dist.log_prob(next_directions)
-        next_directions = next_directions.to(DEVICE)
-        logprobs = logprobs.to(DEVICE)
         # get target q-values
-        next_states = torch.cat((next_obs, torch.ones((next_obs.shape[0], 1, next_obs.shape[2], next_obs.shape[3], next_obs.shape[4]), 
-                                            device=DEVICE)*next_directions[:,:,None,None,None]), dim=1)
+        next_states = _concat_obs_with_action(next_obs, next_directions)
 
         next_rewards = distance_reward(
             next_directions,
@@ -148,15 +151,12 @@ def update_Q(actor, Q1, Q1_target, Q2, Q2_target,
         if torch.isnan(targets).any():
             print("WARNING: NaN detected in targets!", flush=True)
     # compute q-values to compare against targets
-    current_state = torch.cat((obs, 
-                        torch.ones((obs.shape[0], 1, obs.shape[2], obs.shape[3], obs.shape[4]), 
-                                    device=DEVICE)*actions[:,:,None,None,None]), dim=1)
+    current_state = _concat_obs_with_action(obs, actions)
     
     if weights is None:
-        weights = torch.ones_like(targets, device=DEVICE)
-    
-    if weights.device != DEVICE:
-        weights = weights.to(device=DEVICE)
+        weights = torch.ones_like(targets)
+    elif weights.device != targets.device:
+        weights = weights.to(device=targets.device)
 
     Q1_vals = Q1(current_state)
     Q1_td_error = torch.abs(Q1_vals - targets).detach()
@@ -225,8 +225,6 @@ def update_actor(obs, target_vecs, target_masks, dones, gamma, actor,
     direction_dist = sample_from_output(actor_out)
     directions = direction_dist.rsample()
     logprobs = direction_dist.log_prob(directions)
-    directions = directions.to(DEVICE)
-    logprobs = logprobs.to(DEVICE)
     # compute rewards
     rewards = distance_reward(
         directions,
@@ -237,7 +235,7 @@ def update_actor(obs, target_vecs, target_masks, dones, gamma, actor,
     ).unsqueeze(-1)
     if gamma > 0:
         # get expected Q-vals
-        current_state = torch.cat((obs, torch.ones((obs.shape[0], 1, obs.shape[2], obs.shape[3], obs.shape[4]),device=DEVICE)*directions[:,:,None,None,None]), dim=1)
+        current_state = _concat_obs_with_action(obs, directions)
         Q1_vals = Q1(current_state)
         Q2_vals = Q2(current_state)
         # entropy regularized Q values
@@ -417,50 +415,64 @@ def train(env,
         fig, ax = plt.subplots(2, 3, figsize=(15,10))
         plt.ion()
 
+    def _reset_env_and_get_obs():
+        """Reset environment and retrieve initial observation with compatibility fallback."""
+        try:
+            obs0 = env.reset(return_state=True)
+            if obs0 is not None:
+                return obs0
+        except TypeError:
+            pass
+        env.reset()
+        return env.get_state()
+
     # Train the Network
     # Detect if running in a terminal or redirected (like with nohup)
     use_progress_bar = sys.stdout.isatty()
+    policy_device = next(actor.parameters()).device
     for ep in tqdm(range(n_episodes), dynamic_ncols=True, leave=True, file=sys.stdout, mininterval=1.0, disable=not use_progress_bar):
         # Print episode progress when tqdm is disabled (e.g., with nohup)
         if not use_progress_bar:
             print(f"Starting episode {ep + 1}/{n_episodes}", flush=True)
         
-        env.reset()
+        obs = _reset_env_and_get_obs()
         policy_loss = []
         ep_variance = []
         ep_rewards = []
         ep_return = 0
-        obs = env.get_state()
         for t in count():
             # Determine if we have enough samples to start learning updates
             learning_started = steps_done >= update_after
             env.branching = learning_started * branching # only enable branching after learning starts to prevent runaway growth of branches before the agent has learned anything.
             
             if not learning_started:
-                action = torch.randn(3)*3
+                action_for_env = torch.randn(3, dtype=torch.float32, device=obs.device) * 3
             else:
-                actor_out = actor(obs.to(DEVICE))
-                direction_dist = sample_from_output(actor_out.detach().cpu())
-                action = direction_dist.rsample()[0]
-                var = direction_dist.covariance_matrix.diagonal().mean().item()
+                with torch.no_grad():
+                    actor_out = actor(obs.to(device=policy_device, dtype=dtype))
+                    direction_dist = sample_from_output(actor_out)
+                    sampled_action = direction_dist.rsample()[0]
+                    var = direction_dist.covariance_matrix.diagonal(dim1=-2, dim2=-1).mean().item()
+                action_for_env = sampled_action.to(device=obs.device)
                 ep_variance.append(var)
             steps_done += 1
             # take step, get observation and reward, and move index to next streamline
-            next_obs, reward, terminated, truncated, info = env.step(action)
+            next_obs, reward, terminated, truncated, info = env.step(action_for_env)
             current_target_vectors = info['current_target_vectors']
             next_target_vectors = info['next_target_vectors'] # this will be None only if path terminates
             if next_target_vectors is None:
                 next_target_vectors = current_target_vectors
 
-            ep_rewards.append(reward.cpu().item())
-            ep_return += reward.cpu().item()
+            reward_value = float(reward.item())
+            ep_rewards.append(reward_value)
+            ep_return += reward_value
 
             # Show state after every step
             if show_live:
                 try:
                     shell = get_ipython().__class__.__name__  # type: ignore
                     if shell:
-                        show_state(env, fig, live=True, reward=reward.cpu().item())
+                        show_state(env, fig, live=True, reward=reward_value)
                     if pause_after_step:
                         try:
                             print("Press Enter to continue to the next step (or 'q' to quit)...", flush=True)
@@ -473,11 +485,11 @@ def train(env,
                 except NameError:
                     pass
 
-            reward_cache.append(reward.cpu().item())
+            reward_cache.append(reward_value)
             moving_avg_reward = sum(reward_cache) / len(reward_cache)
 
             # Store the transition in memory
-            memory.push(obs.cpu(), action.cpu(), next_obs.cpu(), reward.cpu(), current_target_vectors.cpu(), next_target_vectors.cpu(), terminated)
+            memory.push(obs, action_for_env, next_obs, reward, current_target_vectors, next_target_vectors, terminated)
             
             if learning_started and steps_done % update_every == 0:
                 # Perform updates once there is sufficient transitions saved.
@@ -615,7 +627,13 @@ def train(env,
                 break
 
             # if episode does not terminate, move to the next state
-            obs = env.get_state() # the head of the next streamline
+            if not terminated:
+                obs = next_obs
+            else:
+                # if the path terminated, the observation is zeroed,
+                # so we need to get the new observation from the environment
+                # which will be the head of the next path.
+                obs = env.get_state() 
         
         # save model after at least 500 steps 
         if steps_done // 500 > last_save:

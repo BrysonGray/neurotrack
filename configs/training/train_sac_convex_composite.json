@@ -18,5 +18,6 @@
     "rng_seed": 1,
     "start_complexity": 0.0,
     "branching": 0,
-    "start_idx": 0
+    "start_idx": 0,
+    "root_sampling_probability": 0.05
 }

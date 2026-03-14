@@ -75,13 +75,30 @@ class NeuronRenderer:
         """Initialize the renderer with optional random number generator."""
         self.rng = rng if rng is not None else np.random.default_rng()
 
-    def draw_density(self, sections: Dict, shape: Tuple[int, ...], 
+    @staticmethod
+    def _coerce_segments(sections: Union[Dict, np.ndarray]) -> np.ndarray:
+        """Normalize section-like inputs to an array with shape (N, 2, >=3)."""
+        if isinstance(sections, dict):
+            if len(sections) == 0:
+                return np.empty((0, 2, 4), dtype=np.float32)
+            segments = np.concatenate([section for section in sections.values()])
+        else:
+            segments = np.asarray(sections)
+
+        if segments.size == 0:
+            return np.empty((0, 2, 4), dtype=np.float32)
+        if segments.ndim != 3 or segments.shape[1] != 2 or segments.shape[2] < 3:
+            raise ValueError(f"Expected segments with shape (N, 2, >=3), got {tuple(segments.shape)}")
+
+        return segments
+
+    def draw_density(self, sections: Union[Dict, np.ndarray], shape: Tuple[int, ...], 
                     width: Optional[float] = 3.0, mask: bool = False) -> Image:
         """
         Draw neuron density image from sections.
         
         Args:
-            sections: Dictionary of section_id -> segments
+            sections: Dictionary of section_id -> segments or array-like segments
             shape: Output image shape
             width: Line width (defaults to 3.0)
             mask: Whether to create a binary mask
@@ -91,12 +108,37 @@ class NeuronRenderer:
             Image object with neuron density
         """
         density = Image(torch.zeros((1,) + shape))
-        segments = np.concatenate([section for section in sections.values()])
-        
-        for segment in segments:
-            density.draw_line_segment(segment[:, :3], width=width, mask=mask, channel=0)
-        
+        segments = self._coerce_segments(sections)
+        if segments.size == 0:
+            return density
+
+        segments_t = torch.as_tensor(segments[:, :, :3], dtype=torch.float32)
+        for segment in segments_t:
+            density.draw_line_segment(segment, width=width, mask=mask, channel=0)
+
         return density
+
+    def draw_density_pair(
+        self,
+        sections: Union[Dict, np.ndarray],
+        shape: Tuple[int, ...],
+        widths: Tuple[float, float],
+        mask: bool = False,
+    ) -> Tuple[Image, Image]:
+        """Draw two density images over the same segments in one segment traversal."""
+        density_a = Image(torch.zeros((1,) + shape))
+        density_b = Image(torch.zeros((1,) + shape))
+        segments = self._coerce_segments(sections)
+        if segments.size == 0:
+            return density_a, density_b
+
+        segments_t = torch.as_tensor(segments[:, :, :3], dtype=torch.float32)
+        width_a, width_b = widths
+        for segment in segments_t:
+            density_a.draw_line_segment(segment, width=width_a, mask=mask, channel=0)
+            density_b.draw_line_segment(segment, width=width_b, mask=mask, channel=0)
+
+        return density_a, density_b
     
     def draw_section_labels(self, sections: Dict, shape: Tuple[int, ...], 
                           width: float = 3.0) -> Image:

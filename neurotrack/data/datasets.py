@@ -1,4 +1,5 @@
 from collections import deque
+from PIL.ImageOps import scale
 import numpy as np
 from pathlib import Path
 from typing import List, Tuple, Optional, Dict, Union
@@ -232,29 +233,30 @@ class NeuronPatchDataset(TorchDataset):
         path_channel = torch.zeros(spatial_shape, dtype=torch.uint8)
 
         if not subtree:
-            return path_channel
+            return path_channel, subtree
 
         id_to_node = {int(node[0]): node for node in subtree}
         seed_id = int(seed_node_id)
         seed_node = id_to_node.get(seed_id)
         if seed_node is None:
-            return path_channel
+            return path_channel, subtree
 
         # If seed is a root node, draw a seed marker instead of a path.
         if int(seed_node[6]) == -1:
             seed_point = torch.as_tensor((seed_node[4], seed_node[3], seed_node[2]), dtype=torch.float32)
             path_image = Image(torch.zeros((1,) + spatial_shape, dtype=torch.uint8))
             path_image.draw_point(seed_point, radius=self.step_width, channel=0, mode="mask")
-            return path_image.data[0]
+            return path_image.data[0], subtree
 
         start_node_id = min(id_to_node.keys())
+        adj_dict = load.adjacency_dict(subtree)
         path_ids = self._find_path_ids(
-            adjacency=load.adjacency_dict(subtree),
+            adjacency=adj_dict,
             start_node_id=start_node_id,
             target_node_id=seed_id,
         )
         if len(path_ids) < 2:
-            return path_channel
+            return path_channel, subtree
 
         path_image = Image(torch.zeros((1,) + spatial_shape, dtype=torch.uint8))
         for idx in range(len(path_ids) - 1):
@@ -264,8 +266,27 @@ class NeuronPatchDataset(TorchDataset):
             point_b = torch.as_tensor((node_b[4], node_b[3], node_b[2]), dtype=torch.float32)
             segment = torch.stack((point_a, point_b), dim=0)
             path_image.draw_line_segment(segment, width=self.step_width, channel=0, mask=True)
+        
+        # remove path_ids from subtree.
+        # set removed node neighbors that are not removed to have parent_id = -1
+        neighbors_to_update = set()
+        for node_id in path_ids:
+            neighbor_nodes = adj_dict.get(int(node_id), [])
+            for neighbor in neighbor_nodes:
+                if int(neighbor) not in path_ids:
+                    neighbors_to_update.add(int(neighbor))
+        updated_subtree = []
+        for node in subtree:
+            if int(node[0]) in path_ids:
+                continue
+            if int(node[0]) in neighbors_to_update:
+                updated_node = list(node)
+                updated_node[6] = -1
+                updated_subtree.append(updated_node)
+            else:
+                updated_subtree.append(node)
 
-        return path_image.data[0]
+        return path_image.data[0], updated_subtree
 
     @staticmethod
     def _append_path_channel(image: torch.Tensor, path_channel: Optional[torch.Tensor] = None) -> torch.Tensor:
@@ -285,6 +306,41 @@ class NeuronPatchDataset(TorchDataset):
             path_channel = path_channel.to(device=image_cf.device, dtype=image_cf.dtype)
 
         return torch.cat((image_cf, path_channel.unsqueeze(0)), dim=0)
+
+    @staticmethod
+    def _iter_parent_child_segments(swc_data: Union[List, np.ndarray]) -> List[torch.Tensor]:
+        """Return SWC parent-child segments in (z, y, x) coordinate order."""
+        swc_array = np.asarray(swc_data)
+        if swc_array.size == 0:
+            return []
+
+        id_to_row = {int(row[0]): row for row in swc_array}
+        segments: List[torch.Tensor] = []
+        for row in swc_array:
+            parent_id = int(row[6])
+            if parent_id == -1:
+                continue
+            parent_row = id_to_row.get(parent_id)
+            if parent_row is None:
+                continue
+
+            parent_zyx = torch.as_tensor((parent_row[4], parent_row[3], parent_row[2]), dtype=torch.float32)
+            child_zyx = torch.as_tensor((row[4], row[3], row[2]), dtype=torch.float32)
+            segments.append(torch.stack((parent_zyx, child_zyx), dim=0))
+
+        return segments
+
+    def _draw_tree_mask(
+        self,
+        swc_data: Union[List, np.ndarray],
+        spatial_shape_zyx: torch.Size,
+        width: float,
+    ) -> Image:
+        """Draw a binary neuron mask directly from SWC parent-child segments."""
+        mask_image = Image(torch.zeros((1,) + tuple(int(v) for v in spatial_shape_zyx), dtype=torch.uint8))
+        for segment in self._iter_parent_child_segments(swc_data):
+            mask_image.draw_line_segment(segment, width=width, channel=0, mask=True)
+        return mask_image
 
     @staticmethod
     def _convex_blend_uint8(base_image: torch.Tensor, overlay_image: torch.Tensor, alpha: float) -> torch.Tensor:
@@ -323,7 +379,7 @@ class NeuronPatchDataset(TorchDataset):
         img_path = self.img_files[idx]
         
         img = tf.imread(img_path)
-
+        img = img.squeeze()
         if img.dtype != np.uint8:
             print(f"Warning: Image {img_path} has dtype {img.dtype}, converting to uint8")
 
@@ -349,6 +405,7 @@ class NeuronPatchDataset(TorchDataset):
     ) -> List:
         """Extract the connected subtree within crop bounds around a center SWC node."""
         swc_array = np.asarray(swc_data)
+        id_to_idx = {int(row[0]): idx for idx, row in enumerate(swc_array)}
         center_point = center_node[2:5]
         in_box_mask = np.all(
             (swc_array[:, 2:5] >= (center_point - self.crop_size/2)) &
@@ -383,6 +440,57 @@ class NeuronPatchDataset(TorchDataset):
         connected_ids = np.array(list(visited), dtype=np.int64)
         connected_mask = np.isin(in_box_nodes[:, 0].astype(np.int64), connected_ids)
         subtree = in_box_nodes[connected_mask].tolist()
+
+        # TODO: This results in abberant segments. Need to figure out a more robust way to add boundary nodes that doesn't create weird artifacts.
+        # # get subtree neighbors that are just outside the box and add a node where the segment intersects the box boundary
+        # boundary_segments = set() # set of (node_id, neighbor_id) tuples for segments crossing the boundary
+        # for node in subtree:
+        #     node_id = int(node[0])
+        #     neighbors = swc_adj_dict.get(node_id, [])
+        #     for neighbor in neighbors:
+        #         if neighbor not in visited:
+        #             boundary_segments.add((node_id,neighbor))
+        # for inside_node, outside_node in boundary_segments:
+        #     outside_row = swc_array[id_to_idx[outside_node]]
+        #     outside_point = outside_row[2:5]
+        #     inside_point = swc_array[id_to_idx[inside_node]][2:5]
+        #     segment = outside_point - inside_point
+        #     if np.all(segment == 0):
+        #         continue
+        #     direction = segment / np.linalg.norm(segment)
+
+        #     # find the scale factor to move from inside_point to the box boundary in the direction of the segment
+        #     half = self.crop_size / 2.0
+        #     box_min = center_point - half
+        #     box_max = center_point + half
+            
+        #     candidates = []
+        #     for axis in range(3):
+        #         if direction[axis] > 0:
+        #             t = (box_max[axis] - inside_point[axis]) / direction[axis]
+        #         elif direction[axis] < 0:
+        #             t = (box_min[axis] - inside_point[axis]) / direction[axis]
+        #         else:
+        #             continue
+        #         if t >= 0:
+        #             candidates.append(t)
+            
+        #     if not candidates:
+        #         continue
+            
+        #     scale = min(candidates)
+
+        #     intersection_point = inside_point + direction * scale
+        #     new_node = np.array([
+        #         outside_row[0],
+        #         outside_row[1],
+        #         intersection_point[0],
+        #         intersection_point[1],
+        #         intersection_point[2],
+        #         outside_row[5],
+        #         node_id,
+        #     ])
+        #     subtree.append(new_node.tolist())
 
         return subtree
     
@@ -441,16 +549,23 @@ class NeuronPatchDataset(TorchDataset):
     
         else:    
             # create mask
-            sections, _ = load.parse_swc(shifted_subtree, verbose=False, transpose=True)
-            neuron_area_mask = self.renderer.draw_density(sections, cropped_img.shape[-3:], width=35.0, mask=True)
+            neuron_area_mask = self._draw_tree_mask(
+                swc_data=shifted_subtree,
+                spatial_shape_zyx=cropped_img.shape[-3:],
+                width=35.0,
+            )
             neuron_area_mask = neuron_area_mask.data
             if self.alpha < 1.0:
-                neuron_mask = self.renderer.draw_density(sections, cropped_img.shape[-3:], width=self.step_width, mask=True)
-                image = self._convex_blend_uint8(cropped_img, neuron_mask.data, alpha=self.alpha)
+                neuron_mask = self._draw_tree_mask(
+                    swc_data=shifted_subtree,
+                    spatial_shape_zyx=cropped_img.shape[-3:],
+                    width=self.step_width,
+                )
+                image = self._convex_blend_uint8(cropped_img, neuron_mask.data.squeeze(), alpha=self.alpha)
             else:
                 image = cropped_img
 
-        path_channel = self._build_predicted_path_channel(
+        path_channel, shifted_subtree = self._build_predicted_path_channel(
             subtree=shifted_subtree,
             seed_node_id=seed_node_id,
             spatial_shape_zyx=cropped_img.shape[-3:],
@@ -547,11 +662,18 @@ class NeuronPatchDataset(TorchDataset):
 
             if self.has_swc and not self.inference_mode:
                 # Create full neuron mask and composite
-                sections, _ = load.parse_swc(self._cached_swc_data, verbose=False, transpose=True)
-                neuron_area_mask = self.renderer.draw_density(sections, self._cached_image.shape[-3:], width=35.0, mask=True)
+                neuron_area_mask = self._draw_tree_mask(
+                    swc_data=self._cached_swc_data,
+                    spatial_shape_zyx=self._cached_image.shape[-3:],
+                    width=35.0,
+                )
                 if self.alpha < 1.0:
-                    neuron_mask = self.renderer.draw_density(sections, self._cached_image.shape[-3:], width=self.step_width, mask=True)
-                    composite_img = self._convex_blend_uint8(self._cached_image, neuron_mask.data, alpha=self.alpha)
+                    neuron_mask = self._draw_tree_mask(
+                        swc_data=self._cached_swc_data,
+                        spatial_shape_zyx=self._cached_image.shape[-3:],
+                        width=self.step_width,
+                    )
+                    composite_img = self._convex_blend_uint8(self._cached_image, neuron_mask.data.squeeze(), alpha=self.alpha)
                 else:
                     composite_img = self._cached_image
                 neuron_tree = self._cached_swc_data

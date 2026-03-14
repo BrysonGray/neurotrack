@@ -416,10 +416,43 @@ def _get_nearest_point(point: Union[torch.Tensor, np.ndarray], swc_list: Union[t
     if nearest_node is None:
         return None, (None, None)
 
+    nearest_node = int(nearest_node)
+    neighbors = [int(n) for n in adj_dict.get(nearest_node, []) if int(n) in id_to_idx]
+
+    # If the nearest node has no valid incident edge, try the next-nearest node that does.
+    # This keeps nearest-point semantics edge-based for downstream visited-edge updates.
+    if not neighbors:
+        if valid_nodes is None:
+            candidate_nodes = [int(v) for v in swc_t[:, 0].tolist() if int(v) in id_to_idx]
+        else:
+            candidate_nodes = [int(v) for v in valid_nodes if int(v) in id_to_idx]
+
+        candidate_nodes = [
+            n for n in candidate_nodes
+            if any(int(nb) in id_to_idx for nb in adj_dict.get(int(n), []))
+        ]
+        if not candidate_nodes:
+            return None, (None, None)
+
+        candidate_idx = torch.tensor(
+            [id_to_idx[n] for n in candidate_nodes],
+            dtype=torch.long,
+            device=swc_t.device,
+        )
+        candidate_pos = swc_t[candidate_idx, 2:5]
+        dists2 = torch.sum((candidate_pos - pt.unsqueeze(0)) ** 2, dim=1)
+        nearest_node = candidate_nodes[int(torch.argmin(dists2).item())]
+        neighbors = [int(n) for n in adj_dict.get(nearest_node, []) if int(n) in id_to_idx]
+        if not neighbors:
+            return None, (None, None)
+
     # Positions
     nearest_node_pos = swc_t[id_to_idx[nearest_node], 2:5]
-    neighbors = adj_dict[nearest_node]
-    neighbor_idx = torch.tensor([id_to_idx[n] for n in neighbors])
+    neighbor_idx = torch.tensor(
+        [id_to_idx[n] for n in neighbors],
+        dtype=torch.long,
+        device=swc_t.device,
+    )
     neighbor_positions = swc_t[neighbor_idx, 2:5]
 
     distances = []
@@ -1221,6 +1254,10 @@ def _add_to_visited(start_point: Union[torch.Tensor, np.ndarray],
     if neuron_start_point is None or neuron_end_point is None:
         return visited, neuron_end_point
 
+    # Edge-based coverage update requires both projected points to lie on valid segments.
+    if start_edge[0] is None or start_edge[1] is None or end_edge[0] is None or end_edge[1] is None:
+        return visited, neuron_end_point
+
     # find nearest nodes to start and end points
     start_node = start_edge[0]
     end_node = end_edge[0]
@@ -1334,6 +1371,8 @@ def remove_visited(swc_list: Union[np.ndarray, torch.Tensor],
     # Keep all nodes that are not only part of fully visited edges
     nodes_to_keep = set()
     cut_ends = set()
+    # Compute max node ID once; incremented per new node to avoid O(n) scan per partial edge.
+    next_node_id = int(swc_list[:, 0].max().item()) + 1
     for edge, coverage in visited.copy().items():
         if abs(coverage) < 1e-3:
             nodes_to_keep.update(edge)
@@ -1355,7 +1394,8 @@ def remove_visited(swc_list: Union[np.ndarray, torch.Tensor],
             frac = coverage if coverage > 0 else (1 + coverage)
             new_node_pos = node1_pos + (node2_pos - node1_pos) * frac
 
-            new_node_id = int(max(swc_list[:, 0])) + 1 # every new node gets a new unique id
+            new_node_id = next_node_id
+            next_node_id += 1
             # Its parent is either the node to keep or -1 if the node to keep is its child.
             if swc_list[keep_idx, 6] == other_node_id:
                 new_node_parent = -1
@@ -1408,8 +1448,41 @@ def remove_visited(swc_list: Union[np.ndarray, torch.Tensor],
                     del adj_dict[edge[1]]
                 else:
                     cut_ends.add(edge[1])
+    # Keep only nodes that are still part of at least one remaining edge.
+    # This keeps swc_list and adj_dict synchronized and avoids isolated nodes.
+    active_nodes = set()
+    for edge in visited.keys():
+        active_nodes.update([int(edge[0]), int(edge[1])])
+
+    if not active_nodes:
+        return (
+            torch.empty((0, swc_list.shape[1]), dtype=swc_list.dtype, device=swc_list.device),
+            {},
+            {},
+            [],
+        )
+
+    # prune adjacency to active nodes only
+    pruned_adj = {}
+    for node, neighbors in adj_dict.items():
+        node_i = int(node)
+        if node_i not in active_nodes:
+            continue
+        pruned_neighbors = [int(nb) for nb in neighbors if int(nb) in active_nodes]
+        if pruned_neighbors:
+            pruned_adj[node_i] = pruned_neighbors
+    adj_dict = pruned_adj
+
+    active_nodes = set(adj_dict.keys())
+    visited = {
+        (int(edge[0]), int(edge[1])): float(coverage)
+        for edge, coverage in visited.items()
+        if int(edge[0]) in active_nodes and int(edge[1]) in active_nodes
+    }
+    cut_ends = {int(n) for n in cut_ends if int(n) in active_nodes}
+
     # remove nodes from swc_list
-    new_swc_list = [node for node in swc_list if int(node[0]) in nodes_to_keep]
+    new_swc_list = [node for node in swc_list if int(node[0]) in nodes_to_keep and int(node[0]) in active_nodes]
     if new_swc_list:
         new_swc_list = torch.stack(new_swc_list)
     else:

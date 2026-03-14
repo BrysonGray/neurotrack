@@ -65,4 +65,6 @@ def write_swc(swc_list, out, exist_ok=True):
         os.makedirs(os.path.split(out)[0], exist_ok=True)
     with open(out, mode='w') as f:
         for line in swc_list:
+            if isinstance(line[0], float):
+                line = [int(line[0]), int(line[1])] + list(line[2:6]) + [int(line[6])]
             f.write(' '.join(map(str,line)) + '\n')

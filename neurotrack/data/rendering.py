@@ -90,11 +90,15 @@ class NeuronRenderer:
         Returns:
             Image object with neuron density
         """
-        density = Image(torch.zeros((1,) + shape))
+        density_dtype = torch.uint8 if mask else torch.float32
+        density = Image(torch.zeros((1,) + shape, dtype=density_dtype))
         segments = np.concatenate([section for section in sections.values()])
         
         for segment in segments:
             density.draw_line_segment(segment[:, :3], width=width, mask=mask, channel=0)
+
+        if mask and density.data.dtype == torch.uint8:
+            density.data[density.data > 0] = 255
         
         return density
     

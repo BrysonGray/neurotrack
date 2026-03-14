@@ -103,6 +103,9 @@ class SeedPipelineValidationTests(unittest.TestCase):
             self.assertTrue(torch.equal(sample_a["seed_points"], sample_b["seed_points"]))
             self.assertEqual(sample_a["seed_node_id"], sample_b["seed_node_id"])
             self.assertEqual(sample_a["neuron_tree"], sample_b["neuron_tree"])
+            self.assertEqual(sample_a["neuron_mask"].dtype, torch.uint8)
+            self.assertGreater(int(sample_a["neuron_mask"].max().item()), 0)
+            self.assertEqual(int(sample_a["neuron_mask"].max().item()), 255)
 
             seed_node = next(node for node in sample_a["neuron_tree"] if int(node[0]) == sample_a["seed_node_id"])
             expected_seed_zyx = torch.tensor([seed_node[4], seed_node[3], seed_node[2]], dtype=torch.float32)

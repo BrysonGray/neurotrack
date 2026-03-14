@@ -104,13 +104,15 @@ def main():
     
     rng = np.random.default_rng(rng_seed)
     dataset = NeuronPatchDataset(
-        img_dir=img_dir,
         swc_dir=swc_dir,
-        crop_size=128,
+        img_dir=img_dir,
+        crop_size=64,
         patches_per_image=10,
         alpha=start_complexity,
         step_width=step_width,
         rng=rng,
+        crop_patches=True,
+        inference_mode=False,
         seeds_path=seeds_path,
         root_sampling_probability=root_sampling_probability,
     )
@@ -123,9 +125,12 @@ def main():
         target_step_len=target_step_len,
         step_width=step_width,
         max_len=1000,
-        repeat_starts=repeat_starts,
+        max_paths=1000,
+        gamma=gamma,
         branching=branching,
+        repeat_starts=repeat_starts,
         start_idx=start_idx,
+        inference_mode=False
     )
     
     input_size = 2*patch_radius+1
@@ -188,6 +193,9 @@ def main():
     script_path = Path(__file__).resolve()
     logdir = script_path.parent.parent / "logs" / name
     os.makedirs(logdir, exist_ok=True)
+    # save input parameters for reproducibility
+    with open(logdir / "training_params.json", "w") as f:
+        json.dump(params, f, indent=4)
     sac.train(env, actor, Q1, Q2, Q1_target, Q2_target, log_alpha,
             actor_optimizer, Q1_optimizer, Q2_optimizer, log_alpha_optimizer,
             memory, target_entropy, batch_size, outdir, logdir,

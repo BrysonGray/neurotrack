@@ -502,8 +502,15 @@ class NeuronTrackingEnvironment:
                         
                             self.cut_ends.extend(changed_nodes)
                             # remove nodes from cut ends that no longer exist
-                            valid_keys = self.id_to_idx.keys()
-                            self.cut_ends = list(set([ce for ce in self.cut_ends if ce in valid_keys]))
+                            valid_keys = set(self.id_to_idx.keys())
+                            valid_adj_keys = set(self.adj_dict.keys())
+                            self.cut_ends = list({
+                                int(ce)
+                                for ce in self.cut_ends
+                                if int(ce) in valid_keys
+                                and int(ce) in valid_adj_keys
+                                and len(self.adj_dict.get(int(ce), [])) > 0
+                            })
 
                             # TEST: try updating section nodes based on proximity to the new position. Use any cut ends within 17 pixels.
                             # Update the section nodes

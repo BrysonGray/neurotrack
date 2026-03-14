@@ -1,7 +1,7 @@
 {
     "img_dir": "/home/brysongray/data/neurotrack_data/gold166/gold166_cropped/train_set/images/",
     "swc_dir": "/home/brysongray/data/neurotrack_data/gold166/gold166_cropped/train_set/morphology/",
-    "outdir": "/home/brysongray/data/neurotrack_data/model_weights/sac_weights/training_outputs_3_13/",
+    "outdir": "/home/brysongray/data/neurotrack_data/model_weights/sac_weights/training_outputs_3_14/",
     "name": "convex_composite_images",
     "n_seeds": 1,
     "target_step_len": 5.0,

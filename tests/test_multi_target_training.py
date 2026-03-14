@@ -93,8 +93,9 @@ class MultiTargetRewardTests(unittest.TestCase):
 class ReplayBufferTargetSetTests(unittest.TestCase):
     def test_replay_buffer_pads_variable_length_target_sets(self):
         buffer = ReplayBuffer(4, obs_shape=(1, 2, 2, 2), action_shape=(3,))
-        obs = torch.zeros((1, 2, 2, 2), dtype=torch.float32)
-        next_obs = torch.ones((1, 2, 2, 2), dtype=torch.float32)
+        obs = torch.zeros((1, 2, 2, 2), dtype=torch.uint8)
+        next_obs = torch.full((1, 2, 2, 2), 255, dtype=torch.uint8)
+        next_obs_2 = torch.full((1, 2, 2, 2), 200, dtype=torch.uint8)
 
         buffer.push(
             obs,
@@ -106,9 +107,9 @@ class ReplayBufferTargetSetTests(unittest.TestCase):
             False,
         )
         buffer.push(
-            obs + 1.0,
+            obs + 1,
             torch.tensor([4.0, 5.0, 6.0], dtype=torch.float32),
-            next_obs + 1.0,
+            next_obs_2,
             torch.tensor([2.0], dtype=torch.float32),
             torch.tensor([[0.0, 0.0, 1.0]], dtype=torch.float32),
             torch.tensor([[1.0, 1.0, 0.0], [0.0, 1.0, 1.0], [1.0, 0.0, 1.0]], dtype=torch.float32),
@@ -116,9 +117,9 @@ class ReplayBufferTargetSetTests(unittest.TestCase):
         )
 
         (
-            _obs,
+            obs_batch,
             _actions,
-            _next_obs,
+            next_obs_batch,
             _rewards,
             current_target_vectors,
             current_target_mask,
@@ -126,6 +127,9 @@ class ReplayBufferTargetSetTests(unittest.TestCase):
             next_target_mask,
             _dones,
         ) = buffer.sample(2, transform=False)
+
+        self.assertEqual(obs_batch.dtype, torch.uint8)
+        self.assertEqual(next_obs_batch.dtype, torch.uint8)
 
         self.assertEqual(tuple(current_target_vectors.shape), (2, 2, 3))
         self.assertEqual(sorted(current_target_mask.sum(dim=1).tolist()), [1, 2])
@@ -143,9 +147,9 @@ class ReplayBufferTargetSetTests(unittest.TestCase):
     def test_replay_buffer_transform_updates_all_target_candidates(self):
         buffer = ReplayBuffer(1, obs_shape=(1, 2, 2, 2), action_shape=(3,))
         buffer.push(
-            torch.zeros((1, 2, 2, 2), dtype=torch.float32),
+            torch.zeros((1, 2, 2, 2), dtype=torch.uint8),
             torch.tensor([1.0, 2.0, 3.0], dtype=torch.float32),
-            torch.ones((1, 2, 2, 2), dtype=torch.float32),
+            torch.full((1, 2, 2, 2), 255, dtype=torch.uint8),
             torch.tensor([1.0], dtype=torch.float32),
             torch.tensor([[10.0, 20.0, 30.0], [40.0, 50.0, 60.0]], dtype=torch.float32),
             torch.tensor([[7.0, 8.0, 9.0]], dtype=torch.float32),
@@ -194,6 +198,19 @@ class ReplayBufferTargetSetTests(unittest.TestCase):
         )
         self.assertTrue(current_target_mask.all())
         self.assertTrue(next_target_mask.all())
+
+    def test_replay_buffer_rejects_non_uint8_observations(self):
+        buffer = ReplayBuffer(1, obs_shape=(1, 2, 2, 2), action_shape=(3,))
+        with self.assertRaises(TypeError):
+            buffer.push(
+                torch.zeros((1, 2, 2, 2), dtype=torch.float32),
+                torch.tensor([0.0, 0.0, 0.0], dtype=torch.float32),
+                torch.zeros((1, 2, 2, 2), dtype=torch.uint8),
+                torch.tensor([0.0], dtype=torch.float32),
+                torch.tensor([[1.0, 0.0, 0.0]], dtype=torch.float32),
+                torch.tensor([[1.0, 0.0, 0.0]], dtype=torch.float32),
+                False,
+            )
 
 
 class EnvironmentMultiTargetStepTests(unittest.TestCase):

@@ -120,6 +120,7 @@ class SeedPipelineValidationTests(unittest.TestCase):
             env.reset(dataset_index=3)
             state = env.get_state()
             self.assertEqual(state.shape[1], 2)
+            self.assertEqual(state.dtype, torch.uint8)
 
     def test_root_sampling_probability_biases_root_selection_frequency(self):
         with tempfile.TemporaryDirectory() as tmp_dir:

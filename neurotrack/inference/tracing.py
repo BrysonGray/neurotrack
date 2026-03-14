@@ -6,7 +6,7 @@ import numpy as np
 import torch
 from itertools import count
 
-from neurotrack.training.sac import sample_from_output
+from neurotrack.training.sac import sample_from_output, prepare_observation_for_model
 from neurotrack.training.env_inspector import show_state
 
 DEVICE = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -148,7 +148,7 @@ def trace_image(env, actor, dataset_idx, Q_net=None, n_trials=1, show=True, show
                 raise RuntimeError("Trace cancelled.")
             with torch.no_grad():
                 actor_start = time.perf_counter()
-                obs_on_device = obs.to(device=DEVICE, non_blocking=True)
+                obs_on_device = prepare_observation_for_model(obs, device=DEVICE, model_dtype=torch.float32)
                 actor_out = actor(obs_on_device)
                 timing_ms["actor_forward"] += (time.perf_counter() - actor_start) * 1000.0
 

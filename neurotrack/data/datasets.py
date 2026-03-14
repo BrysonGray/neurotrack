@@ -36,7 +36,7 @@ class NeuronPatchDataset(TorchDataset):
         crop_size: int = 64,
         patches_per_image: int = 10,
         alpha: float = 0.5,
-        step_width: float = 4.0,
+        step_width: float = 3.0,
         rng: Optional[np.random.Generator] = None,
         crop_patches: bool = True,
         inference_mode: bool = False,
@@ -80,13 +80,13 @@ class NeuronPatchDataset(TorchDataset):
         self.swc_files = []
         if swc_dir is not None:
             swc_dir = Path(swc_dir)
-            self.swc_files = list(swc_dir.glob("*.swc"))
+            self.swc_files = [file for file in swc_dir.rglob("*.swc") if file.is_file()]
         img_dir = Path(img_dir)
         self.img_dir = img_dir
         if inference_mode:
-            self.img_files_unordered = sorted([*img_dir.rglob("*.tif"), *img_dir.rglob("*.tiff")])
+            self.img_files_unordered = sorted([f for f in img_dir.rglob("*.tif") if f.is_file()])
         else:
-            self.img_files_unordered = list(img_dir.glob("*.tif"))
+            self.img_files_unordered = [f for f in img_dir.rglob("*.tif") if f.is_file()]
         self.img_files = []
 
         if len(self.img_files_unordered) == 0:
@@ -285,6 +285,38 @@ class NeuronPatchDataset(TorchDataset):
             path_channel = path_channel.to(device=image_cf.device, dtype=image_cf.dtype)
 
         return torch.cat((image_cf, path_channel.unsqueeze(0)), dim=0)
+
+    @staticmethod
+    def _convex_blend_uint8(base_image: torch.Tensor, overlay_image: torch.Tensor, alpha: float) -> torch.Tensor:
+        """Blend two images using integer arithmetic and return uint8 output."""
+        if base_image.shape != overlay_image.shape:
+            raise ValueError(
+                f"Cannot blend images with different shapes: {tuple(base_image.shape)} vs {tuple(overlay_image.shape)}"
+            )
+
+        if base_image.dtype != torch.uint8:
+            base_u8 = to_uint8(base_image)
+        else:
+            base_u8 = base_image
+
+        if overlay_image.dtype != torch.uint8:
+            overlay_u8 = to_uint8(overlay_image)
+        else:
+            overlay_u8 = overlay_image
+
+        if overlay_u8.device != base_u8.device:
+            overlay_u8 = overlay_u8.to(base_u8.device)
+
+        alpha_q = int(round(float(alpha) * 255.0))
+        alpha_q = max(0, min(255, alpha_q))
+        inv_alpha_q = 255 - alpha_q
+
+        blended = (
+            base_u8.to(dtype=torch.int32) * alpha_q
+            + overlay_u8.to(dtype=torch.int32) * inv_alpha_q
+            + 127
+        ) // 255
+        return blended.to(dtype=torch.uint8)
         
     def _load_image(self, idx: int) -> torch.Tensor:
         """Load a full image."""
@@ -413,8 +445,8 @@ class NeuronPatchDataset(TorchDataset):
             neuron_area_mask = self.renderer.draw_density(sections, cropped_img.shape[-3:], width=35.0, mask=True)
             neuron_area_mask = neuron_area_mask.data
             if self.alpha < 1.0:
-                neuron_mask = self.renderer.draw_density(sections, cropped_img.shape[-3:], width=3.0, mask=True)
-                image = self.alpha * cropped_img + (1 - self.alpha) * neuron_mask.data
+                neuron_mask = self.renderer.draw_density(sections, cropped_img.shape[-3:], width=self.step_width, mask=True)
+                image = self._convex_blend_uint8(cropped_img, neuron_mask.data, alpha=self.alpha)
             else:
                 image = cropped_img
 
@@ -518,8 +550,8 @@ class NeuronPatchDataset(TorchDataset):
                 sections, _ = load.parse_swc(self._cached_swc_data, verbose=False, transpose=True)
                 neuron_area_mask = self.renderer.draw_density(sections, self._cached_image.shape[-3:], width=35.0, mask=True)
                 if self.alpha < 1.0:
-                    neuron_mask = self.renderer.draw_density(sections, self._cached_image.shape[-3:], width=3.0, mask=True)
-                    composite_img = self.alpha * self._cached_image + (1 - self.alpha) * neuron_mask.data
+                    neuron_mask = self.renderer.draw_density(sections, self._cached_image.shape[-3:], width=self.step_width, mask=True)
+                    composite_img = self._convex_blend_uint8(self._cached_image, neuron_mask.data, alpha=self.alpha)
                 else:
                     composite_img = self._cached_image
                 neuron_tree = self._cached_swc_data

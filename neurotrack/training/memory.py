@@ -12,6 +12,20 @@ from neurotrack.training.tree import SumTree
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
+def _require_uint8_observation(observation, name):
+    """Validate and normalize an observation tensor to contiguous CPU uint8."""
+    if isinstance(observation, torch.Tensor):
+        observation_t = observation.detach().to(device="cpu")
+    else:
+        observation_t = torch.as_tensor(observation, device="cpu")
+
+    if observation_t.dtype != torch.uint8:
+        raise TypeError(
+            f"{name} must be torch.uint8 before model input conversion, got {observation_t.dtype}."
+        )
+    return observation_t.contiguous()
+
+
 def _normalize_target_vectors(target_vectors):
     """Convert a target vector set to a contiguous CPU tensor of shape (K, 3)."""
     if isinstance(target_vectors, torch.Tensor):
@@ -143,9 +157,9 @@ class ReplayBuffer():
     
     def __init__(self, capacity, obs_shape, action_shape):
 
-        self.obs = torch.empty((capacity, *obs_shape), dtype=torch.float32, device='cpu')
+        self.obs = torch.empty((capacity, *obs_shape), dtype=torch.uint8, device='cpu')
         self.actions = torch.empty((capacity, *action_shape), dtype=torch.float32, device='cpu')
-        self.next_obs = torch.empty((capacity, *obs_shape), dtype=torch.float32, device='cpu')
+        self.next_obs = torch.empty((capacity, *obs_shape), dtype=torch.uint8, device='cpu')
         self.rewards = torch.empty((capacity, 1), dtype=torch.float32, device='cpu')
         self.current_target_vectors = [None] * capacity
         self.next_target_vectors = [None] * capacity
@@ -157,9 +171,9 @@ class ReplayBuffer():
 
     def push(self, obs, action, next_obs, reward, current_target_vectors, next_target_vectors, done):
         """Save a transition to replay memory"""
-        self.obs[self.idx] = obs
+        self.obs[self.idx] = _require_uint8_observation(obs, name="obs")
         self.actions[self.idx] = action
-        self.next_obs[self.idx] = next_obs
+        self.next_obs[self.idx] = _require_uint8_observation(next_obs, name="next_obs")
         self.rewards[self.idx] = reward
         self.current_target_vectors[self.idx] = _normalize_target_vectors(current_target_vectors)
         self.next_target_vectors[self.idx] = _normalize_target_vectors(next_target_vectors)
@@ -277,9 +291,9 @@ class PrioritizedReplayBuffer:
         self.max_priority = eps
         self.tree = SumTree(size=capacity)
 
-        self.obs = torch.empty((capacity, *obs_shape), dtype=torch.float32, device='cpu')
+        self.obs = torch.empty((capacity, *obs_shape), dtype=torch.uint8, device='cpu')
         self.actions = torch.empty((capacity, *action_shape), dtype=torch.float32, device='cpu')
-        self.next_obs = torch.empty((capacity, *obs_shape), dtype=torch.float32, device='cpu')
+        self.next_obs = torch.empty((capacity, *obs_shape), dtype=torch.uint8, device='cpu')
         self.rewards = torch.empty((capacity, 1), dtype=torch.float32, device='cpu')
         self.current_target_vectors = [None] * capacity
         self.next_target_vectors = [None] * capacity
@@ -312,9 +326,9 @@ class PrioritizedReplayBuffer:
 
         self.tree.add(self.max_priority, self.idx)
 
-        self.obs[self.idx] = obs
+        self.obs[self.idx] = _require_uint8_observation(obs, name="obs")
         self.actions[self.idx] = action
-        self.next_obs[self.idx] = next_obs
+        self.next_obs[self.idx] = _require_uint8_observation(next_obs, name="next_obs")
         self.rewards[self.idx] = reward
         self.current_target_vectors[self.idx] = _normalize_target_vectors(current_target_vectors)
         self.next_target_vectors[self.idx] = _normalize_target_vectors(next_target_vectors)

@@ -64,6 +64,15 @@ def sample_from_output(out):
     return direction_dist
 
 
+def prepare_observation_for_model(obs, device=None, model_dtype=torch.float32):
+    """Convert uint8 observations to normalized float tensors at model input boundaries."""
+    if device is None:
+        device = obs.device
+    if obs.dtype == torch.uint8:
+        return obs.to(device=device, dtype=model_dtype) * (1.0 / 255.0)
+    return obs.to(device=device, dtype=model_dtype)
+
+
 def _concat_obs_with_action(obs, action):
     """Append action components as constant channels to the observation volume."""
     action_channels = action[:, :, None, None, None].expand(-1, -1, obs.shape[2], obs.shape[3], obs.shape[4])
@@ -118,15 +127,23 @@ def update_Q(actor, Q1, Q1_target, Q2, Q2_target,
         The temporal difference error.
     """
 
+    model_device = next(actor.parameters()).device
+    obs_model = prepare_observation_for_model(obs, device=model_device, model_dtype=dtype)
+    next_obs_model = prepare_observation_for_model(next_obs, device=model_device, model_dtype=dtype)
+    actions_model = actions.to(device=model_device, dtype=dtype)
+    next_target_vecs = next_target_vecs.to(device=model_device, dtype=dtype)
+    next_target_masks = next_target_masks.to(device=model_device)
+    dones = dones.to(device=model_device)
+
     # compute targets
     with torch.no_grad():
         # sample next actions from the current policy
-        actor_out = actor(next_obs)
+        actor_out = actor(next_obs_model)
         direction_dist = sample_from_output(actor_out)
         next_directions = direction_dist.rsample()
         logprobs = direction_dist.log_prob(next_directions)
         # get target q-values
-        next_states = _concat_obs_with_action(next_obs, next_directions)
+        next_states = _concat_obs_with_action(next_obs_model, next_directions)
 
         next_rewards = distance_reward(
             next_directions,
@@ -151,7 +168,7 @@ def update_Q(actor, Q1, Q1_target, Q2, Q2_target,
         if torch.isnan(targets).any():
             print("WARNING: NaN detected in targets!", flush=True)
     # compute q-values to compare against targets
-    current_state = _concat_obs_with_action(obs, actions)
+    current_state = _concat_obs_with_action(obs_model, actions_model)
     
     if weights is None:
         weights = torch.ones_like(targets)
@@ -221,7 +238,13 @@ def update_actor(obs, target_vecs, target_masks, dones, gamma, actor,
         The loss value for the actor network.
     """
 
-    actor_out = actor(obs)
+    model_device = next(actor.parameters()).device
+    obs_model = prepare_observation_for_model(obs, device=model_device, model_dtype=dtype)
+    target_vecs = target_vecs.to(device=model_device, dtype=dtype)
+    target_masks = target_masks.to(device=model_device)
+    dones = dones.to(device=model_device)
+
+    actor_out = actor(obs_model)
     direction_dist = sample_from_output(actor_out)
     directions = direction_dist.rsample()
     logprobs = direction_dist.log_prob(directions)
@@ -235,7 +258,7 @@ def update_actor(obs, target_vecs, target_masks, dones, gamma, actor,
     ).unsqueeze(-1)
     if gamma > 0:
         # get expected Q-vals
-        current_state = _concat_obs_with_action(obs, directions)
+        current_state = _concat_obs_with_action(obs_model, directions)
         Q1_vals = Q1(current_state)
         Q2_vals = Q2(current_state)
         # entropy regularized Q values
@@ -449,7 +472,9 @@ def train(env,
                 action_for_env = torch.randn(3, dtype=torch.float32, device=obs.device) * 3
             else:
                 with torch.no_grad():
-                    actor_out = actor(obs.to(device=policy_device, dtype=dtype))
+                    actor_out = actor(
+                        prepare_observation_for_model(obs, device=policy_device, model_dtype=dtype)
+                    )
                     direction_dist = sample_from_output(actor_out)
                     sampled_action = direction_dist.rsample()[0]
                     var = direction_dist.covariance_matrix.diagonal(dim1=-2, dim2=-1).mean().item()

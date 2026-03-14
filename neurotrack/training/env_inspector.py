@@ -181,6 +181,8 @@ def show_state(env, fig, live=False, ep_return=None, reward=None, policy_loss=No
     if live:
         try:
             obs = env.get_state()[0].detach().cpu()  # (C, H, W, D)
+            if obs.dtype == torch.uint8:
+                obs = obs.to(dtype=torch.float32) * (1.0 / 255.0)
             img_obs = obs[:-1]
             path_obs = obs[-1]
             if img_obs.ndim == 4:

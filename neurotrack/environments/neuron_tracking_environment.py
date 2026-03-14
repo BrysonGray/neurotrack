@@ -14,7 +14,7 @@ from typing import Dict, Tuple, Literal, Optional, List
 
 from neurotrack.data import loading as load
 from neurotrack.data import tree
-from neurotrack.data.image import Image
+from neurotrack.data.image import Image, to_uint8
 from neurotrack.environments.tracking_reward import (
     _get_nearest_node, _get_termination_nodes, _init_visited,
     _compute_target_point, distance_reward, _add_to_visited,
@@ -154,6 +154,8 @@ class NeuronTrackingEnvironment:
         img_tensor = patch_data['image']
         if img_tensor.ndim == 3:
             img_tensor = img_tensor.unsqueeze(0)  # Add channel dimension if needed
+        if img_tensor.dtype != torch.uint8:
+            img_tensor = to_uint8(img_tensor)
         self.img = Image(img_tensor)
         
         # Setup neuron mask and tree if available
@@ -643,8 +645,6 @@ class NeuronTrackingEnvironment:
                 center = self.paths[0][-1]
                 radius = int(self.radius)
                 patch, _ = self.img.crop(center, radius, pad=True, value=0.0)
-                if patch.dtype == torch.uint8:
-                    patch = patch.to(dtype=torch.float32) * (1.0 / 255.0)
 
         return patch[None]
 

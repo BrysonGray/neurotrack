@@ -261,12 +261,23 @@ def adjacency_dict(swc_list):
     Only includes edges between nodes that actually exist in the swc_list.
 
     """
-    # First, build a set of valid node IDs for O(1) lookup
-    swc_array = np.array(swc_list) if not isinstance(swc_list, np.ndarray) else swc_list
+    # Normalize SWC rows to [N, >=7] and handle empty inputs.
+    swc_array = np.asarray(swc_list) if not isinstance(swc_list, np.ndarray) else swc_list
+    if swc_array.size == 0:
+        return {}
+    if swc_array.ndim == 1:
+        if swc_array.shape[0] < 7:
+            raise ValueError(f"SWC row must have at least 7 columns, got shape {swc_array.shape}")
+        swc_array = swc_array.reshape(1, -1)
+    elif swc_array.ndim != 2:
+        raise ValueError(f"SWC array must be 2D, got shape {swc_array.shape}")
+    if swc_array.shape[1] < 7:
+        raise ValueError(f"SWC rows must have at least 7 columns, got shape {swc_array.shape}")
+
     valid_node_ids = set(swc_array[:, 0].astype(int))
     
     adj_dict = {}
-    for node in swc_list:
+    for node in swc_array:
         node_id = int(node[0])
         parent_id = int(node[6])
         if parent_id != -1:  # Ignore the root node which has no parent
@@ -299,9 +310,18 @@ def get_downstream_swc_node_ids(swc_list, start_node_id, include_start=False):
     set
         Set of downstream SWC node IDs.
     """
-    swc_array = np.array(swc_list) if not isinstance(swc_list, np.ndarray) else swc_list
+    swc_array = np.asarray(swc_list) if not isinstance(swc_list, np.ndarray) else swc_list
     if swc_array.size == 0:
         return set()
+
+    if swc_array.ndim == 1:
+        if swc_array.shape[0] < 7:
+            raise ValueError(f"SWC row must have at least 7 columns, got shape {swc_array.shape}")
+        swc_array = swc_array.reshape(1, -1)
+    elif swc_array.ndim != 2:
+        raise ValueError(f"SWC array must be 2D, got shape {swc_array.shape}")
+    if swc_array.shape[1] < 7:
+        raise ValueError(f"SWC rows must have at least 7 columns, got shape {swc_array.shape}")
 
     node_ids = set(swc_array[:, 0].astype(int).tolist())
     start_id = int(start_node_id)

@@ -7,10 +7,11 @@ import numpy as np
 import tifffile as tf
 import torch
 
-from neurotrack.data import NeuronPatchDataset, save_seeds_json
+from neurotrack.data import NeuronPatchDataset, adjacency_dict, save_seeds_json
 from neurotrack.environments import NeuronTrackingEnvironment
 from neurotrack.inference.runtime import build_env
 from neurotrack.pipelines import interactive_tracing_pipeline as interactive_pipeline
+import neurotrack.data.datasets as datasets_module
 
 
 def _write_volume(path: Path, shape=(40, 40, 40)) -> None:
@@ -72,6 +73,12 @@ def _make_chain_rows(num_nodes: int, start_xyz=(8.0, 20.0, 20.0), step_xyz=(1.0,
 
 
 class SeedPipelineValidationTests(unittest.TestCase):
+    def test_adjacency_dict_handles_empty_and_single_row_inputs(self):
+        self.assertEqual(adjacency_dict([]), {})
+
+        single_row = np.array([1, 3, 10.0, 11.0, 12.0, 1.0, -1.0], dtype=np.float32)
+        self.assertEqual(adjacency_dict(single_row), {1: []})
+
     def test_crop_mode_is_deterministic_and_seed_matches_selected_node(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)
@@ -135,7 +142,9 @@ class SeedPipelineValidationTests(unittest.TestCase):
 
             volume_shape = (40, 40, 40)
             _write_volume(img_dir / "sample.tif", shape=volume_shape)
-            _write_swc(swc_dir / "sample.swc", _make_chain_rows(40, start_xyz=(0.0, 20.0, 20.0)), shape_zyx=volume_shape)
+            rows = _make_chain_rows(40, start_xyz=(0.0, 20.0, 20.0))
+            _write_swc(swc_dir / "sample.swc", rows, shape_zyx=volume_shape)
+            parent_by_id = {int(node_id): int(parent_id) for node_id, _t, _x, _y, _z, _r, parent_id in rows}
 
             dataset = NeuronPatchDataset(
                 swc_dir=swc_dir,
@@ -154,11 +163,8 @@ class SeedPipelineValidationTests(unittest.TestCase):
             total = len(dataset)
             for idx in range(total):
                 sample = dataset[idx]
-                sample_tree = sample["neuron_tree"]
-                seed_node = next(
-                    node for node in sample_tree if int(node[0]) == int(sample["seed_node_id"])
-                )
-                if int(seed_node[6]) == -1:
+                seed_node_id = int(sample["seed_node_id"])
+                if parent_by_id.get(seed_node_id) == -1:
                     root_count += 1
 
             observed = root_count / total
@@ -199,6 +205,104 @@ class SeedPipelineValidationTests(unittest.TestCase):
 
             self.assertGreater(int(path_channel.sum().item()), 0)
             self.assertGreater(int(path_channel[seed[0], seed[1], seed[2]].item()), 0)
+
+    def test_predicted_path_channel_pruning_can_empty_subtree(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            img_dir = root / "images"
+            swc_dir = root / "swc"
+            img_dir.mkdir()
+            swc_dir.mkdir()
+
+            volume_shape = (24, 24, 24)
+            _write_volume(img_dir / "sample.tif", shape=volume_shape)
+            _write_swc(
+                swc_dir / "sample.swc",
+                [
+                    (1, 3, 8.0, 8.0, 8.0, 1.0, -1),
+                    (2, 3, 9.0, 8.0, 8.0, 1.0, 1),
+                    (3, 3, 10.0, 8.0, 8.0, 1.0, 2),
+                ],
+                shape_zyx=volume_shape,
+            )
+
+            dataset = NeuronPatchDataset(
+                swc_dir=swc_dir,
+                img_dir=img_dir,
+                crop_size=16,
+                patches_per_image=1,
+                alpha=1.0,
+                step_width=4.0,
+                rng=np.random.default_rng(0),
+                crop_patches=True,
+                inference_mode=False,
+            )
+
+            subtree = [
+                [1, 3, 8.0, 8.0, 8.0, 1.0, -1],
+                [2, 3, 9.0, 8.0, 8.0, 1.0, 1],
+                [3, 3, 10.0, 8.0, 8.0, 1.0, 2],
+            ]
+            path_channel, updated_subtree = dataset._build_predicted_path_channel(
+                subtree=subtree,
+                seed_node_id=3,
+                spatial_shape_zyx=torch.Size([16, 16, 16]),
+            )
+
+            self.assertEqual(path_channel.dtype, torch.uint8)
+            self.assertEqual(tuple(path_channel.shape), (16, 16, 16))
+            self.assertEqual(len(updated_subtree), 0)
+
+    def test_getitem_retries_when_pruning_empties_patch(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            img_dir = root / "images"
+            swc_dir = root / "swc"
+            img_dir.mkdir()
+            swc_dir.mkdir()
+
+            volume_shape = (24, 24, 24)
+            _write_volume(img_dir / "sample.tif", shape=volume_shape)
+            _write_swc(
+                swc_dir / "sample.swc",
+                [
+                    (1, 3, 8.0, 8.0, 8.0, 1.0, -1),
+                    (2, 3, 9.0, 8.0, 8.0, 1.0, 1),
+                    (3, 3, 10.0, 8.0, 8.0, 1.0, 2),
+                ],
+                shape_zyx=volume_shape,
+            )
+
+            dataset = NeuronPatchDataset(
+                swc_dir=swc_dir,
+                img_dir=img_dir,
+                crop_size=16,
+                patches_per_image=2,
+                alpha=1.0,
+                step_width=4.0,
+                rng=np.random.default_rng(0),
+                crop_patches=True,
+                inference_mode=False,
+            )
+
+            valid_patch = {
+                "image": torch.zeros((2, 16, 16, 16), dtype=torch.uint8),
+                "neuron_tree": [[1, 3, 8.0, 8.0, 8.0, 1.0, -1]],
+                "neuron_mask": torch.zeros((1, 16, 16, 16), dtype=torch.uint8),
+                "seed_point_xyz": torch.tensor([8.0, 8.0, 8.0], dtype=torch.float32),
+                "seed_node_id": 1,
+            }
+
+            with mock.patch.object(
+                dataset,
+                "_extract_random_patch",
+                side_effect=[datasets_module._ResamplePatch("empty after prune"), valid_patch],
+            ) as mocked_extract:
+                sample = dataset[0]
+
+            self.assertEqual(mocked_extract.call_count, 2)
+            self.assertEqual(sample["seed_node_id"], 1)
+            self.assertEqual(tuple(sample["seed_points"].shape), (1, 3))
 
     def test_environment_uses_dataset_seed_points_and_terminates_without_ground_truth(self):
         with tempfile.TemporaryDirectory() as tmp_dir:

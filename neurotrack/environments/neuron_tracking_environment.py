@@ -503,12 +503,10 @@ class NeuronTrackingEnvironment:
                             self.cut_ends.extend(changed_nodes)
                             # remove nodes from cut ends that no longer exist
                             valid_keys = set(self.id_to_idx.keys())
-                            valid_adj_keys = set(self.adj_dict.keys())
                             self.cut_ends = list({
                                 int(ce)
                                 for ce in self.cut_ends
                                 if int(ce) in valid_keys
-                                and int(ce) in valid_adj_keys
                                 and len(self.adj_dict.get(int(ce), [])) > 0
                             })
 

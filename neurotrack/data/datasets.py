@@ -15,6 +15,10 @@ from neurotrack.data.image import Image, to_uint8
 from neurotrack.data.seed_io import load_seeds_json
 
 
+class _ResamplePatch(Exception):
+    """Internal signal indicating the caller should sample a different patch."""
+
+
 class NeuronPatchDataset(TorchDataset):
     """
     PyTorch Dataset for efficiently loading cropped patches from neuron images.
@@ -257,6 +261,7 @@ class NeuronPatchDataset(TorchDataset):
         )
         if len(path_ids) < 2:
             return path_channel, subtree
+        path_id_set = set(path_ids)
 
         path_image = Image(torch.zeros((1,) + spatial_shape, dtype=torch.uint8))
         for idx in range(len(path_ids) - 1):
@@ -273,11 +278,11 @@ class NeuronPatchDataset(TorchDataset):
         for node_id in path_ids:
             neighbor_nodes = adj_dict.get(int(node_id), [])
             for neighbor in neighbor_nodes:
-                if int(neighbor) not in path_ids:
+                if int(neighbor) not in path_id_set:
                     neighbors_to_update.add(int(neighbor))
         updated_subtree = []
         for node in subtree:
-            if int(node[0]) in path_ids:
+            if int(node[0]) in path_id_set:
                 continue
             if int(node[0]) in neighbors_to_update:
                 updated_node = list(node)
@@ -285,6 +290,19 @@ class NeuronPatchDataset(TorchDataset):
                 updated_subtree.append(updated_node)
             else:
                 updated_subtree.append(node)
+
+        # Keep subtree edge-based: drop any isolated leftovers after path removal.
+        if updated_subtree:
+            updated_adj = load.adjacency_dict(updated_subtree)
+            connected_ids = {
+                int(node_id)
+                for node_id, neighbors in updated_adj.items()
+                if len(neighbors) > 0
+            }
+            if connected_ids:
+                updated_subtree = [node for node in updated_subtree if int(node[0]) in connected_ids]
+            else:
+                updated_subtree = []
 
         return path_image.data[0], updated_subtree
 
@@ -402,14 +420,22 @@ class NeuronPatchDataset(TorchDataset):
         swc_data: Union[List, np.ndarray],
         center_node: np.ndarray,
         swc_adj_dict: Optional[Dict[int, List[int]]] = None,
+        image_shape_xyz: Optional[Tuple[int, int, int]] = None,
     ) -> List:
         """Extract the connected subtree within crop bounds around a center SWC node."""
         swc_array = np.asarray(swc_data)
-        id_to_idx = {int(row[0]): idx for idx, row in enumerate(swc_array)}
         center_point = center_node[2:5]
+
+        min_coords = np.floor(center_point - self.crop_size // 2).astype(int)
+        max_coords = np.ceil(center_point + self.crop_size // 2).astype(int)
+        if image_shape_xyz is not None:
+            shape_xyz = np.asarray(image_shape_xyz, dtype=np.int64)
+            min_coords = np.maximum(0, min_coords)
+            max_coords = np.minimum(shape_xyz, max_coords)
+
         in_box_mask = np.all(
-            (swc_array[:, 2:5] >= (center_point - self.crop_size/2)) &
-            (swc_array[:, 2:5] <= (center_point + self.crop_size/2)),
+            (swc_array[:, 2:5] >= min_coords) &
+            (swc_array[:, 2:5] < max_coords),
             axis=1
         )
         in_box_nodes = swc_array[in_box_mask]
@@ -493,7 +519,7 @@ class NeuronPatchDataset(TorchDataset):
         #     subtree.append(new_node.tolist())
 
         return subtree
-    
+
     def _extract_random_patch(
         self,
         image: torch.Tensor,
@@ -503,7 +529,7 @@ class NeuronPatchDataset(TorchDataset):
     ) -> Dict[str, torch.Tensor]:
         """
         Extract a cropped patch using RNG-selected center with optional root bias.
-        
+
         Parameters:
         -----------
         image : torch.Tensor
@@ -512,7 +538,7 @@ class NeuronPatchDataset(TorchDataset):
             SWC neuron data
         patch_rng : np.random.Generator
             Random number generator for this specific patch
-        
+
         Returns:
         --------
         Dict containing:
@@ -530,10 +556,24 @@ class NeuronPatchDataset(TorchDataset):
                 center_node = root_nodes[patch_rng.integers(len(root_nodes))]
         seed_node_id = int(center_node[0])
 
-        subtree = self._extract_subtree(swc_array, center_node=center_node, swc_adj_dict=swc_adj_dict)
-    
+        subtree = self._extract_subtree(
+            swc_array,
+            center_node=center_node,
+            swc_adj_dict=swc_adj_dict,
+            image_shape_xyz=tuple(image.shape[-3:][::-1]),
+        )
+        if len(subtree) == 0:
+            raise _ResamplePatch("Extracted subtree is empty before cropping.")
 
-        cropped_img, shifted_subtree = crop_around_subtree(image, subtree, center_node=center_node, size=self.crop_size)
+        try:
+            cropped_img, shifted_subtree = crop_around_subtree(
+                image,
+                subtree,
+                center_node=center_node,
+                size=self.crop_size,
+            )
+        except ValueError as exc:
+            raise _ResamplePatch(str(exc)) from exc
 
         seed_xyz = None
         for node in shifted_subtree:
@@ -541,13 +581,13 @@ class NeuronPatchDataset(TorchDataset):
                 seed_xyz = torch.as_tensor(node[2:5], dtype=torch.float32)
                 break
         if seed_xyz is None:
-            raise RuntimeError(f"Seed node {seed_node_id} was not found in cropped subtree.")
+            raise _ResamplePatch(f"Seed node {seed_node_id} was not found in cropped subtree.")
 
         if self.inference_mode:
             image = cropped_img
             neuron_area_mask = None
-    
-        else:    
+
+        else:
             # create mask
             neuron_area_mask = self._draw_tree_mask(
                 swc_data=shifted_subtree,
@@ -570,9 +610,11 @@ class NeuronPatchDataset(TorchDataset):
             seed_node_id=seed_node_id,
             spatial_shape_zyx=cropped_img.shape[-3:],
         )
+        if len(shifted_subtree) == 0:
+            raise _ResamplePatch("Extracted subtree is empty after path pruning.")
+
         image = self._append_path_channel(image, path_channel=path_channel)
 
-        
         return {
             'image': image,
             'neuron_tree': shifted_subtree,
@@ -607,43 +649,60 @@ class NeuronPatchDataset(TorchDataset):
         """
         
         if self.crop_patches:
-            # Original patch extraction logic
-            image_idx = (idx // self.patches_per_image) % len(self.img_files)
+            base_image_idx = (idx // self.patches_per_image) % len(self.img_files)
             
             # Create a deterministic RNG for this specific patch
             patch_seed = self._base_seed + idx
             patch_rng = np.random.default_rng(patch_seed)
-            
-            # Load image if not cached or if different image
-            if self._cached_image_idx != image_idx:
-                self._cached_image = self._load_image(image_idx)
-                self._cached_swc_data = self._load_swc(image_idx)
-                self._cached_swc_array = np.asarray(self._cached_swc_data, dtype=np.float32)
-                self._cached_swc_adj_dict = load.adjacency_dict(self._cached_swc_array)
-                self._cached_image_idx = image_idx
 
-            swc_data = self._cached_swc_array if self._cached_swc_array is not None else self._cached_swc_data
-            if swc_data is None:
-                raise RuntimeError("SWC cache is unexpectedly empty for crop_patches mode")
-            
-            # Extract patch using the deterministic RNG
-            patch = self._extract_random_patch(
-                self._cached_image, 
-                swc_data,
-                patch_rng,
-                swc_adj_dict=self._cached_swc_adj_dict,
+            # Retry patch sampling when pruning removes all subtree nodes.
+            attempts_per_image = max(8, min(64, int(self.patches_per_image)))
+            last_error: Optional[Exception] = None
+
+            for image_offset in range(len(self.img_files)):
+                image_idx = (base_image_idx + image_offset) % len(self.img_files)
+
+                # Load image/SWC cache for this image index.
+                if self._cached_image_idx != image_idx:
+                    self._cached_image = self._load_image(image_idx)
+                    self._cached_swc_data = self._load_swc(image_idx)
+                    self._cached_swc_array = np.asarray(self._cached_swc_data, dtype=np.float32)
+                    self._cached_swc_adj_dict = load.adjacency_dict(self._cached_swc_array)
+                    self._cached_image_idx = image_idx
+
+                swc_data = self._cached_swc_array if self._cached_swc_array is not None else self._cached_swc_data
+                if swc_data is None:
+                    raise RuntimeError("SWC cache is unexpectedly empty for crop_patches mode")
+
+                for _ in range(attempts_per_image):
+                    try:
+                        patch = self._extract_random_patch(
+                            self._cached_image,
+                            swc_data,
+                            patch_rng,
+                            swc_adj_dict=self._cached_swc_adj_dict,
+                        )
+                    except _ResamplePatch as exc:
+                        last_error = exc
+                        continue
+
+                    seed_xyz = patch.pop('seed_point_xyz')
+                    patch['seed_points'] = seed_xyz.flip(dims=(0,)).unsqueeze(0)
+
+                    # Add metadata
+                    patch['neuron_name'] = self.img_files[image_idx].stem
+                    patch['relative_image_path'] = self.img_files[image_idx].relative_to(self.img_dir).as_posix()
+                    patch['image_idx'] = image_idx
+                    patch['global_idx'] = idx
+
+                    return patch
+
+            total_attempts = attempts_per_image * len(self.img_files)
+            raise RuntimeError(
+                "Failed to sample a valid patch after "
+                f"{total_attempts} attempts starting at image index {base_image_idx}. "
+                f"Last sampling error: {last_error}"
             )
-
-            seed_xyz = patch.pop('seed_point_xyz')
-            patch['seed_points'] = seed_xyz.flip(dims=(0,)).unsqueeze(0)
-            
-            # Add metadata
-            patch['neuron_name'] = self.img_files[image_idx].stem
-            patch['relative_image_path'] = self.img_files[image_idx].relative_to(self.img_dir).as_posix()
-            patch['image_idx'] = image_idx
-            patch['global_idx'] = idx
-            
-            return patch
         else:
             # Return full image without cropping
             image_idx = idx % len(self.img_files)

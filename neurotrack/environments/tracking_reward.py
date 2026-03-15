@@ -419,33 +419,6 @@ def _get_nearest_point(point: Union[torch.Tensor, np.ndarray], swc_list: Union[t
     nearest_node = int(nearest_node)
     neighbors = [int(n) for n in adj_dict.get(nearest_node, []) if int(n) in id_to_idx]
 
-    # If the nearest node has no valid incident edge, try the next-nearest node that does.
-    # This keeps nearest-point semantics edge-based for downstream visited-edge updates.
-    if not neighbors:
-        if valid_nodes is None:
-            candidate_nodes = [int(v) for v in swc_t[:, 0].tolist() if int(v) in id_to_idx]
-        else:
-            candidate_nodes = [int(v) for v in valid_nodes if int(v) in id_to_idx]
-
-        candidate_nodes = [
-            n for n in candidate_nodes
-            if any(int(nb) in id_to_idx for nb in adj_dict.get(int(n), []))
-        ]
-        if not candidate_nodes:
-            return None, (None, None)
-
-        candidate_idx = torch.tensor(
-            [id_to_idx[n] for n in candidate_nodes],
-            dtype=torch.long,
-            device=swc_t.device,
-        )
-        candidate_pos = swc_t[candidate_idx, 2:5]
-        dists2 = torch.sum((candidate_pos - pt.unsqueeze(0)) ** 2, dim=1)
-        nearest_node = candidate_nodes[int(torch.argmin(dists2).item())]
-        neighbors = [int(n) for n in adj_dict.get(nearest_node, []) if int(n) in id_to_idx]
-        if not neighbors:
-            return None, (None, None)
-
     # Positions
     nearest_node_pos = swc_t[id_to_idx[nearest_node], 2:5]
     neighbor_idx = torch.tensor(

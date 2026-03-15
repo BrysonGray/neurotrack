@@ -65,7 +65,8 @@ def _compose_frame_from_image_tensor(data: torch.Tensor) -> PILImage:
     """Compose a single HxWx3 PIL image from an Image.data tensor.
 
     Expects data shape (C, D, H, W) or (C, H, W) where the last channel is the path overlay.
-    Performs a max-projection over the depth axis and overlays the path channel as red.
+    Performs a max-projection over the depth axis and overlays the path channel as an
+    opaque red top layer.
     """
     # Handle 3D vs 4D
     if data.ndim == 3:
@@ -110,8 +111,11 @@ def _compose_frame_from_image_tensor(data: torch.Tensor) -> PILImage:
         gray = base_np[0]
         rgb = np.stack([gray, gray, gray], axis=-1)
 
-    # overlay path on red channel
+    # Draw the traced path on top of the base image so it remains fully visible.
     path_img = path_np if path_np.ndim == 2 else path_np[0]
-    rgb[..., 0] = np.maximum(rgb[..., 0], path_img)
+    path_mask = path_img > 0
+    rgb[..., 0] = np.where(path_mask, path_img, rgb[..., 0])
+    rgb[..., 1] = np.where(path_mask, 0, rgb[..., 1])
+    rgb[..., 2] = np.where(path_mask, 0, rgb[..., 2])
 
     return PILImage.fromarray(rgb.astype(np.uint8))

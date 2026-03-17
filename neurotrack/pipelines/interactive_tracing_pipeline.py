@@ -262,6 +262,32 @@ class _TraceRuntime:
             inference_mode=True,
         )
 
+        self._dataset_keys_by_index: List[str] = [
+            path.relative_to(self._dataset.img_dir).as_posix() for path in self._dataset.img_files
+        ]
+        self._dataset_index_by_key: Dict[str, int] = {
+            key: idx for idx, key in enumerate(self._dataset_keys_by_index)
+        }
+
+    def _resolve_dataset_index(self, image_index: int, image_relative_key: str) -> Tuple[int, str]:
+        """Resolve dataset index from a relative image key, falling back to provided index."""
+        key = str(image_relative_key)
+        exact_idx = self._dataset_index_by_key.get(key)
+        if exact_idx is not None:
+            return exact_idx, key
+
+        # Try tolerant matching when keys differ by root/suffix or extension details.
+        key_match_map = {candidate: candidate for candidate in self._dataset_index_by_key.keys()}
+        matched_key = flexible_image_key_lookup(key_match_map, key, default=None)
+        if isinstance(matched_key, str):
+            matched_idx = self._dataset_index_by_key.get(matched_key)
+            if matched_idx is not None:
+                return matched_idx, matched_key
+
+        fallback_idx = int(image_index) % len(self._dataset.img_files)
+        fallback_key = self._dataset_keys_by_index[fallback_idx]
+        return fallback_idx, fallback_key
+
     def trace_image(
         self,
         image_index: int,
@@ -271,13 +297,17 @@ class _TraceRuntime:
         initial_path_mask: Optional[np.ndarray] = None,
     ) -> Dict[str, object]:
         with self._lock:
-            self._dataset.seed_points_by_image[image_relative_key] = [
-                [float(coord) for coord in row] for row in seed_rows
-            ]
+            dataset_index, resolved_key = self._resolve_dataset_index(
+                image_index=image_index,
+                image_relative_key=image_relative_key,
+            )
+            normalized_seed_rows = [[float(coord) for coord in row] for row in seed_rows]
+            self._dataset.seed_points_by_image[image_relative_key] = normalized_seed_rows
+            self._dataset.seed_points_by_image[resolved_key] = normalized_seed_rows
             result = sac_trace_image(
                 env=self._env,
                 actor=self._actor,
-                dataset_idx=image_index,
+                dataset_idx=dataset_index,
                 Q_net=self._q_net,
                 n_trials=int(self.trace_params.get("n_trials", 1)),
                 show=False,
@@ -314,8 +344,6 @@ class _TraceSessionManager:
         self.postprocess_config: PostprocessConfig = postprocess_config or PostprocessConfig()
         self._runtime = None
         self.enabled = False
-        if self.trace_params.get("sac_weights"):
-            self.set_model_weights_path(str(self.trace_params["sac_weights"]))
 
         self.trace_results_by_key: Dict[str, List[List[List[float]]]] = {}
         self._revision_state_by_key: Dict[str, Dict[str, object]] = {}
@@ -341,6 +369,9 @@ class _TraceSessionManager:
             self._gt_swc_dir = Path(str(self.trace_params["swc_dir"]))
         self._postprocess_output_dir: Optional[Path] = None
         self._eval_output_dir: Optional[Path] = None
+
+        if self.trace_params.get("sac_weights"):
+            self.set_model_weights_path(str(self.trace_params["sac_weights"]))
 
     def _set_state(self, message: str, increment_token: bool = False):
         with self._state_lock:
@@ -629,6 +660,11 @@ class _TraceSessionManager:
         self._set_state(f"Post-process output set to: {p}", increment_token=True)
         return str(p)
 
+    def clear_postprocess_output_dir(self) -> Optional[str]:
+        self._postprocess_output_dir = None
+        self._set_state("Post-process output cleared.", increment_token=True)
+        return None
+
     def set_eval_output_dir(self, path: str) -> Optional[str]:
         """Set the directory where evaluation reports are written."""
         if not path or not str(path).strip():
@@ -638,6 +674,11 @@ class _TraceSessionManager:
         self._eval_output_dir = p
         self._set_state(f"Eval output set to: {p}", increment_token=True)
         return str(p)
+
+    def clear_eval_output_dir(self) -> Optional[str]:
+        self._eval_output_dir = None
+        self._set_state("Eval output cleared.", increment_token=True)
+        return None
 
     def update_postprocess_config(self, overrides: Dict[str, object]) -> None:
         """Update postprocess/eval config parameters from the UI."""
@@ -670,6 +711,12 @@ class _TraceSessionManager:
         self._set_state(f"Scales JSON set: {p}", increment_token=True)
         return str(p)
 
+    def clear_scales_path(self) -> Optional[str]:
+        self.postprocess_config.scales_path = None
+        self.postprocess_config._scales_cache = None
+        self._set_state("Scales JSON path cleared.", increment_token=True)
+        return None
+
     def set_gt_swc_dir(self, path: str) -> Optional[str]:
         if not path or not str(path).strip():
             return None
@@ -680,6 +727,11 @@ class _TraceSessionManager:
         self._gt_swc_dir = p
         self._set_state(f"GT SWC directory set: {p}", increment_token=True)
         return str(p)
+
+    def clear_gt_swc_dir(self) -> Optional[str]:
+        self._gt_swc_dir = None
+        self._set_state("GT SWC directory cleared.", increment_token=True)
+        return None
 
     def run_postprocess(self, image_key: str) -> Optional[Dict[str, object]]:
         """Post-process raw trace paths for *image_key* and store the result."""
@@ -865,6 +917,28 @@ class _TraceSessionManager:
             self._set_state(f"Failed to load model weights: {exc}", increment_token=True)
             return None
 
+    def clear_model_weights_path(self) -> Optional[str]:
+        self.trace_params.pop("sac_weights", None)
+        self.enabled = False
+        self._runtime = None
+        self._set_state("Model weights cleared.", increment_token=True)
+        return None
+
+    def set_trace_output_dir(self, path: str) -> Optional[str]:
+        """Set the trace output directory directly (e.g. from a config file)."""
+        if not path or not str(path).strip():
+            return None
+        p = Path(path)
+        p.mkdir(parents=True, exist_ok=True)
+        self._trace_output_dir = p
+        self._set_state(f"Trace output set to: {p}", increment_token=True)
+        return str(p)
+
+    def clear_trace_output_dir(self) -> Optional[str]:
+        self._trace_output_dir = None
+        self._set_state("Trace output cleared.", increment_token=True)
+        return None
+
     def select_trace_output_dir(self, default_dir: Path) -> Optional[str]:
         selected_dir = prompt_select_directory(default_path=str(default_dir))
         if selected_dir is None:
@@ -872,6 +946,7 @@ class _TraceSessionManager:
         self._trace_output_dir = Path(selected_dir)
         self._trace_output_dir.mkdir(parents=True, exist_ok=True)
         self._set_state(f"Trace output set to: {self._trace_output_dir}", increment_token=True)
+        return str(self._trace_output_dir)
 
     def update_trace_params(self, overrides: Dict[str, object]) -> None:
         """Update runtime trace parameters and reload the runtime if weights are available."""
@@ -1006,6 +1081,7 @@ class _SessionState:
         self.selected_seeds: Dict[str, list] = dict(existing_seeds)
         self.seeds_output_path: Optional[str] = seeds_output_path
         self.seeds_input_path: Optional[str] = seeds_input_path
+        self.display_image_dir: Optional[str] = str(image_root)
         self.current_volume_shape: tuple[int, int, int] = (1, 1, 1)
 
     # ------------------------------------------------------------------
@@ -1037,7 +1113,7 @@ class _SessionState:
             "model_weights_path": trace_manager.get_model_weights_path(),
             "gt_swc_path": trace_manager.get_gt_swc_path(),
             "scales_path": trace_manager.get_scales_path(),
-            "image_dir": str(self.image_root),
+            "image_dir": self.display_image_dir,
             "seeds_input_path": self.seeds_input_path,
         }
 
@@ -1077,6 +1153,23 @@ class _SessionState:
         if selected:
             self.seeds_output_path = selected
         return self.seeds_output_path
+
+    def clear_seeds_output_path(self) -> Optional[str]:
+        self.seeds_output_path = None
+        return self.seeds_output_path
+
+    def select_image_dir(self) -> Optional[str]:
+        qt_widgets_mod = importlib.import_module("qtpy.QtWidgets")
+        selected = qt_widgets_mod.QFileDialog.getExistingDirectory(
+            None, "Select image directory", str(self.image_root)
+        )
+        if selected:
+            self.display_image_dir = selected
+        return self.display_image_dir
+
+    def clear_image_dir(self) -> Optional[str]:
+        self.display_image_dir = None
+        return self.display_image_dir
 
     def save_current(self, seed_array: np.ndarray) -> None:
         relative_key = self.current_relative_key()
@@ -1158,6 +1251,10 @@ class _SessionState:
         current_seeds_array = np.asarray(current_rows, dtype=np.float32) if current_rows else None
         return self.seeds_input_path, current_seeds_array
 
+    def clear_seeds_input_path(self) -> Optional[str]:
+        self.seeds_input_path = None
+        return self.seeds_input_path
+
 
 def run_interactive_tracing_session(
     image_dir: Optional[str] = None,
@@ -1167,9 +1264,22 @@ def run_interactive_tracing_session(
 ) -> Dict[str, list]:
     """Run an interactive tracing session: seed selection, tracing, post-processing, and evaluation."""
     config = _load_optional_session_config(config_path)
-    image_dir = image_dir or config.get("image_dir")
-    seeds_input_path = seeds_input_path if seeds_input_path is not None else config.get("seeds_input_path")
-    seeds_output_path = seeds_output_path if seeds_output_path is not None else config.get("seeds_output_path")
+
+    def _first_config_value(*keys: str) -> Optional[str]:
+        for key in keys:
+            value = config.get(key)
+            if value is None:
+                continue
+            value_str = str(value).strip()
+            if len(value_str) > 0:
+                return value_str
+        return None
+
+    image_dir = image_dir or _first_config_value("image_dir", "img_dir", "img_path")
+    if seeds_input_path is None:
+        seeds_input_path = _first_config_value("seeds_input_path", "seeds_path")
+    if seeds_output_path is None:
+        seeds_output_path = _first_config_value("seeds_output_path")
 
     image_dir, seeds_input_path, seeds_output_path = prompt_seed_session_paths(
         image_dir=image_dir,
@@ -1197,6 +1307,7 @@ def run_interactive_tracing_session(
         "repeat_starts": config.get("repeat_starts", False),
         "n_trials": config.get("n_trials", 1),
         "stochastic_actions": config.get("stochastic_actions", False),
+        "auto_seed_selection_mode": config.get("auto_seed_selection_mode", "remote_endnode"),
     }
 
     # ---- post-processing / evaluation parameters (separate from trace_params) ----
@@ -1217,6 +1328,17 @@ def run_interactive_tracing_session(
         postprocess_config=postprocess_config,
     )
 
+    # Pre-set optional output directories from config so UI labels are populated immediately.
+    trace_output_dir = _first_config_value("trace_output_dir", "out_dir")
+    postprocess_output_dir = _first_config_value("postprocess_output_dir", "out_dir")
+    eval_output_dir = _first_config_value("eval_output_dir", "out_dir")
+    if trace_output_dir is not None:
+        trace_manager.set_trace_output_dir(trace_output_dir)
+    if postprocess_output_dir is not None:
+        trace_manager.set_postprocess_output_dir(postprocess_output_dir)
+    if eval_output_dir is not None:
+        trace_manager.set_eval_output_dir(eval_output_dir)
+
     # ---- small local closures for operations that need both session + external state ----
 
     def _select_model_weights_path() -> Optional[str]:
@@ -1227,14 +1349,6 @@ def run_interactive_tracing_session(
         loaded = trace_manager.set_model_weights_path(selected)
         return loaded if loaded is not None else current_weights
 
-    def _select_image_dir() -> Optional[str]:
-        """Prompt for a new image directory (informational only — session scope is fixed at startup)."""
-        qt_widgets_mod = importlib.import_module("qtpy.QtWidgets")
-        selected = qt_widgets_mod.QFileDialog.getExistingDirectory(
-            None, "Select image directory", str(image_root)
-        )
-        return selected or None
-
     def _select_gt_swc_path() -> Optional[str]:
         selected = prompt_select_directory(
             default_path=config.get("swc_dir") or str(image_root)
@@ -1242,6 +1356,9 @@ def run_interactive_tracing_session(
         if selected:
             trace_manager.set_gt_swc_dir(selected)
         return trace_manager.get_gt_swc_path()
+
+    def _clear_gt_swc_path() -> Optional[str]:
+        return trace_manager.clear_gt_swc_dir()
 
     def _select_scales_path() -> Optional[str]:
         qt_widgets_mod = importlib.import_module("qtpy.QtWidgets")
@@ -1254,6 +1371,30 @@ def run_interactive_tracing_session(
         if selected:
             trace_manager.set_scales_path(selected)
         return trace_manager.get_scales_path()
+
+    def _clear_scales_path() -> Optional[str]:
+        return trace_manager.clear_scales_path()
+
+    def _select_postprocess_output_dir() -> Optional[str]:
+        selected = prompt_select_directory(default_path=str(image_root / "postprocessed"))
+        if selected is None:
+            return trace_manager.get_postprocess_output_dir()
+        return trace_manager.set_postprocess_output_dir(selected)
+
+    def _clear_postprocess_output_dir() -> Optional[str]:
+        return trace_manager.clear_postprocess_output_dir()
+
+    def _select_eval_output_dir() -> Optional[str]:
+        selected = prompt_select_directory(default_path=str(image_root / "evaluation"))
+        if selected is None:
+            return trace_manager.get_eval_output_dir()
+        return trace_manager.set_eval_output_dir(selected)
+
+    def _clear_eval_output_dir() -> Optional[str]:
+        return trace_manager.clear_eval_output_dir()
+
+    def _clear_model_weights_path() -> Optional[str]:
+        return trace_manager.clear_model_weights_path()
 
     try:
         initial_context = session.build_context(session.current_index, trace_manager)
@@ -1281,9 +1422,14 @@ def run_interactive_tracing_session(
             on_select_trace_output_path=lambda: trace_manager.select_trace_output_dir(
                 default_dir=image_root / "trace_outputs"
             ),
+            on_clear_seeds_output_path=session.clear_seeds_output_path,
+            on_clear_trace_output_path=trace_manager.clear_trace_output_dir,
             on_select_model_weights_path=_select_model_weights_path,
-            on_select_image_dir=_select_image_dir,
+            on_clear_model_weights_path=_clear_model_weights_path,
+            on_select_image_dir=session.select_image_dir,
+            on_clear_image_dir=session.clear_image_dir,
             on_select_seeds_input_path=session.select_seeds_input_path,
+            on_clear_seeds_input_path=session.clear_seeds_input_path,
             trace_step_width=float(trace_params.get("step_width", 4.0)),
             trace_n_trials=int(trace_params.get("n_trials", 1)),
             trace_max_len=int(trace_params.get("max_len", 10000)),
@@ -1303,22 +1449,22 @@ def run_interactive_tracing_session(
                 session.current_relative_key(), default_dir=image_root / "evaluation"
             ),
             on_select_gt_swc_path=_select_gt_swc_path,
+            on_clear_gt_swc_path=_clear_gt_swc_path,
             on_select_scales_path=_select_scales_path,
+            on_clear_scales_path=_clear_scales_path,
             postprocess_output_dir=trace_manager.get_postprocess_output_dir(),
             postprocess_min_branch_length=postprocess_config.min_branch_length,
             postprocess_resampling_step_size=postprocess_config.resampling_step_size,
             postprocess_smoothing_window=postprocess_config.smoothing_window,
             postprocess_overlap_threshold=postprocess_config.overlap_threshold,
             postprocess_overlap_distance_threshold=postprocess_config.overlap_distance_threshold,
-            on_select_postprocess_output_dir=lambda: trace_manager.set_postprocess_output_dir(
-                prompt_select_directory(default_path=str(image_root / "postprocessed")) or ""
-            ),
+            on_select_postprocess_output_dir=_select_postprocess_output_dir,
+            on_clear_postprocess_output_dir=_clear_postprocess_output_dir,
             on_postprocess_params_changed=trace_manager.update_postprocess_config,
             eval_output_dir=trace_manager.get_eval_output_dir(),
             eval_distance_threshold=postprocess_config.distance_threshold,
-            on_select_eval_output_dir=lambda: trace_manager.set_eval_output_dir(
-                prompt_select_directory(default_path=str(image_root / "evaluation")) or ""
-            ),
+            on_select_eval_output_dir=_select_eval_output_dir,
+            on_clear_eval_output_dir=_clear_eval_output_dir,
             on_eval_params_changed=trace_manager.update_postprocess_config,
         )
         session.selected_seeds[session.current_relative_key()] = _normalize_seed_array(

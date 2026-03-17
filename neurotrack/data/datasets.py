@@ -159,6 +159,8 @@ class NeuronPatchDataset(TorchDataset):
         """Validate and convert seed rows to a float32 tensor in (z, y, x) order."""
         seeds = torch.as_tensor(seed_rows, dtype=torch.float32)
         if seeds.ndim == 1:
+            if seeds.numel() == 0:
+                return seeds.reshape(0, 3)
             seeds = seeds.unsqueeze(0)
         if seeds.ndim != 2 or seeds.shape[1] != 3:
             raise ValueError(f"Seed points for '{context}' must have shape (N, 3) in (z, y, x) order.")
@@ -169,7 +171,10 @@ class NeuronPatchDataset(TorchDataset):
         seed_rows = flexible_image_key_lookup(self.seed_points_by_image, relative_image_path)
         if seed_rows is None:
             return None
-        return self._normalize_seed_rows(seed_rows, context=relative_image_path)
+        seeds = self._normalize_seed_rows(seed_rows, context=relative_image_path)
+        if seeds.shape[0] == 0:
+            return None
+        return seeds
 
     @staticmethod
     def _get_root_seed_points_from_swc(swc_data: List) -> Optional[torch.Tensor]:
@@ -231,6 +236,7 @@ class NeuronPatchDataset(TorchDataset):
         subtree: List,
         seed_node_id: int,
         spatial_shape_zyx: torch.Size,
+        add_prev_path: bool = True,
     ) -> torch.Tensor:
         """Build path channel from smallest-id subtree node to the seed node."""
         spatial_shape = tuple(int(v) for v in spatial_shape_zyx)
@@ -245,8 +251,8 @@ class NeuronPatchDataset(TorchDataset):
         if seed_node is None:
             return path_channel, subtree
 
-        # If seed is a root node, draw a seed marker instead of a path.
-        if int(seed_node[6]) == -1:
+        # If seed is a root node or add_prev_path is False, draw a seed marker instead of a path.
+        if int(seed_node[6]) == -1 or not add_prev_path:
             seed_point = torch.as_tensor((seed_node[4], seed_node[3], seed_node[2]), dtype=torch.float32)
             path_image = Image(torch.zeros((1,) + spatial_shape, dtype=torch.uint8))
             path_image.draw_point(seed_point, radius=self.step_width, channel=0, mode="mask")
@@ -605,10 +611,16 @@ class NeuronPatchDataset(TorchDataset):
             else:
                 image = cropped_img
 
+        # At runtime, sometimes the seed will be manually placed mid-neuron.
+        # To simulate this, sometimes do not add the previous path to the path
+        # channel and prune the subtree as if the seed is the new root.
+        prob_add_prev_path = 0.95
+        add_prev_path = patch_rng.random() < prob_add_prev_path
         path_channel, shifted_subtree = self._build_predicted_path_channel(
             subtree=shifted_subtree,
             seed_node_id=seed_node_id,
             spatial_shape_zyx=cropped_img.shape[-3:],
+            add_prev_path=add_prev_path
         )
         if len(shifted_subtree) == 0:
             raise _ResamplePatch("Extracted subtree is empty after path pruning.")

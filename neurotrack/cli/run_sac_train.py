@@ -20,7 +20,7 @@ from neurotrack.training import sac
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 dtype = torch.float32
-date = datetime.now().strftime("%m-%d-%y")
+date_time = datetime.now().strftime("'%Y-%m-%d_%H-%M-%S'")
 
 
 def main():
@@ -106,7 +106,7 @@ def main():
     dataset = NeuronPatchDataset(
         swc_dir=swc_dir,
         img_dir=img_dir,
-        crop_size=64,
+        crop_size=128,
         patches_per_image=10,
         alpha=start_complexity,
         step_width=step_width,
@@ -194,7 +194,7 @@ def main():
     logdir = script_path.parent.parent / "logs" / name
     os.makedirs(logdir, exist_ok=True)
     # save input parameters for reproducibility
-    with open(logdir / "training_params.json", "w") as f:
+    with open(logdir / f"training_params_{date_time}.json", "w") as f:
         json.dump(params, f, indent=4)
     sac.train(env, actor, Q1, Q2, Q1_target, Q2_target, log_alpha,
             actor_optimizer, Q1_optimizer, Q2_optimizer, log_alpha_optimizer,

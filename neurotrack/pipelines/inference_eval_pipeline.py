@@ -1,12 +1,13 @@
 """Thin pipeline orchestrator for inference -> postprocess -> evaluation."""
 
+from datetime import datetime
 import json
+import numpy as np
 import os
 from pathlib import Path
+import torch
 from typing import Any, Dict
 
-import numpy as np
-import torch
 
 from neurotrack.core.pipeline_config import PostprocessConfig, load_pipeline_config
 from neurotrack.evaluation.io import (
@@ -17,24 +18,26 @@ from neurotrack.evaluation.io import (
 from neurotrack.inference.postprocess import process_results, write_processed_swc
 from neurotrack.inference.runtime import run_inference
 
+date_time = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+
 _INFERENCE_PIPELINE_DEFAULTS: Dict[str, Any] = {
-    "step_width": 4.0,
-    "repeat_starts": True,
-    "rng_seed": None,
-    "n_trials": 5,
+    "step_width": 2.0,
+    "repeat_starts": False,
+    "rng_seed": 1,
+    "n_trials":1,
     "seeds_path": None,
     "auto_seed_selection_mode": "remote_endnode",
     "review_before_next": False,
     "sync": False,            # Skip images whose *_trace.json already exists
     "run_postprocessing": True,
     "run_evaluation": None,   # None → infer from swc_dir
-    "min_branch_length": 10.0,
+    "min_branch_length": 5.0,
     "resampling_step_size": 4.0,
     "smoothing_window": 5,
-    "overlap_threshold": 0.8,
-    "overlap_distance_threshold": 2.0,
+    "overlap_threshold": 0.5,
+    "overlap_distance_threshold": 5.0,
     "eval_distance_threshold": None,
-    "distance_threshold": 2.0,
+    "distance_threshold": 5.0,
     "scales_path": None,
     "swc_dir": None,
 }
@@ -78,7 +81,7 @@ class InferenceEvaluationPipeline:
         run_postprocessing: bool | None = None,
         run_evaluation: bool | None = None,
     ) -> Dict[str, Any]:
-        run_out_dir = Path(self.config["out_dir"]) / self.config["test_name"]
+        run_out_dir = Path(self.config["out_dir"]) / (self.config["test_name"] + "_" + date_time)
         run_out_dir.mkdir(parents=True, exist_ok=True)
 
         should_postprocess = (

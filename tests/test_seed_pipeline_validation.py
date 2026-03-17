@@ -1,3 +1,4 @@
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -341,6 +342,41 @@ class SeedPipelineValidationTests(unittest.TestCase):
             self.assertEqual(observation.shape[1], 2)
             self.assertEqual(len(env.finished_paths), 1)
 
+    def test_empty_configured_seeds_fall_back_to_root_seed(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            img_dir = root / "images"
+            swc_dir = root / "swc"
+            img_dir.mkdir()
+            swc_dir.mkdir()
+
+            volume_shape = (24, 24, 24)
+            _write_volume(img_dir / "sample.tif", shape=volume_shape)
+            _write_swc(
+                swc_dir / "sample.swc",
+                [
+                    (1, 3, 4.0, 5.0, 6.0, 1.0, -1),
+                    (2, 3, 8.0, 9.0, 10.0, 1.0, 1),
+                ],
+                shape_zyx=volume_shape,
+            )
+
+            dataset = NeuronPatchDataset(
+                swc_dir=swc_dir,
+                img_dir=img_dir,
+                step_width=4.0,
+                crop_patches=False,
+                inference_mode=True,
+                seed_points_by_image={"sample.tif": []},
+            )
+
+            sample = dataset[0]
+            self.assertEqual(tuple(sample["seed_points"].shape), (1, 3))
+            torch.testing.assert_close(
+                sample["seed_points"][0],
+                torch.tensor([6.0, 5.0, 4.0], dtype=torch.float32),
+            )
+
     def test_inference_runtime_uses_external_seeds_json(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)
@@ -410,6 +446,98 @@ class SeedPipelineValidationTests(unittest.TestCase):
             torch.testing.assert_close(captured["seed"], torch.tensor(seed_rows[0], dtype=torch.float32))
             self.assertEqual(captured["channels"], 2)
             self.assertIn("paths", result)
+
+    def test_interactive_runtime_resolves_dataset_index_from_image_key(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            img_dir = root / "images"
+            img_dir.mkdir()
+
+            _write_volume(img_dir / "a.tif")
+            _write_volume(img_dir / "b.tif")
+            seed_rows = [[11.0, 12.0, 13.0]]
+            captured = {}
+
+            def fake_trace_image(env, actor, dataset_idx, **kwargs):
+                captured["dataset_idx"] = int(dataset_idx)
+                env.reset(dataset_index=dataset_idx)
+                captured["seed"] = env.paths[0][0].detach().cpu().clone()
+                captured["seed_map"] = dict(env.dataset.seed_points_by_image)
+                return {
+                    "paths": [[[1.0, 2.0, 3.0]]],
+                    "labeled_neuron": np.zeros(tuple(int(v) for v in env.img.data.shape[-3:]), dtype=np.uint8),
+                    "timing_ms": {"reset": 1.0},
+                }
+
+            with mock.patch.object(interactive_pipeline, "load_models", return_value=(object(), None)):
+                with mock.patch.object(interactive_pipeline, "sac_trace_image", side_effect=fake_trace_image):
+                    runtime = interactive_pipeline._TraceRuntime(
+                        {
+                            "img_dir": str(img_dir),
+                            "step_width": 4.0,
+                            "n_trials": 1,
+                            "max_len": 10,
+                            "max_paths": 1,
+                            "branching": False,
+                            "repeat_starts": False,
+                        }
+                    )
+                    # Intentionally pass the wrong index (0), but the right key (b.tif).
+                    runtime.trace_image(0, "b.tif", seed_rows)
+
+            self.assertEqual(captured["dataset_idx"], 1)
+            self.assertEqual(captured["seed_map"]["b.tif"], seed_rows)
+            torch.testing.assert_close(captured["seed"], torch.tensor(seed_rows[0], dtype=torch.float32))
+
+    def test_interactive_session_accepts_inference_style_config_aliases(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            img_dir = root / "images"
+            img_dir.mkdir()
+            _write_volume(img_dir / "sample.tif")
+
+            seeds_path = root / "seeds.json"
+            save_seeds_json(seeds_path, {"sample.tif": [[6.0, 7.0, 8.0]]})
+
+            out_dir = root / "inference_output"
+            config_path = root / "interactive_config.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "img_dir": str(img_dir),
+                        "seeds_path": str(seeds_path),
+                        "out_dir": str(out_dir),
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            captured_prompt_args = {}
+
+            def fake_prompt_seed_session_paths(image_dir=None, seeds_input_path=None, seeds_output_path=None):
+                captured_prompt_args["image_dir"] = image_dir
+                captured_prompt_args["seeds_input_path"] = seeds_input_path
+                captured_prompt_args["seeds_output_path"] = seeds_output_path
+                return image_dir, seeds_input_path, seeds_output_path
+
+            with mock.patch.object(
+                interactive_pipeline,
+                "prompt_seed_session_paths",
+                side_effect=fake_prompt_seed_session_paths,
+            ):
+                with mock.patch.object(
+                    interactive_pipeline,
+                    "interactive_seed_selection_session",
+                    return_value=torch.zeros((0, 3), dtype=torch.float32),
+                ):
+                    interactive_pipeline.run_interactive_tracing_session(
+                        config_path=str(config_path),
+                    )
+
+            self.assertEqual(captured_prompt_args["image_dir"], str(img_dir))
+            self.assertEqual(captured_prompt_args["seeds_input_path"], str(seeds_path))
+            self.assertIsNone(captured_prompt_args["seeds_output_path"])
+            self.assertTrue(out_dir.exists())
 
 
 if __name__ == "__main__":

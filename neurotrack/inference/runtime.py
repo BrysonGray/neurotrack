@@ -35,7 +35,7 @@ def build_env(params: Dict[str, Any]) -> NeuronTrackingEnvironment:
         img_dir=params["img_dir"],
         swc_dir=params.get("swc_dir", None),
         alpha=1.0,
-        step_width=float(params.get("step_width", 4.0)),
+        step_width=float(params.get("step_width", 2.0)),
         rng=rng,
         crop_patches=params.get("crop_patches", False),
         patches_per_image=int(params.get("patches_per_image", 1)),
@@ -47,7 +47,7 @@ def build_env(params: Dict[str, Any]) -> NeuronTrackingEnvironment:
     env = NeuronTrackingEnvironment(
         dataset=dataset,
         radius=17,
-        step_width=params.get("step_width", 4.0),
+        step_width=params.get("step_width", 2.0),
         max_len=params.get("max_len", 10000),
         max_paths=params.get("max_paths", 1000),
         branching=params.get("branching", True),
@@ -93,6 +93,8 @@ def run_inference(params: Dict[str, Any], out_dir: Path | str) -> Dict[str, Any]
     env = build_env(params)
 
     n_trials = int(params.get("n_trials", 1))
+    if n_trials == 1:
+        q_net = None
     show = bool(params.get("show", False))
     show_live = bool(params.get("show_live", False))
     stochastic = bool(params.get("stochastic_actions", False))

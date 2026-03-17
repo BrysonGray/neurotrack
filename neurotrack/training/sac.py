@@ -29,7 +29,8 @@ from neurotrack.environments.tracking_reward import distance_reward
 
 DEVICE = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 dtype = torch.float32
-date = datetime.now().strftime("%m-%d-%y")
+date_time = datetime.now().strftime("'%Y-%m-%d_%H-%M-%S'")
+    
 
 
 def sample_from_output(out):    
@@ -414,7 +415,7 @@ def train(env,
     # This could be done by running the environment with an oracle that follows the ground truth streamlines and adding those transitions to the replay buffer before training starts.
     # This would help the agent learn from good examples and potentially speed up training, especially in the early stages when it is mostly taking random actions.
 
-    COMPLEXITY_INCREASE_FREQUENCY = 300  # Incease complexity after this many episodes
+    COMPLEXITY_INCREASE_FREQUENCY = 1000  # Incease complexity after this many episodes
     COMPLEXITY_INCREMENT = 0.1  # Amount to increase complexity by
     SAVE_GIF_FREQUENCY = 100  # Save GIF after this many episodes
 
@@ -626,7 +627,7 @@ def train(env,
                                 except EOFError:
                                     pass
                     except NameError:
-                        csv_file_path = logdir / f"{name}_{date}_log.csv"
+                        csv_file_path = logdir / f"{name}_{date_time}_log.csv"
                         file_exists = csv_file_path.exists()
                         with open(csv_file_path, "a", newline='') as f:
                             writer = csv.writer(f)
@@ -647,7 +648,7 @@ def train(env,
                             ])
                         if ep % SAVE_GIF_FREQUENCY == 0:
                             trace_gif(env.img.data[:-1].cpu(), env.finished_paths, step_width=env.step_width,
-                                    output_path=logdir / f"{name}_{date}_gifs/{name}_{date}_episode_{ep}_image_{env.current_neuron_info['neuron_name'].split('/')[-1].split('.')[0]}_trace.gif",
+                                    output_path=logdir / f"{name}_{date_time}_gifs/{name}_{date_time}_episode_{ep}_image_{env.current_neuron_info['neuron_name'].split('/')[-1].split('.')[0]}_trace.gif",
                                     n_frames=100)                                                                            
                 break
 
@@ -675,7 +676,10 @@ def train(env,
             "log_alpha_optimizer_state_dict": log_alpha_optimizer.state_dict(),
             "steps_done": steps_done
             }
-            torch.save(model_dicts, outdir / f"model_state_dicts_{name}_{date}.pt")
+            final_path = outdir / f"model_state_dicts_{name}_{date_time}.pt"
+            tmp_path = final_path.with_suffix(".tmp")
+            torch.save(model_dicts, tmp_path)
+            tmp_path.replace(final_path)  # atomic rename — safe if interrupted mid-write
             last_save = steps_done // 500
 
     return

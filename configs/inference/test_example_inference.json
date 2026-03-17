@@ -1,15 +1,15 @@
 {
-  "img_dir": "/home/brysongray/data/neurotrack_data/gold166/gold166_cleaned/test_set/images",
-  "swc_dir": "/home/brysongray/data/neurotrack_data/gold166/gold166_cleaned/test_set/morphology",
-  "seeds_path": "/home/brysongray/data/neurotrack_data/gold166/gold166_cleaned/test_set/seeds.json",
+  "img_dir": "/home/brysongray/data/neurotrack_data/gold166/gold166_cleaned/validate_set/images",
+  "swc_dir": "/home/brysongray/data/neurotrack_data/gold166/gold166_cleaned/validate_set/morphology",
+  "seeds_path": "/home/brysongray/data/neurotrack_data/gold166/gold166_cleaned/validate_set/seeds.json",
   "out_dir": "/home/brysongray/data/neurotrack_data/inference_outputs/pipeline_test_inference/",
-  "test_name": "test_inference_3-6-26",
+  "test_name": "test_gamma_0",
 
-  "sac_weights": "/home/brysongray/data/neurotrack_data/model_weights/sac_weights/training_outputs_2-11/model_state_dicts_convex_composite_images_02-12-26.pt",
+  "sac_weights": "/home/brysongray/data/neurotrack_data/model_weights/sac_weights/training_outputs_3_15/model_state_dicts_convex_composite_images_'2026-03-15_08-53-28'.pt",
 
-  "step_width": 4.0,
+  "step_width": 2.0,
   "repeat_starts": false,
-  "rng_seed": 42,
+  "rng_seed": 1,
   "n_trials": 1,
   "review_before_next": true,
   "crop_patches": false,

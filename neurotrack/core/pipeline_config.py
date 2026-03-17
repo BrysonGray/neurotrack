@@ -110,13 +110,16 @@ class PostprocessConfig:
     @classmethod
     def from_config(cls, config: Dict[str, object]) -> "PostprocessConfig":
         """Build a ``PostprocessConfig`` from a flat config dict."""
+        eval_distance_threshold = config.get("distance_threshold", None)
+        if eval_distance_threshold is None:
+            eval_distance_threshold = config.get("eval_distance_threshold", 1.0)
         return cls(
             min_branch_length=float(config.get("min_branch_length", 5.0)),
             resampling_step_size=float(config.get("resampling_step_size", 4.0)),
             smoothing_window=int(config.get("smoothing_window", 5)),
             overlap_threshold=float(config.get("overlap_threshold", 0.5)),
             overlap_distance_threshold=float(config.get("overlap_distance_threshold", 1.0)),
-            distance_threshold=float(config.get("distance_threshold", 1.0)),
+            distance_threshold=float(eval_distance_threshold),
             scales_path=config.get("scales_path", None),
         )
 

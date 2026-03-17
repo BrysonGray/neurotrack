@@ -64,8 +64,11 @@ class _OrthoViewDialog:
         trace_output_path: Optional[str] = None,
         on_select_seeds_output_path: Optional[Callable[[], Optional[str]]] = None,
         on_select_trace_output_path: Optional[Callable[[], Optional[str]]] = None,
+        on_clear_seeds_output_path: Optional[Callable[[], Optional[str]]] = None,
+        on_clear_trace_output_path: Optional[Callable[[], Optional[str]]] = None,
         model_weights_path: Optional[str] = None,
         on_select_model_weights_path: Optional[Callable[[], Optional[str]]] = None,
+        on_clear_model_weights_path: Optional[Callable[[], Optional[str]]] = None,
         on_prev_image: Optional[Callable[[np.ndarray], Optional[Dict[str, object]]]] = None,
         on_next_image: Optional[Callable[[np.ndarray], Optional[Dict[str, object]]]] = None,
         show_postprocess_controls: bool = False,
@@ -75,12 +78,16 @@ class _OrthoViewDialog:
         on_save_eval_report: Optional[Callable[[], None]] = None,
         gt_swc_path: Optional[str] = None,
         on_select_gt_swc_path: Optional[Callable[[], Optional[str]]] = None,
+        on_clear_gt_swc_path: Optional[Callable[[], Optional[str]]] = None,
         scales_path: Optional[str] = None,
         on_select_scales_path: Optional[Callable[[], Optional[str]]] = None,
+        on_clear_scales_path: Optional[Callable[[], Optional[str]]] = None,
         image_dir: Optional[str] = None,
         seeds_input_path: Optional[str] = None,
         on_select_image_dir: Optional[Callable[[], Optional[str]]] = None,
         on_select_seeds_input_path: Optional[Callable[[], Optional[str]]] = None,
+        on_clear_image_dir: Optional[Callable[[], Optional[str]]] = None,
+        on_clear_seeds_input_path: Optional[Callable[[], Optional[str]]] = None,
         trace_step_width: float = 4.0,
         trace_n_trials: int = 1,
         trace_max_len: int = 10000,
@@ -97,10 +104,12 @@ class _OrthoViewDialog:
         postprocess_overlap_threshold: float = 0.5,
         postprocess_overlap_distance_threshold: float = 1.0,
         on_select_postprocess_output_dir: Optional[Callable[[], Optional[str]]] = None,
+        on_clear_postprocess_output_dir: Optional[Callable[[], Optional[str]]] = None,
         on_postprocess_params_changed: Optional[Callable[[Dict[str, object]], None]] = None,
         eval_output_dir: Optional[str] = None,
         eval_distance_threshold: float = 1.0,
         on_select_eval_output_dir: Optional[Callable[[], Optional[str]]] = None,
+        on_clear_eval_output_dir: Optional[Callable[[], Optional[str]]] = None,
         on_eval_params_changed: Optional[Callable[[Dict[str, object]], None]] = None,
     ):
         (
@@ -176,10 +185,13 @@ class _OrthoViewDialog:
         self._on_save_all_traces = on_save_all_traces
         self._on_select_seeds_output_path = on_select_seeds_output_path
         self._on_select_trace_output_path = on_select_trace_output_path
+        self._on_clear_seeds_output_path = on_clear_seeds_output_path
+        self._on_clear_trace_output_path = on_clear_trace_output_path
         self._seeds_output_path = seeds_output_path
         self._trace_output_path = trace_output_path
         self._model_weights_path = model_weights_path
         self._on_select_model_weights_path = on_select_model_weights_path
+        self._on_clear_model_weights_path = on_clear_model_weights_path
         self._on_prev_image = on_prev_image
         self._on_next_image = on_next_image
         self._show_postprocess_controls = bool(show_postprocess_controls and mode == "seed")
@@ -189,18 +201,24 @@ class _OrthoViewDialog:
         self._on_save_eval_report = on_save_eval_report
         self._gt_swc_path = gt_swc_path
         self._on_select_gt_swc_path = on_select_gt_swc_path
+        self._on_clear_gt_swc_path = on_clear_gt_swc_path
         self._scales_path = scales_path
         self._on_select_scales_path = on_select_scales_path
+        self._on_clear_scales_path = on_clear_scales_path
         self._image_dir = image_dir
         self._seeds_input_path = seeds_input_path
         self._on_select_image_dir = on_select_image_dir
         self._on_select_seeds_input_path = on_select_seeds_input_path
+        self._on_clear_image_dir = on_clear_image_dir
+        self._on_clear_seeds_input_path = on_clear_seeds_input_path
         self._on_trace_params_changed = on_trace_params_changed
         self._postprocess_output_dir = postprocess_output_dir
         self._eval_output_dir = eval_output_dir
         self._on_select_postprocess_output_dir = on_select_postprocess_output_dir
+        self._on_clear_postprocess_output_dir = on_clear_postprocess_output_dir
         self._on_postprocess_params_changed = on_postprocess_params_changed
         self._on_select_eval_output_dir = on_select_eval_output_dir
+        self._on_clear_eval_output_dir = on_clear_eval_output_dir
         self._on_eval_params_changed = on_eval_params_changed
         self._trace_status_token = None
         self._trace_overlay_token = None
@@ -274,8 +292,11 @@ class _OrthoViewDialog:
             self.btn_clear = QPushButton("Clear Seeds")
             self.btn_save_seeds = QPushButton("Save Seeds")
             self.btn_set_seeds_output = QPushButton("Set Seeds Output")
+            self.btn_clear_seeds_output = QPushButton("Unset Seeds Output")
             self.btn_set_trace_output = QPushButton("Set Trace Output")
+            self.btn_clear_trace_output = QPushButton("Unset Trace Output")
             self.btn_set_model_weights = QPushButton("Set Model Weights")
+            self.btn_clear_model_weights = QPushButton("Unset Model Weights")
             self.seeds_output_value_label = QLabel("")
             self.seeds_output_value_label.setWordWrap(True)
             self.trace_output_value_label = QLabel("")
@@ -283,9 +304,11 @@ class _OrthoViewDialog:
             self.model_weights_value_label = QLabel("")
             self.model_weights_value_label.setWordWrap(True)
             self.btn_set_image_dir = QPushButton("Set Image Dir")
+            self.btn_clear_image_dir = QPushButton("Unset Image Dir")
             self.image_dir_value_label = QLabel("")
             self.image_dir_value_label.setWordWrap(True)
             self.btn_set_seeds_input = QPushButton("Set Seeds Input")
+            self.btn_clear_seeds_input = QPushButton("Unset Seeds Input")
             self.seeds_input_value_label = QLabel("")
             self.seeds_input_value_label.setWordWrap(True)
             # Advanced trace parameter widgets
@@ -317,6 +340,7 @@ class _OrthoViewDialog:
                 self._trace_auto_seed_combo.setCurrentIndex(_auto_seed_idx)
             # Post-processing parameter widgets
             self.btn_set_postprocess_output = QPushButton("Set Post-Process Output")
+            self.btn_clear_postprocess_output = QPushButton("Unset Post-Process Output")
             self.postprocess_output_value_label = QLabel("")
             self.postprocess_output_value_label.setWordWrap(True)
             self._pp_min_branch_length_spin = _qt_w.QDoubleSpinBox()
@@ -344,13 +368,16 @@ class _OrthoViewDialog:
             self._pp_overlap_dist_threshold_spin.setValue(postprocess_overlap_distance_threshold)
             # Postprocess/eval path widgets (always created in seed mode)
             self.btn_set_gt_swc = QPushButton("Set GT SWC Dir")
+            self.btn_clear_gt_swc = QPushButton("Unset GT SWC Dir")
             self.gt_swc_value_label = QLabel("")
             self.gt_swc_value_label.setWordWrap(True)
             self.btn_set_scales_path = QPushButton("Set Scales JSON")
+            self.btn_clear_scales_path = QPushButton("Unset Scales JSON")
             self.scales_path_value_label = QLabel("")
             self.scales_path_value_label.setWordWrap(True)
             # Evaluation parameter widgets
             self.btn_set_eval_output = QPushButton("Set Eval Output")
+            self.btn_clear_eval_output = QPushButton("Unset Eval Output")
             self.eval_output_value_label = QLabel("")
             self.eval_output_value_label.setWordWrap(True)
             self._eval_distance_threshold_spin = _qt_w.QDoubleSpinBox()
@@ -361,6 +388,7 @@ class _OrthoViewDialog:
             self.eval_scales_path_value_label = QLabel("")
             self.eval_scales_path_value_label.setWordWrap(True)
             self.btn_set_eval_scales_path = QPushButton("Set Scales JSON")
+            self.btn_clear_eval_scales_path = QPushButton("Unset Scales JSON")
 
         # -----------------------------------------------------------------
         # LEFT SIDEBAR — view controls, sliders, seed & trace actions
@@ -412,6 +440,8 @@ class _OrthoViewDialog:
             left_layout.addWidget(_nav_row)
             self.btn_prev_image.setVisible(self._show_prev_button)
             self.btn_next_image.setVisible(self._show_next_button)
+            self.btn_prev_image.setEnabled(self._show_prev_button)
+            self.btn_next_image.setEnabled(self._show_next_button)
 
             # Seed controls
             left_layout.addWidget(self._sidebar_separator())
@@ -500,18 +530,23 @@ class _OrthoViewDialog:
             _trace_lay.addWidget(QLabel("Image Directory:"))
             _trace_lay.addWidget(self.image_dir_value_label)
             _trace_lay.addWidget(self.btn_set_image_dir)
+            _trace_lay.addWidget(self.btn_clear_image_dir)
             _trace_lay.addWidget(QLabel("Model Weights:"))
             _trace_lay.addWidget(self.model_weights_value_label)
             _trace_lay.addWidget(self.btn_set_model_weights)
+            _trace_lay.addWidget(self.btn_clear_model_weights)
             _trace_lay.addWidget(QLabel("Trace Output:"))
             _trace_lay.addWidget(self.trace_output_value_label)
             _trace_lay.addWidget(self.btn_set_trace_output)
+            _trace_lay.addWidget(self.btn_clear_trace_output)
             _trace_lay.addWidget(QLabel("Seeds Output:"))
             _trace_lay.addWidget(self.seeds_output_value_label)
             _trace_lay.addWidget(self.btn_set_seeds_output)
+            _trace_lay.addWidget(self.btn_clear_seeds_output)
             _trace_lay.addWidget(QLabel("Seeds Input (optional):"))
             _trace_lay.addWidget(self.seeds_input_value_label)
             _trace_lay.addWidget(self.btn_set_seeds_input)
+            _trace_lay.addWidget(self.btn_clear_seeds_input)
             _trace_lay.addWidget(self._sidebar_separator())
 
             _adv_toggle = _qt_widgets_mod.QToolButton()
@@ -559,6 +594,7 @@ class _OrthoViewDialog:
             _pp_lay.addWidget(QLabel("Output Directory:"))
             _pp_lay.addWidget(self.postprocess_output_value_label)
             _pp_lay.addWidget(self.btn_set_postprocess_output)
+            _pp_lay.addWidget(self.btn_clear_postprocess_output)
             _pp_lay.addWidget(self._sidebar_separator())
             _pp_lay.addWidget(QLabel("Min Branch Length:"))
             _pp_lay.addWidget(self._pp_min_branch_length_spin)
@@ -574,6 +610,7 @@ class _OrthoViewDialog:
             _pp_lay.addWidget(QLabel("Scales JSON (optional):"))
             _pp_lay.addWidget(self.scales_path_value_label)
             _pp_lay.addWidget(self.btn_set_scales_path)
+            _pp_lay.addWidget(self.btn_clear_scales_path)
             if self._show_postprocess_controls:
                 _pp_lay.addWidget(self._sidebar_separator())
                 _pp_lay.addWidget(self.btn_run_postprocess)
@@ -587,15 +624,18 @@ class _OrthoViewDialog:
             _eval_lay.addWidget(QLabel("GT SWC Directory:"))
             _eval_lay.addWidget(self.gt_swc_value_label)
             _eval_lay.addWidget(self.btn_set_gt_swc)
+            _eval_lay.addWidget(self.btn_clear_gt_swc)
             _eval_lay.addWidget(QLabel("Eval Output Directory:"))
             _eval_lay.addWidget(self.eval_output_value_label)
             _eval_lay.addWidget(self.btn_set_eval_output)
+            _eval_lay.addWidget(self.btn_clear_eval_output)
             _eval_lay.addWidget(self._sidebar_separator())
             _eval_lay.addWidget(QLabel("Distance Threshold:"))
             _eval_lay.addWidget(self._eval_distance_threshold_spin)
             _eval_lay.addWidget(QLabel("Scales JSON (optional):"))
             _eval_lay.addWidget(self.eval_scales_path_value_label)
             _eval_lay.addWidget(self.btn_set_eval_scales_path)
+            _eval_lay.addWidget(self.btn_clear_eval_scales_path)
             if self._show_postprocess_controls:
                 _eval_lay.addWidget(self._sidebar_separator())
                 _eval_lay.addWidget(self.btn_run_evaluation)
@@ -666,10 +706,14 @@ class _OrthoViewDialog:
         if mode == "seed":
             button_list.extend([self.btn_undo, self.btn_clear])
             button_list.extend([self.btn_set_seeds_output, self.btn_set_trace_output, self.btn_set_model_weights])
+            button_list.extend([self.btn_clear_seeds_output, self.btn_clear_trace_output, self.btn_clear_model_weights])
             button_list.extend([self.btn_set_image_dir, self.btn_set_seeds_input])
+            button_list.extend([self.btn_clear_image_dir, self.btn_clear_seeds_input])
             button_list.extend([self.btn_prev_image, self.btn_next_image])
             button_list.extend([self.btn_set_postprocess_output, self.btn_set_gt_swc, self.btn_set_scales_path])
+            button_list.extend([self.btn_clear_postprocess_output, self.btn_clear_gt_swc, self.btn_clear_scales_path])
             button_list.extend([self.btn_set_eval_output, self.btn_set_eval_scales_path])
+            button_list.extend([self.btn_clear_eval_output, self.btn_clear_eval_scales_path])
             if show_save_buttons:
                 button_list.extend([self.btn_save_seeds, self.btn_save_all_seeds])
             if self._show_trace_controls:
@@ -714,10 +758,15 @@ class _OrthoViewDialog:
             self.btn_undo.clicked.connect(self._undo_seed)
             self.btn_clear.clicked.connect(self._clear_seeds)
             self.btn_set_seeds_output.clicked.connect(self._select_seeds_output_path)
+            self.btn_clear_seeds_output.clicked.connect(self._clear_seeds_output_path)
             self.btn_set_trace_output.clicked.connect(self._select_trace_output_path)
+            self.btn_clear_trace_output.clicked.connect(self._clear_trace_output_path)
             self.btn_set_model_weights.clicked.connect(self._select_model_weights_path)
+            self.btn_clear_model_weights.clicked.connect(self._clear_model_weights_path)
             self.btn_set_image_dir.clicked.connect(self._select_image_dir)
+            self.btn_clear_image_dir.clicked.connect(self._clear_image_dir)
             self.btn_set_seeds_input.clicked.connect(self._select_seeds_input_path)
+            self.btn_clear_seeds_input.clicked.connect(self._clear_seeds_input_path)
             self.btn_prev_image.clicked.connect(self._go_prev_image)
             self.btn_next_image.clicked.connect(self._go_next_image)
             self._trace_step_width_spin.valueChanged.connect(self._on_advanced_params_changed)
@@ -729,14 +778,17 @@ class _OrthoViewDialog:
             self._trace_stochastic_check.toggled.connect(self._on_advanced_params_changed)
             self._trace_auto_seed_combo.currentIndexChanged.connect(self._on_advanced_params_changed)
             self.btn_set_postprocess_output.clicked.connect(self._select_postprocess_output_dir)
+            self.btn_clear_postprocess_output.clicked.connect(self._clear_postprocess_output_dir)
             self._pp_min_branch_length_spin.valueChanged.connect(self._on_postprocess_params_changed_slot)
             self._pp_resampling_step_size_spin.valueChanged.connect(self._on_postprocess_params_changed_slot)
             self._pp_smoothing_window_spin.valueChanged.connect(self._on_postprocess_params_changed_slot)
             self._pp_overlap_threshold_spin.valueChanged.connect(self._on_postprocess_params_changed_slot)
             self._pp_overlap_dist_threshold_spin.valueChanged.connect(self._on_postprocess_params_changed_slot)
             self.btn_set_eval_output.clicked.connect(self._select_eval_output_dir)
+            self.btn_clear_eval_output.clicked.connect(self._clear_eval_output_dir)
             self._eval_distance_threshold_spin.valueChanged.connect(self._on_eval_params_changed_slot)
             self.btn_set_eval_scales_path.clicked.connect(self._select_scales_path)
+            self.btn_clear_eval_scales_path.clicked.connect(self._clear_scales_path)
             if show_save_buttons:
                 self.btn_save_seeds.clicked.connect(self._save_current_seeds)
                 self.btn_save_all_seeds.clicked.connect(self._save_all_seeds)
@@ -751,7 +803,9 @@ class _OrthoViewDialog:
                 self.btn_trace_revision_preview.clicked.connect(self._preview_trace_revision)
                 self.btn_trace_revision_launch.clicked.connect(self._launch_trace_revision)
             self.btn_set_gt_swc.clicked.connect(self._select_gt_swc_path)
+            self.btn_clear_gt_swc.clicked.connect(self._clear_gt_swc_path)
             self.btn_set_scales_path.clicked.connect(self._select_scales_path)
+            self.btn_clear_scales_path.clicked.connect(self._clear_scales_path)
             if self._show_postprocess_controls:
                 self.btn_run_postprocess.clicked.connect(self._run_postprocess)
                 self.btn_run_evaluation.clicked.connect(self._run_evaluation)
@@ -957,6 +1011,9 @@ class _OrthoViewDialog:
         self._show_next_button = bool(context.get("show_next_button", False))
         self.btn_prev_image.setVisible(self._show_prev_button)
         self.btn_next_image.setVisible(self._show_next_button)
+        running = bool(self._trace_controls_running_state)
+        self.btn_prev_image.setEnabled((not running) and self._show_prev_button)
+        self.btn_next_image.setEnabled((not running) and self._show_next_button)
 
         self._seeds_output_path = context.get("seeds_output_path")  # type: ignore[assignment]
         self._trace_output_path = context.get("trace_output_path")  # type: ignore[assignment]
@@ -1206,17 +1263,34 @@ class _OrthoViewDialog:
         if self._on_select_gt_swc_path is None:
             return
         selected = self._on_select_gt_swc_path()
-        if selected:
+        if selected is not None:
             self._gt_swc_path = selected
             self._refresh_output_path_labels()
+
+    def _clear_gt_swc_path(self):
+        if self._on_clear_gt_swc_path is not None:
+            self._gt_swc_path = self._on_clear_gt_swc_path()
+        else:
+            self._gt_swc_path = None
+        self._refresh_output_path_labels()
 
     def _select_scales_path(self):
         if self._on_select_scales_path is None:
             return
         selected = self._on_select_scales_path()
-        if selected:
+        if selected is not None:
             self._scales_path = selected
             self._refresh_output_path_labels()
+
+    def _clear_scales_path(self):
+        if self._on_clear_scales_path is not None:
+            self._scales_path = self._on_clear_scales_path()
+        else:
+            self._scales_path = None
+        self._refresh_output_path_labels()
+
+    def _has_image_dir(self) -> bool:
+        return self._image_dir is not None and len(str(self._image_dir).strip()) > 0
 
     def _format_output_path(self, path_value: Optional[str]) -> str:
         if path_value is None or len(path_value) == 0:
@@ -1241,33 +1315,63 @@ class _OrthoViewDialog:
         if self._on_select_seeds_output_path is None:
             return
         selected = self._on_select_seeds_output_path()
-        if selected:
+        if selected is not None:
             self._seeds_output_path = selected
             self._refresh_output_path_labels()
+
+    def _clear_seeds_output_path(self):
+        if self._on_clear_seeds_output_path is not None:
+            self._seeds_output_path = self._on_clear_seeds_output_path()
+        else:
+            self._seeds_output_path = None
+        self._refresh_output_path_labels()
 
     def _select_trace_output_path(self):
         if self._on_select_trace_output_path is None:
             return
         selected = self._on_select_trace_output_path()
-        if selected:
+        if selected is not None:
             self._trace_output_path = selected
             self._refresh_output_path_labels()
+
+    def _clear_trace_output_path(self):
+        if self._on_clear_trace_output_path is not None:
+            self._trace_output_path = self._on_clear_trace_output_path()
+        else:
+            self._trace_output_path = None
+        self._refresh_output_path_labels()
 
     def _select_model_weights_path(self):
         if self._on_select_model_weights_path is None:
             return
         selected = self._on_select_model_weights_path()
-        if selected:
+        if selected is not None:
             self._model_weights_path = selected
             self._refresh_output_path_labels()
+
+    def _clear_model_weights_path(self):
+        if self._on_clear_model_weights_path is not None:
+            self._model_weights_path = self._on_clear_model_weights_path()
+        else:
+            self._model_weights_path = None
+        self._refresh_output_path_labels()
 
     def _select_image_dir(self):
         if self._on_select_image_dir is None:
             return
         selected = self._on_select_image_dir()
-        if selected:
+        if selected is not None:
             self._image_dir = selected
             self._refresh_output_path_labels()
+            self._redraw()
+
+    def _clear_image_dir(self):
+        if self._on_clear_image_dir is not None:
+            self._image_dir = self._on_clear_image_dir()
+        else:
+            self._image_dir = None
+        self._refresh_output_path_labels()
+        self._redraw()
 
     def _select_seeds_input_path(self):
         if self._on_select_seeds_input_path is None:
@@ -1284,6 +1388,13 @@ class _OrthoViewDialog:
         if seeds_array is not None:
             self._set_seeds_from_array(seeds_array)
             self._redraw()
+
+    def _clear_seeds_input_path(self):
+        if self._on_clear_seeds_input_path is not None:
+            self._seeds_input_path = self._on_clear_seeds_input_path()
+        else:
+            self._seeds_input_path = None
+        self._refresh_output_path_labels()
 
     def _on_advanced_params_changed(self, *_args):
         if self._on_trace_params_changed is None:
@@ -1346,17 +1457,31 @@ class _OrthoViewDialog:
         if self._on_select_postprocess_output_dir is None:
             return
         selected = self._on_select_postprocess_output_dir()
-        if selected:
+        if selected is not None:
             self._postprocess_output_dir = selected
             self._refresh_output_path_labels()
+
+    def _clear_postprocess_output_dir(self):
+        if self._on_clear_postprocess_output_dir is not None:
+            self._postprocess_output_dir = self._on_clear_postprocess_output_dir()
+        else:
+            self._postprocess_output_dir = None
+        self._refresh_output_path_labels()
 
     def _select_eval_output_dir(self):
         if self._on_select_eval_output_dir is None:
             return
         selected = self._on_select_eval_output_dir()
-        if selected:
+        if selected is not None:
             self._eval_output_dir = selected
             self._refresh_output_path_labels()
+
+    def _clear_eval_output_dir(self):
+        if self._on_clear_eval_output_dir is not None:
+            self._eval_output_dir = self._on_clear_eval_output_dir()
+        else:
+            self._eval_output_dir = None
+        self._refresh_output_path_labels()
 
     def _poll_trace_status(self):
         if self._get_trace_status is None:
@@ -1401,11 +1526,17 @@ class _OrthoViewDialog:
         if token is not None and token != self._trace_status_token:
             self._trace_status_token = token
             trace_output_dir = status.get("trace_output_dir", None)
-            if isinstance(trace_output_dir, str) and len(trace_output_dir) > 0:
+            if trace_output_dir is None:
+                self._trace_output_path = None
+                self._refresh_output_path_labels()
+            elif isinstance(trace_output_dir, str) and len(trace_output_dir) > 0:
                 self._trace_output_path = trace_output_dir
                 self._refresh_output_path_labels()
             model_weights_path = status.get("model_weights_path", None)
-            if isinstance(model_weights_path, str) and len(model_weights_path) > 0:
+            if model_weights_path is None:
+                self._model_weights_path = None
+                self._refresh_output_path_labels()
+            elif isinstance(model_weights_path, str) and len(model_weights_path) > 0:
                 self._model_weights_path = model_weights_path
                 self._refresh_output_path_labels()
 
@@ -1423,7 +1554,10 @@ class _OrthoViewDialog:
                 self.eval_report_widget.setPlainText(str(eval_report_text))
 
             gt_swc_path = status.get("gt_swc_path", None)
-            if isinstance(gt_swc_path, str) and len(gt_swc_path) > 0:
+            if gt_swc_path is None:
+                self._gt_swc_path = None
+                self._refresh_output_path_labels()
+            elif isinstance(gt_swc_path, str) and len(gt_swc_path) > 0:
                 self._gt_swc_path = gt_swc_path
                 self._refresh_output_path_labels()
 
@@ -1434,8 +1568,8 @@ class _OrthoViewDialog:
         self.btn_trace_all.setEnabled(not running)
         self.btn_save_trace.setEnabled(not running)
         self.btn_save_all_traces.setEnabled(not running)
-        self.btn_prev_image.setEnabled((not running) and self.btn_prev_image.isVisible())
-        self.btn_next_image.setEnabled((not running) and self.btn_next_image.isVisible())
+        self.btn_prev_image.setEnabled((not running) and self._show_prev_button)
+        self.btn_next_image.setEnabled((not running) and self._show_next_button)
         self.btn_cancel_trace.setEnabled(running)
         self._update_trace_revision_controls()
         if running:
@@ -1450,6 +1584,9 @@ class _OrthoViewDialog:
         self._mip_cache_by_view = {"xy": None, "xz": None, "yz": None}
 
     def _get_plane(self, view: str) -> np.ndarray:
+        if not self._has_image_dir():
+            return np.zeros((2, 2), dtype=np.float32)
+
         if self.projection_mode == "mip":
             cached = self._mip_cache_by_view.get(view)
             if cached is not None:
@@ -1475,6 +1612,8 @@ class _OrthoViewDialog:
         return ["xy", "xz", "yz"]
 
     def _get_full_limits(self, view: str):
+        if not self._has_image_dir():
+            return (-0.5, 1.5), (-0.5, 1.5)
         if view == "xy":
             return (-0.5, self.shape[2] - 0.5), (-0.5, self.shape[1] - 0.5)
         if view == "xz":
@@ -1485,7 +1624,7 @@ class _OrthoViewDialog:
         if view not in self.crosshair_artists:
             return
         vline, hline = self.crosshair_artists[view]
-        visible = self.mode == "seed"
+        visible = self.mode == "seed" and self._has_image_dir()
         vline.set_visible(visible)
         hline.set_visible(visible)
         if not visible:
@@ -1522,7 +1661,19 @@ class _OrthoViewDialog:
             ax = self.figure.add_subplot(1, ncols, i + 1)
             plane = self._get_plane(view)
             image_artist = ax.imshow(plane, cmap="gray", origin="lower")
+            image_artist.set_visible(self._has_image_dir())
             ax.set_title(view.upper())
+            if not self._has_image_dir():
+                ax.text(
+                    0.5,
+                    0.5,
+                    "Image directory not set",
+                    transform=ax.transAxes,
+                    ha="center",
+                    va="center",
+                    color="0.6",
+                    fontsize=10,
+                )
             self.image_artists[view] = image_artist
 
             vline = ax.axvline(self.current_x, color="cyan", linewidth=0.8, alpha=0.8)
@@ -1555,6 +1706,7 @@ class _OrthoViewDialog:
         for view in views:
             ax = self.axes_by_view[view]
             self.image_artists[view].set_data(self._get_plane(view))
+            self.image_artists[view].set_visible(self._has_image_dir())
             self._set_crosshair_for_view(view)
 
             can_skip_overlay = (
@@ -1586,6 +1738,8 @@ class _OrthoViewDialog:
 
     def _draw_overlay(self, ax, view: str):
         artists = []
+        if not self._has_image_dir():
+            return artists
         if self.seeds:
             seeds_np = np.asarray(self.seeds, dtype=np.float32)
             if view == "xy":
@@ -1751,6 +1905,8 @@ class _OrthoViewDialog:
         self._redraw()
 
     def _on_mouse_press(self, event):
+        if not self._has_image_dir():
+            return
         if event.inaxes is None or event.xdata is None or event.ydata is None:
             return
 
@@ -1852,6 +2008,8 @@ class _OrthoViewDialog:
         self.canvas.draw_idle()
 
     def _add_current_seed(self):
+        if not self._has_image_dir():
+            return
         self.seeds.append((self.current_z, self.current_y, self.current_x))
         self._redraw()
 
@@ -1893,6 +2051,9 @@ class _OrthoViewDialog:
         self._redraw(fast=True)
 
     def _canvas_wheel_event(self, qt_event):
+        if not self._has_image_dir():
+            self._original_wheel_event(qt_event)
+            return
         delta = 0
         if hasattr(qt_event, "angleDelta"):
             delta = qt_event.angleDelta().y()
@@ -2064,9 +2225,14 @@ def interactive_seed_selection_session(
     on_save_all_traces: Optional[Callable[[], None]] = None,
     on_select_seeds_output_path: Optional[Callable[[], Optional[str]]] = None,
     on_select_trace_output_path: Optional[Callable[[], Optional[str]]] = None,
+    on_clear_seeds_output_path: Optional[Callable[[], Optional[str]]] = None,
+    on_clear_trace_output_path: Optional[Callable[[], Optional[str]]] = None,
     on_select_model_weights_path: Optional[Callable[[], Optional[str]]] = None,
+    on_clear_model_weights_path: Optional[Callable[[], Optional[str]]] = None,
     on_select_image_dir: Optional[Callable[[], Optional[str]]] = None,
     on_select_seeds_input_path: Optional[Callable[[], Optional[str]]] = None,
+    on_clear_image_dir: Optional[Callable[[], Optional[str]]] = None,
+    on_clear_seeds_input_path: Optional[Callable[[], Optional[str]]] = None,
     trace_step_width: float = 4.0,
     trace_n_trials: int = 1,
     trace_max_len: int = 10000,
@@ -2082,7 +2248,9 @@ def interactive_seed_selection_session(
     on_save_postprocessed: Optional[Callable[[], None]] = None,
     on_save_eval_report: Optional[Callable[[], None]] = None,
     on_select_gt_swc_path: Optional[Callable[[], Optional[str]]] = None,
+    on_clear_gt_swc_path: Optional[Callable[[], Optional[str]]] = None,
     on_select_scales_path: Optional[Callable[[], Optional[str]]] = None,
+    on_clear_scales_path: Optional[Callable[[], Optional[str]]] = None,
     postprocess_output_dir: Optional[str] = None,
     postprocess_min_branch_length: float = 5.0,
     postprocess_resampling_step_size: float = 4.0,
@@ -2090,10 +2258,12 @@ def interactive_seed_selection_session(
     postprocess_overlap_threshold: float = 0.5,
     postprocess_overlap_distance_threshold: float = 1.0,
     on_select_postprocess_output_dir: Optional[Callable[[], Optional[str]]] = None,
+    on_clear_postprocess_output_dir: Optional[Callable[[], Optional[str]]] = None,
     on_postprocess_params_changed: Optional[Callable[[Dict[str, object]], None]] = None,
     eval_output_dir: Optional[str] = None,
     eval_distance_threshold: float = 1.0,
     on_select_eval_output_dir: Optional[Callable[[], Optional[str]]] = None,
+    on_clear_eval_output_dir: Optional[Callable[[], Optional[str]]] = None,
     on_eval_params_changed: Optional[Callable[[Dict[str, object]], None]] = None,
 ) -> torch.Tensor:
     """Open a persistent seed-session dialog and update content in-place while navigating images."""
@@ -2132,12 +2302,17 @@ def interactive_seed_selection_session(
         trace_output_path=initial_context.get("trace_output_path"),
         on_select_seeds_output_path=on_select_seeds_output_path,
         on_select_trace_output_path=on_select_trace_output_path,
+        on_clear_seeds_output_path=on_clear_seeds_output_path,
+        on_clear_trace_output_path=on_clear_trace_output_path,
         model_weights_path=initial_context.get("model_weights_path"),
         on_select_model_weights_path=on_select_model_weights_path,
+        on_clear_model_weights_path=on_clear_model_weights_path,
         image_dir=initial_context.get("image_dir"),
         seeds_input_path=initial_context.get("seeds_input_path"),
         on_select_image_dir=on_select_image_dir,
         on_select_seeds_input_path=on_select_seeds_input_path,
+        on_clear_image_dir=on_clear_image_dir,
+        on_clear_seeds_input_path=on_clear_seeds_input_path,
         trace_step_width=trace_step_width,
         trace_n_trials=trace_n_trials,
         trace_max_len=trace_max_len,
@@ -2156,8 +2331,10 @@ def interactive_seed_selection_session(
         on_save_eval_report=on_save_eval_report,
         gt_swc_path=initial_context.get("gt_swc_path"),
         on_select_gt_swc_path=on_select_gt_swc_path,
+        on_clear_gt_swc_path=on_clear_gt_swc_path,
         scales_path=initial_context.get("scales_path"),
         on_select_scales_path=on_select_scales_path,
+        on_clear_scales_path=on_clear_scales_path,
         postprocess_output_dir=postprocess_output_dir,
         postprocess_min_branch_length=postprocess_min_branch_length,
         postprocess_resampling_step_size=postprocess_resampling_step_size,
@@ -2165,10 +2342,12 @@ def interactive_seed_selection_session(
         postprocess_overlap_threshold=postprocess_overlap_threshold,
         postprocess_overlap_distance_threshold=postprocess_overlap_distance_threshold,
         on_select_postprocess_output_dir=on_select_postprocess_output_dir,
+        on_clear_postprocess_output_dir=on_clear_postprocess_output_dir,
         on_postprocess_params_changed=on_postprocess_params_changed,
         eval_output_dir=eval_output_dir,
         eval_distance_threshold=eval_distance_threshold,
         on_select_eval_output_dir=on_select_eval_output_dir,
+        on_clear_eval_output_dir=on_clear_eval_output_dir,
         on_eval_params_changed=on_eval_params_changed,
     )
     _run_ortho_dialog(dialog)
@@ -2222,7 +2401,11 @@ def prompt_seed_session_paths(
     seeds_input_path: Optional[str] = None,
     seeds_output_path: Optional[str] = None,
 ) -> Tuple[str, Optional[str], Optional[str]]:
-    """Prompt for startup paths for seed-selection sessions using native file dialogs."""
+    """Prompt for startup paths for seed-selection sessions using native file dialogs.
+
+    Only the image directory is prompted interactively. Seed input/output paths are
+    optional and may be set later from the in-session controls.
+    """
     if _is_jupyter_notebook():
         raise RuntimeError("Path prompt dialog is not supported in Jupyter notebooks.")
 
@@ -2242,27 +2425,7 @@ def prompt_seed_session_paths(
     if not chosen_image_dir:
         raise ValueError("Image directory is required to start the seed-selection session.")
 
-    chosen_input = seeds_input_path
-    if chosen_input is None:
-        selected_input, _ = qt_widgets.QFileDialog.getOpenFileName(
-            None,
-            "Optional: Select existing seeds JSON",
-            chosen_image_dir,
-            "JSON Files (*.json)",
-        )
-        chosen_input = selected_input or None
-
-    chosen_output = seeds_output_path
-    if chosen_output is None:
-        selected_output, _ = qt_widgets.QFileDialog.getSaveFileName(
-            None,
-            "Optional: Select seeds output JSON",
-            os.path.join(chosen_image_dir, "seeds.json"),
-            "JSON Files (*.json)",
-        )
-        chosen_output = selected_output or None
-
-    return chosen_image_dir, chosen_input, chosen_output
+    return chosen_image_dir, seeds_input_path, seeds_output_path
 
 
 def prompt_save_json_path(default_path: Optional[str] = None) -> Optional[str]:

@@ -34,6 +34,7 @@ class NeuronTrackingEnvironment:
     
     def __init__(self, dataset,
                  radius: int = 17, target_step_len: float = 4.0, step_width: float = 4.0,
+                 stall_threshold: float = 1.0,
                  max_len: int = 10000, max_paths: int = 1000, gamma=0.99, branching: bool = False,
                  repeat_starts: bool = False, start_idx: int = 0,
                  inference_mode: bool = False):
@@ -50,6 +51,8 @@ class NeuronTrackingEnvironment:
             Target step length for tracking
         step_width : float
             Step width for tracking
+        stall_threshold : float
+            Minimum action magnitude before a step is treated as a stop choice.
         max_len : int
             Maximum length of the path
         max_paths : int
@@ -70,6 +73,10 @@ class NeuronTrackingEnvironment:
         self.target_step_len = target_step_len
         dataset_step_width = getattr(dataset, "step_width", None)
         self.step_width = float(dataset_step_width) if dataset_step_width is not None else step_width
+        self.stall_threshold = float(stall_threshold)
+        if self.stall_threshold < 0.0:
+            raise ValueError("stall_threshold must be non-negative")
+        self.stall_threshold2 = self.stall_threshold * self.stall_threshold
         self.max_len = max_len
         self.max_paths = max_paths
         self.gamma = gamma
@@ -241,7 +248,7 @@ class NeuronTrackingEnvironment:
             # Check for small step (stalling)
             delta = new_position - self.paths[0][-1]
             step_size2 = (delta * delta).sum()
-            stall_threshold2 = 1.0 # squared threshold (1.0^2)
+            stall_threshold2 = self.stall_threshold2
             stall = step_size2 < stall_threshold2
             if stall:
                 status = "choose_stop"
@@ -264,11 +271,13 @@ class NeuronTrackingEnvironment:
             'terminate_episode': False,
             'current_target_vectors': self._zero_target_vectors(device=action.device),
             'next_target_vectors': self._zero_target_vectors(device=action.device),
+            'status': "continue",
         }
 
         current_position = self.paths[0][-1]
         new_position = current_position + action
         status = self._get_status(new_position)
+        info['status'] = status
 
         if status in ["out_of_image", "choose_stop"]:
             terminated = True
@@ -421,6 +430,7 @@ class NeuronTrackingEnvironment:
             new_position = current_position + direction
             status = self._get_status(new_position)
             info['current_target_vectors'] = self.target_vectors
+            info['status'] = status
 
             if status in ["out_of_image", "choose_stop"]: # then terminate path
                 terminated = True

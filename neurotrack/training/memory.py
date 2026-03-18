@@ -39,6 +39,20 @@ def _normalize_target_vectors(target_vectors):
     return target_t.contiguous()
 
 
+def _normalize_bc_observation(observation):
+    """Normalize BC observations to contiguous uint8 tensors of shape (C, D, H, W)."""
+    obs_t = _require_uint8_observation(observation, name="obs")
+    if obs_t.ndim == 5:
+        if obs_t.shape[0] != 1:
+            raise ValueError(
+                f"BC observation with 5 dimensions must be batched as (1, C, D, H, W), got {tuple(obs_t.shape)}"
+            )
+        obs_t = obs_t[0]
+    if obs_t.ndim != 4:
+        raise ValueError(f"BC observations must have shape (C, D, H, W), got {tuple(obs_t.shape)}")
+    return obs_t.contiguous()
+
+
 def _pad_target_vector_sets(target_vector_sets, device):
     """Pad a batch of variable-length target vector sets and return a validity mask."""
     batch_size = len(target_vector_sets)
@@ -117,6 +131,99 @@ def _transform_batch(
         next_target_vectors,
         next_target_mask,
     )
+
+
+def _transform_bc_batch(obs, target_vectors, target_mask, include_z_flip):
+    """Apply SAC-style spatial augmentation to BC observations and target vectors."""
+    perm = torch.randperm(2) + 3
+    obs = obs.permute([0, 1, 2, *perm])
+    i, j = [x.item() - 2 for x in perm]
+    component_indices = [0, i, j]
+    target_vectors = _permute_vector_components(target_vectors, component_indices)
+
+    if torch.rand(1) > 0.5:
+        obs = obs.flip(-1)
+        target_vectors[..., -1] = -target_vectors[..., -1]
+
+    if torch.rand(1) > 0.5:
+        obs = obs.flip(-2)
+        target_vectors[..., -2] = -target_vectors[..., -2]
+
+    if include_z_flip and torch.rand(1) > 0.5:
+        obs = obs.flip(-3)
+        target_vectors[..., -3] = -target_vectors[..., -3]
+
+    return obs, target_vectors, target_mask
+
+
+class BehaviorCloningReplayBuffer:
+    """FIFO replay buffer for behavior-cloning supervision with optional augmentation on sampling."""
+
+    def __init__(self, capacity, include_z_flip=False):
+        if int(capacity) < 1:
+            raise ValueError("capacity must be at least 1")
+        self.capacity = int(capacity)
+        self.include_z_flip = bool(include_z_flip)
+        self.obs = None
+        self.target_vectors = [None] * self.capacity
+        self.idx = 0
+        self.full = False
+
+    def _ensure_obs_storage(self, obs_shape):
+        if self.obs is None:
+            self.obs = torch.empty((self.capacity, *obs_shape), dtype=torch.uint8, device="cpu")
+            return
+        if tuple(self.obs.shape[1:]) != tuple(obs_shape):
+            raise ValueError(
+                f"All observations in BehaviorCloningReplayBuffer must share one shape. "
+                f"Expected {tuple(self.obs.shape[1:])}, got {tuple(obs_shape)}."
+            )
+
+    def push(self, obs, target_vectors):
+        obs_t = _normalize_bc_observation(obs)
+        self._ensure_obs_storage(tuple(obs_t.shape))
+        self.obs[self.idx] = obs_t
+        self.target_vectors[self.idx] = _normalize_target_vectors(target_vectors)
+
+        self.idx = (self.idx + 1) % self.capacity
+        self.full = self.idx == 0 or self.full
+
+    def sample(self, batch_size, replacement=False, transform=False):
+        real_size = len(self)
+        if real_size == 0:
+            raise ValueError("Cannot sample from an empty BehaviorCloningReplayBuffer.")
+        if int(batch_size) < 1:
+            raise ValueError("batch_size must be at least 1")
+
+        batch_size = int(batch_size)
+        if not replacement and batch_size > real_size:
+            raise ValueError(
+                f"Requested batch_size={batch_size} without replacement, but buffer only contains {real_size} samples."
+            )
+
+        if replacement:
+            idxs = torch.randint(real_size, size=(batch_size,))
+        else:
+            idxs = torch.randperm(real_size)[:batch_size]
+
+        obs = self.obs[idxs].to(device=DEVICE)
+        target_vectors, target_mask = _pad_target_vector_sets(
+            [self.target_vectors[int(idx)] for idx in idxs.tolist()],
+            device=DEVICE,
+        )
+
+        if transform:
+            obs, target_vectors, target_mask = _transform_bc_batch(
+                obs,
+                target_vectors,
+                target_mask,
+                include_z_flip=self.include_z_flip,
+            )
+
+        return obs, target_vectors, target_mask
+
+    def __len__(self):
+        return self.capacity if self.full else self.idx
 
 class ReplayBuffer():
     """

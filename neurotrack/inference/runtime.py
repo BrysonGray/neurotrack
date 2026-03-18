@@ -1,4 +1,4 @@
-"""Shared SAC inference runtime utilities."""
+"""Shared inference runtime utilities for SAC and deterministic BC policies."""
 
 import json
 from pathlib import Path
@@ -48,6 +48,7 @@ def build_env(params: Dict[str, Any]) -> NeuronTrackingEnvironment:
         dataset=dataset,
         radius=17,
         step_width=params.get("step_width", 2.0),
+        stall_threshold=float(params.get("stall_threshold", 1.0)),
         max_len=params.get("max_len", 10000),
         max_paths=params.get("max_paths", 1000),
         branching=params.get("branching", True),
@@ -68,14 +69,25 @@ def load_models(
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    actor = ConvNet(chin=in_channels, chout=4).to(device=device, dtype=dtype)
-
     state_dicts = torch.load(params["sac_weights"], map_location=device)
+    policy_output_mode = str(state_dicts.get("policy_output_mode", "gaussian"))
+    if policy_output_mode == "direct_vector":
+        policy_output_dim = int(state_dicts.get("policy_output_dim", 3))
+    else:
+        policy_output_dim = int(state_dicts.get("policy_output_dim", 4))
+
+    actor = ConvNet(chin=in_channels, chout=policy_output_dim).to(device=device, dtype=dtype)
     actor.load_state_dict(state_dicts["policy_state_dict"])
     actor.eval()
+    actor.policy_output_mode = policy_output_mode
 
     q_net = None
     if int(params.get("n_trials", 1)) > 1:
+        if "Q1_state_dict" not in state_dicts:
+            raise ValueError(
+                "n_trials > 1 requires a checkpoint with Q1_state_dict. "
+                "Deterministic behavior-cloning checkpoints should use n_trials=1."
+            )
         q_net = ConvNet(chin=in_channels + 3, chout=1).to(device=device, dtype=dtype)
         q_net.load_state_dict(state_dicts["Q1_state_dict"])
         q_net.eval()
@@ -100,6 +112,8 @@ def run_inference(params: Dict[str, Any], out_dir: Path | str) -> Dict[str, Any]
     stochastic = bool(params.get("stochastic_actions", False))
     return_stats = bool(params.get("return_stats", False))
     sync = bool(params.get("sync", False))
+    terminal_target_norm_threshold = float(params.get("terminal_target_norm_threshold", params.get("stall_threshold", 1.0)))
+    false_stop_distance_threshold = float(params.get("false_stop_distance_threshold", terminal_target_norm_threshold))
 
     img_indices = list(range(len(env.dataset.img_files)))
     if sync:
@@ -124,6 +138,8 @@ def run_inference(params: Dict[str, Any], out_dir: Path | str) -> Dict[str, Any]
             show_live=show_live,
             stochastic=stochastic,
             return_stats=return_stats,
+            terminal_target_norm_threshold=terminal_target_norm_threshold,
+            false_stop_distance_threshold=false_stop_distance_threshold,
         )
         results.append(result)
 

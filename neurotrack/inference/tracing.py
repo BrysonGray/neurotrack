@@ -1,10 +1,11 @@
-"""SAC-based forward-pass tracing loop for inference."""
+"""Forward-pass tracing loop for Gaussian SAC and deterministic BC policies."""
 
 import time
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
 from itertools import count
+from typing import Optional
 
 from neurotrack.training.sac import sample_from_output, prepare_observation_for_model
 from neurotrack.training.env_inspector import show_state
@@ -12,8 +13,57 @@ from neurotrack.training.env_inspector import show_state
 DEVICE = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
 
-def trace_image(env, actor, dataset_idx, Q_net=None, n_trials=1, show=True, show_live=False,
-                stochastic=False, return_stats=False, cancel_event=None, initial_path_mask=None):
+def _select_action_from_actor_output(
+    actor_out: torch.Tensor,
+    policy_output_mode: str,
+    stochastic: bool = False,
+):
+    """Convert actor outputs into an action tensor for tracing."""
+    if policy_output_mode == "direct_vector":
+        action = actor_out[0]
+        return action, None
+
+    direction_dist = sample_from_output(actor_out)
+    if stochastic:
+        action = direction_dist.sample()[0]
+    else:
+        action = direction_dist.mean[0]
+    variance = float(direction_dist.variance[0].mean().detach().cpu())
+    return action, variance
+
+
+def _min_target_norm(target_vectors) -> Optional[float]:
+    if target_vectors is None:
+        return None
+    target_t = torch.as_tensor(target_vectors, dtype=torch.float32).view(-1, 3)
+    if target_t.numel() == 0:
+        return None
+    return float(torch.linalg.norm(target_t, dim=1).min().item())
+
+
+def _action_norm_histogram(action_norms, bins):
+    counts, _ = np.histogram(np.asarray(action_norms, dtype=np.float32), bins=np.asarray(bins, dtype=np.float32))
+    return {
+        "bin_edges": [float(v) for v in bins],
+        "counts": [int(v) for v in counts.tolist()],
+    }
+
+
+def trace_image(
+    env,
+    actor,
+    dataset_idx,
+    Q_net=None,
+    n_trials=1,
+    show=True,
+    show_live=False,
+    stochastic=False,
+    return_stats=False,
+    cancel_event=None,
+    initial_path_mask=None,
+    terminal_target_norm_threshold: float = 1.0,
+    false_stop_distance_threshold: Optional[float] = None,
+):
     """
     Trace a single neuron image using the given actor.
 
@@ -44,6 +94,11 @@ def trace_image(env, actor, dataset_idx, Q_net=None, n_trials=1, show=True, show
     initial_path_mask : torch.Tensor or np.ndarray, optional
         Optional starting path mask in (Z, Y, X) to load into ``env.img.data[-1]``
         immediately after each environment reset (used for revision retracing).
+    terminal_target_norm_threshold : float, optional
+        Target-distance threshold used to bucket states as terminal-like vs non-terminal.
+    false_stop_distance_threshold : float, optional
+        A choose_stop event is counted as false-stop when current target distance exceeds this value.
+        Defaults to ``terminal_target_norm_threshold`` when not provided.
 
     Returns
     -------
@@ -62,12 +117,19 @@ def trace_image(env, actor, dataset_idx, Q_net=None, n_trials=1, show=True, show
         raise ValueError("n_trials must be at least 1")
     if n_trials > 1 and Q_net is None:
         raise ValueError("Q_net must be provided if n_trials > 1")
+    if terminal_target_norm_threshold < 0.0:
+        raise ValueError("terminal_target_norm_threshold must be non-negative")
+    if false_stop_distance_threshold is None:
+        false_stop_distance_threshold = terminal_target_norm_threshold
+    if false_stop_distance_threshold < 0.0:
+        raise ValueError("false_stop_distance_threshold must be non-negative")
 
     if show:
         fig, ax = plt.subplots(2, 3, figsize=(15, 10))
         plt.ion()
 
     actor.eval()
+    policy_output_mode = getattr(actor, "policy_output_mode", "gaussian")
     trace_start_time = time.perf_counter()
     timing_ms = {
         "reset_and_mask": 0.0,
@@ -132,6 +194,12 @@ def trace_image(env, actor, dataset_idx, Q_net=None, n_trials=1, show=True, show
     trial_paths = []
     variance = []
     step_magnitudes = []
+    terminal_state_action_norms = []
+    nonterminal_state_action_norms = []
+    choose_stop_count = 0
+    choose_stop_with_target_count = 0
+    false_choose_stop_count = 0
+    choose_stop_target_distances = []
 
     # Run n_trials.
     for trial in range(n_trials):
@@ -153,13 +221,15 @@ def trace_image(env, actor, dataset_idx, Q_net=None, n_trials=1, show=True, show
                 timing_ms["actor_forward"] += (time.perf_counter() - actor_start) * 1000.0
 
                 sample_start = time.perf_counter()
-                direction_dist = sample_from_output(actor_out)
-                if stochastic:
-                    action = direction_dist.sample()[0]
-                else:
-                    action = direction_dist.mean[0]
-                variance.append(float(direction_dist.variance[0].mean().detach().cpu()))
-                step_magnitudes.append(float(action.norm().detach().cpu()))
+                action, action_variance = _select_action_from_actor_output(
+                    actor_out,
+                    policy_output_mode=policy_output_mode,
+                    stochastic=stochastic,
+                )
+                if action_variance is not None:
+                    variance.append(action_variance)
+                action_norm = float(action.norm().detach().cpu())
+                step_magnitudes.append(action_norm)
                 timing_ms["sample_action"] += (time.perf_counter() - sample_start) * 1000.0
 
             step_start = time.perf_counter()
@@ -167,6 +237,21 @@ def trace_image(env, actor, dataset_idx, Q_net=None, n_trials=1, show=True, show
             next_obs, reward, terminated, truncated, info = env.step(action_cpu, training=False)
             timing_ms["env_step"] += (time.perf_counter() - step_start) * 1000.0
             timing_ms["steps"] += 1
+
+            current_target_distance = _min_target_norm(info.get("current_target_vectors"))
+            if current_target_distance is not None:
+                if current_target_distance <= terminal_target_norm_threshold:
+                    terminal_state_action_norms.append(action_norm)
+                else:
+                    nonterminal_state_action_norms.append(action_norm)
+
+            if info.get("status") == "choose_stop":
+                choose_stop_count += 1
+                if current_target_distance is not None:
+                    choose_stop_with_target_count += 1
+                    choose_stop_target_distances.append(current_target_distance)
+                    if current_target_distance > false_stop_distance_threshold:
+                        false_choose_stop_count += 1
 
             if Q_net is not None:
                 q_start = time.perf_counter()
@@ -270,6 +355,29 @@ def trace_image(env, actor, dataset_idx, Q_net=None, n_trials=1, show=True, show
         else:
             mean_step_magnitude = max_step_magnitude = min_step_magnitude = None
 
+        if len(terminal_state_action_norms) > 0:
+            terminal_mean_step_magnitude = float(np.mean(terminal_state_action_norms))
+        else:
+            terminal_mean_step_magnitude = None
+
+        if len(nonterminal_state_action_norms) > 0:
+            nonterminal_mean_step_magnitude = float(np.mean(nonterminal_state_action_norms))
+        else:
+            nonterminal_mean_step_magnitude = None
+
+        if terminal_mean_step_magnitude is None or nonterminal_mean_step_magnitude is None:
+            action_norm_separation = None
+        else:
+            action_norm_separation = float(nonterminal_mean_step_magnitude - terminal_mean_step_magnitude)
+
+        false_choose_stop_rate = None
+        if choose_stop_with_target_count > 0:
+            false_choose_stop_rate = float(false_choose_stop_count / choose_stop_with_target_count)
+
+        hist_bins = [0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 6.0, 8.0, 12.0]
+        terminal_hist = _action_norm_histogram(terminal_state_action_norms, bins=hist_bins)
+        nonterminal_hist = _action_norm_histogram(nonterminal_state_action_norms, bins=hist_bins)
+
         result.update({
             'estimated_returns': estimated_returns,
             'mean_step_variance': mean_step_variance,
@@ -278,6 +386,20 @@ def trace_image(env, actor, dataset_idx, Q_net=None, n_trials=1, show=True, show
             'mean_step_magnitude': mean_step_magnitude,
             'max_step_magnitude': max_step_magnitude,
             'min_step_magnitude': min_step_magnitude,
+            'choose_stop_count': int(choose_stop_count),
+            'choose_stop_with_target_count': int(choose_stop_with_target_count),
+            'false_choose_stop_count': int(false_choose_stop_count),
+            'false_choose_stop_rate': false_choose_stop_rate,
+            'choose_stop_target_distance_mean': (
+                float(np.mean(choose_stop_target_distances)) if len(choose_stop_target_distances) > 0 else None
+            ),
+            'terminal_state_mean_step_magnitude': terminal_mean_step_magnitude,
+            'nonterminal_state_mean_step_magnitude': nonterminal_mean_step_magnitude,
+            'action_norm_separation': action_norm_separation,
+            'terminal_state_action_norm_histogram': terminal_hist,
+            'nonterminal_state_action_norm_histogram': nonterminal_hist,
+            'terminal_target_norm_threshold': float(terminal_target_norm_threshold),
+            'false_stop_distance_threshold': float(false_stop_distance_threshold),
         })
 
     return result

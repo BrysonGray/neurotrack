@@ -9,7 +9,7 @@ import importlib
 import threading
 import tempfile
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import tifffile as tf
@@ -63,21 +63,41 @@ def _normalize_seed_array(seed_array: np.ndarray, shape: tuple[int, int, int]) -
     return arr.tolist()
 
 
+def _format_eval_value(value: Any, decimals: int = 4) -> str:
+    """Format evaluation values for the interactive report."""
+    if value is None:
+        return "N/A"
+    if isinstance(value, np.generic):
+        value = value.item()
+    if isinstance(value, (int, np.integer)):
+        return str(int(value))
+    if isinstance(value, (float, np.floating)):
+        value_f = float(value)
+        if not np.isfinite(value_f):
+            return "N/A"
+        return f"{value_f:.{decimals}f}"
+    return str(value)
+
+
 def _format_eval_report(image_key: str, result: Dict) -> str:
     """Format evaluation metrics as a human-readable multi-line string."""
     sep = "-" * 44
     lines = [
         f"Evaluation: {image_key}",
         sep,
-        f"  Bidirectional Distance:    {result.get('bidirectional_distance', 'N/A'):.4f}",
-        f"  Directed Div pred\u2192gt:  {result.get('directed_div_pred_to_gt', 'N/A'):.4f}"
-        f"  (N={result.get('n_substantial_pred_to_gt', 'N/A')})",
-        f"  Directed Div gt\u2192pred:  {result.get('directed_div_gt_to_pred', 'N/A'):.4f}"
-        f"  (N={result.get('n_substantial_gt_to_pred', 'N/A')})",
-        f"  Precision: {result.get('precision', 'N/A'):.4f}",
-        f"  Coverage: {result.get('coverage', 'N/A'):.4f}",
-        f"  Pred Nodes: {result.get('n_points_pred', 'N/A')}",
-        f"  |  GT Nodes: {result.get('n_points_gt', 'N/A')}",
+        f"  Bidirectional Distance:    {_format_eval_value(result.get('bidirectional_distance'))}",
+        f"  Directed Div pred\u2192gt:  {_format_eval_value(result.get('directed_div_pred_to_gt'))}"
+        f"  (N={_format_eval_value(result.get('n_substantial_pred_to_gt'), decimals=0)})",
+        f"  Directed Div gt\u2192pred:  {_format_eval_value(result.get('directed_div_gt_to_pred'))}"
+        f"  (N={_format_eval_value(result.get('n_substantial_gt_to_pred'), decimals=0)})",
+        f"  Precision:                {_format_eval_value(result.get('precision'))}",
+        f"  Coverage:                 {_format_eval_value(result.get('coverage'))}",
+        f"  Endpoint Loc Error:       {_format_eval_value(result.get('endpoint_localization_error'))}",
+        f"  Endpoint Count Error:     {_format_eval_value(result.get('endpoint_count_error'), decimals=0)}",
+        f"  Branchpoint Loc Error:    {_format_eval_value(result.get('branchpoint_localization_error'))}",
+        f"  Branchpoint Count Error:  {_format_eval_value(result.get('branchpoint_count_error'), decimals=0)}",
+        f"  Pred Nodes: {_format_eval_value(result.get('n_points_pred'), decimals=0)}",
+        f"  |  GT Nodes: {_format_eval_value(result.get('n_points_gt'), decimals=0)}",
 
     ]
     if "gt_file" in result:

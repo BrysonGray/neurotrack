@@ -131,6 +131,16 @@ def compute_pipeline_summary(
     evaluation_results: List[Dict[str, Any]],
     has_ground_truth: bool,
 ) -> Dict[str, Any]:
+    def _finite_stats(values: List[Any]) -> Dict[str, Optional[float]]:
+        finite = np.asarray(values, dtype=float)
+        finite = finite[np.isfinite(finite)]
+        if finite.size == 0:
+            return {"mean": None, "std": None}
+        return {
+            "mean": float(np.mean(finite)),
+            "std": float(np.std(finite)),
+        }
+
     if not has_ground_truth:
         n_neurons = len(postprocessed_results)
         skipped_neurons = [
@@ -178,6 +188,10 @@ def compute_pipeline_summary(
     bidirectional_dists = [result["bidirectional_distance"] for result in valid_results]
     directed_pred_to_gt = [result["directed_div_pred_to_gt"] for result in valid_results]
     directed_gt_to_pred = [result["directed_div_gt_to_pred"] for result in valid_results]
+    endpoint_loc_stats = _finite_stats([result.get("endpoint_localization_error") for result in valid_results])
+    branchpoint_loc_stats = _finite_stats([result.get("branchpoint_localization_error") for result in valid_results])
+    endpoint_count_stats = _finite_stats([result.get("endpoint_count_error") for result in valid_results])
+    branchpoint_count_stats = _finite_stats([result.get("branchpoint_count_error") for result in valid_results])
 
     return {
         "n_neurons": len(evaluation_results),
@@ -191,4 +205,12 @@ def compute_pipeline_summary(
         "std_directed_pred_to_gt": float(np.std(directed_pred_to_gt)),
         "mean_directed_gt_to_pred": float(np.mean(directed_gt_to_pred)),
         "std_directed_gt_to_pred": float(np.std(directed_gt_to_pred)),
+        "mean_endpoint_localization_error": endpoint_loc_stats["mean"],
+        "std_endpoint_localization_error": endpoint_loc_stats["std"],
+        "mean_branchpoint_localization_error": branchpoint_loc_stats["mean"],
+        "std_branchpoint_localization_error": branchpoint_loc_stats["std"],
+        "mean_endpoint_count_error": endpoint_count_stats["mean"],
+        "std_endpoint_count_error": endpoint_count_stats["std"],
+        "mean_branchpoint_count_error": branchpoint_count_stats["mean"],
+        "std_branchpoint_count_error": branchpoint_count_stats["std"],
     }

@@ -74,6 +74,35 @@ def _make_chain_rows(num_nodes: int, start_xyz=(8.0, 20.0, 20.0), step_xyz=(1.0,
 
 
 class SeedPipelineValidationTests(unittest.TestCase):
+    def test_format_eval_report_includes_special_node_metrics(self):
+        report = interactive_pipeline._format_eval_report(
+            "sample.tif",
+            {
+                "bidirectional_distance": 1.25,
+                "directed_div_pred_to_gt": 0.5,
+                "n_substantial_pred_to_gt": 8,
+                "directed_div_gt_to_pred": 0.75,
+                "n_substantial_gt_to_pred": 7,
+                "precision": 0.8,
+                "coverage": 0.9,
+                "endpoint_localization_error": 0.25,
+                "endpoint_count_error": 2,
+                "branchpoint_localization_error": float("nan"),
+                "branchpoint_count_error": 1,
+                "n_points_pred": 42,
+                "n_points_gt": 40,
+            },
+        )
+
+        self.assertIn("Endpoint Loc Error", report)
+        self.assertIn("Endpoint Count Error", report)
+        self.assertIn("Branchpoint Loc Error", report)
+        self.assertIn("Branchpoint Count Error", report)
+        self.assertIn("0.2500", report)
+        self.assertIn("N/A", report)
+        self.assertIn("42", report)
+        self.assertIn("40", report)
+
     def test_adjacency_dict_handles_empty_and_single_row_inputs(self):
         self.assertEqual(adjacency_dict([]), {})
 

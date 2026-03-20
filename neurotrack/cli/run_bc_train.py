@@ -82,10 +82,13 @@ def _run_single_experiment(params: Dict, config_path: Path) -> None:
     policy_weights = _get_param(params, "policy_weights", "bc_weights")
     seeds_path = _get_param(params, "seeds_path")
     root_sampling_probability = _get_param(params, "root_sampling_probability")
-    dagger_rounds = int(_get_param(params, "dagger_rounds", default=0))
+    soma_sample_radius = float(_get_param(params, "soma_sample_radius", default=0.0))
+    random_offset = float(_get_param(params, "random_offset", default=0.0))
     warmstart_episodes = int(_get_param(params, "warmstart_episodes", default=n_episodes))
-    rollout_episodes_per_round = int(_get_param(params, "rollout_episodes_per_round", "episodes_per_round", default=n_episodes))
-    dataset_epochs_per_round = int(_get_param(params, "dataset_epochs_per_round", "epochs_per_round", default=1))
+    update_after_steps_raw = _get_param(params, "update_after_steps", default=None)
+    update_after_steps = None if update_after_steps_raw is None else int(update_after_steps_raw)
+    update_every = int(_get_param(params, "update_every", default=64))
+    updates_per_step = int(_get_param(params, "updates_per_step", default=1))
     beta_start = float(_get_param(params, "beta_start", default=1.0))
     beta_end = float(_get_param(params, "beta_end", default=0.0))
     aggregate_memory_budget = int(_get_param(params, "aggregate_memory_budget", "dagger_memory_budget", default=10000))
@@ -109,6 +112,8 @@ def _run_single_experiment(params: Dict, config_path: Path) -> None:
         inference_mode=False,
         seeds_path=seeds_path,
         root_sampling_probability=root_sampling_probability,
+        soma_sample_radius=soma_sample_radius,
+        random_offset=random_offset,
     )
 
     env = NeuronTrackingEnvironment(
@@ -145,8 +150,7 @@ def _run_single_experiment(params: Dict, config_path: Path) -> None:
     with open(logdir / f"training_params_{date_time}.json", "w", encoding="utf-8") as handle:
         json.dump(params_to_save, handle, indent=4)
 
-    dynamic_complexity = bool(_get_param(params, "dynamic_complexity", default=True))
-    if dagger_rounds > 0:
+    if warmstart_episodes < n_episodes:
         behavior_cloning.train_dagger(
             env=env,
             actor=actor,
@@ -155,14 +159,14 @@ def _run_single_experiment(params: Dict, config_path: Path) -> None:
             logdir=logdir,
             name=name,
             batch_size=batch_size,
+            n_episodes=n_episodes,
             warmstart_episodes=warmstart_episodes,
-            dagger_rounds=dagger_rounds,
-            rollout_episodes_per_round=rollout_episodes_per_round,
-            dataset_epochs_per_round=dataset_epochs_per_round,
+            update_after_steps=update_after_steps,
+            update_every=update_every,
+            updates_per_step=updates_per_step,
             beta_start=beta_start,
             beta_end=beta_end,
             save_every_steps=save_every_steps,
-            dynamic_complexity=dynamic_complexity,
             aggregate_memory_budget=aggregate_memory_budget,
             rng=rng,
             continue_target_norm_threshold=continue_target_norm_threshold,
@@ -181,7 +185,6 @@ def _run_single_experiment(params: Dict, config_path: Path) -> None:
             batch_size=batch_size,
             n_episodes=n_episodes,
             save_every_steps=save_every_steps,
-            dynamic_complexity=dynamic_complexity,
             continue_target_norm_threshold=continue_target_norm_threshold,
             continue_weight=continue_weight,
             norm_floor=norm_floor,

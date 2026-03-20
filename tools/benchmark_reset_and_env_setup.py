@@ -39,6 +39,8 @@ def run_once(seed):
     start_idx = params.get('start_idx', 0)
     seeds_path = params.get('seeds_path')
     root_sampling_probability = params.get('root_sampling_probability')
+    soma_sample_radius = float(params.get('soma_sample_radius', 0.0))
+    random_offset = float(params.get('random_offset', 0.0))
     init_temperature = params.get('init_temperature', 0.005)
     target_entropy = params.get('target_entropy', 0.0)
 
@@ -57,6 +59,8 @@ def run_once(seed):
         rng=rng,
         seeds_path=seeds_path,
         root_sampling_probability=root_sampling_probability,
+        soma_sample_radius=soma_sample_radius,
+        random_offset=random_offset,
     )
 
     env = NeuronTrackingEnvironment(

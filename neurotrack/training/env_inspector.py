@@ -47,7 +47,7 @@ def manual_step(env, step_size=2.0):
             action = action.to(device=device)
             action = action * getattr(env, 'step_size', step_size)
             display.clear_output(wait=True)
-            observation, reward, terminated, truncated, info = env.step(action, verbose=True, training=False)
+            observation, reward, terminated, truncated, info = env.step(action, verbose=True)
 
             # Show:
             # 1) Whole image with path overlayed,

@@ -267,6 +267,8 @@ class _TraceRuntime:
             crop_patches=False,
             patches_per_image=1,
             seed_points_by_image={},
+            soma_sample_radius=float(trace_params.get("soma_sample_radius", 0.0)),
+            random_offset=float(trace_params.get("random_offset", 0.0)),
             inference_mode=True,
         )
 
@@ -1321,6 +1323,8 @@ def run_interactive_tracing_session(
         "sac_weights": config.get("sac_weights"),
         "rng_seed": config.get("rng_seed", 0),
         "step_width": config.get("step_width", 4.0),
+        "soma_sample_radius": config.get("soma_sample_radius", 0.0),
+        "random_offset": config.get("random_offset", 0.0),
         "max_len": config.get("max_len", 10000),
         "max_paths": config.get("max_paths", 1000),
         "branching": config.get("branching", True),

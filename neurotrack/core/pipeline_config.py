@@ -181,8 +181,8 @@ class PostprocessConfig:
             return self.to_dict()
         return {
             "min_branch_length": self.min_branch_length / scale,
-            "resampling_step_size": self.resampling_step_size / scale,
-            "smoothing_window": max(1, round(self.smoothing_window / scale)),
+            "resampling_step_size": self.resampling_step_size,
+            "smoothing_window": max(1, round(self.smoothing_window)),
             "overlap_threshold": self.overlap_threshold,
             "overlap_distance_threshold": self.overlap_distance_threshold / scale,
         }

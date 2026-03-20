@@ -234,7 +234,7 @@ def trace_image(
 
             step_start = time.perf_counter()
             action_cpu = action.detach().cpu()
-            next_obs, reward, terminated, truncated, info = env.step(action_cpu, training=False)
+            next_obs, reward, terminated, truncated, info = env.step(action_cpu)
             timing_ms["env_step"] += (time.perf_counter() - step_start) * 1000.0
             timing_ms["steps"] += 1
 

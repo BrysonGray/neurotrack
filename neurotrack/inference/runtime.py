@@ -41,6 +41,8 @@ def build_env(params: Dict[str, Any]) -> NeuronTrackingEnvironment:
         patches_per_image=int(params.get("patches_per_image", 1)),
         seeds_path=params.get("seeds_path", None),
         root_sampling_probability=params.get("root_sampling_probability", None),
+        soma_sample_radius=float(params.get("soma_sample_radius", 0.0)),
+        random_offset=float(params.get("random_offset", 0.0)),
         inference_mode=True,
     )
 

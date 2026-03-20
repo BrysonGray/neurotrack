@@ -48,7 +48,7 @@ class _ToyEnv:
     def get_state(self):
         return torch.full((1, 2, 35, 35, 35), fill_value=self._step_index, dtype=torch.uint8)
 
-    def step(self, action, training=True):
+    def step(self, action):
         action_t = torch.as_tensor(action, dtype=torch.float32).detach().cpu()
         self.recorded_actions.append(action_t)
 
@@ -101,7 +101,7 @@ class _TraceEnv:
     def get_state(self):
         return torch.zeros((1, 2, 35, 35, 35), dtype=torch.uint8)
 
-    def step(self, action, training=False):
+    def step(self, action):
         return (
             self.get_state(),
             torch.tensor(0.0, dtype=torch.float32),
@@ -311,14 +311,14 @@ class BehaviorCloningPolicyTests(unittest.TestCase):
                 logdir=Path(tmp_dir),
                 name="dagger_policy_rollin",
                 batch_size=2,
+                n_episodes=1,
                 warmstart_episodes=0,
-                dagger_rounds=1,
-                rollout_episodes_per_round=1,
-                dataset_epochs_per_round=1,
+                update_after_steps=1,
+                update_every=1,
+                updates_per_step=1,
                 beta_start=0.0,
                 beta_end=0.0,
                 save_every_steps=1,
-                dynamic_complexity=False,
                 rng=np.random.default_rng(0),
             )
 
@@ -343,27 +343,30 @@ class BehaviorCloningPolicyTests(unittest.TestCase):
                 logdir=logdir,
                 name="dagger_metadata",
                 batch_size=2,
+                n_episodes=2,
                 warmstart_episodes=1,
-                dagger_rounds=1,
-                rollout_episodes_per_round=1,
-                dataset_epochs_per_round=1,
+                update_after_steps=1,
+                update_every=1,
+                updates_per_step=1,
                 beta_start=0.25,
                 beta_end=0.25,
                 save_every_steps=1,
-                dynamic_complexity=False,
             )
 
             checkpoints = list(outdir.glob("model_state_dicts_dagger_metadata_*.pt"))
             self.assertEqual(len(checkpoints), 1)
             checkpoint = torch.load(checkpoints[0], map_location="cpu")
 
-        self.assertEqual(checkpoint["algorithm"], "multi_target_dagger")
+        self.assertEqual(checkpoint["algorithm"], "multi_target_dagger_online")
         self.assertEqual(checkpoint["policy_output_mode"], "direct_vector")
         self.assertEqual(checkpoint["policy_output_dim"], 3)
-        self.assertEqual(checkpoint["dagger_round"], 1)
+        self.assertEqual(checkpoint["dagger_episode"], 1)
         self.assertEqual(checkpoint["beta"], 0.25)
         self.assertGreaterEqual(checkpoint["dataset_size"], 2)
         self.assertEqual(checkpoint["aggregate_memory_budget"], 10000)
+        self.assertEqual(checkpoint["update_after_steps"], 1)
+        self.assertEqual(checkpoint["update_every"], 1)
+        self.assertEqual(checkpoint["updates_per_step"], 1)
 
     def test_train_dagger_respects_fifo_memory_budget(self):
         env = _ToyEnv([
@@ -385,14 +388,14 @@ class BehaviorCloningPolicyTests(unittest.TestCase):
                 logdir=logdir,
                 name="dagger_fifo_budget",
                 batch_size=2,
+                n_episodes=4,
                 warmstart_episodes=2,
-                dagger_rounds=1,
-                rollout_episodes_per_round=2,
-                dataset_epochs_per_round=1,
+                update_after_steps=1,
+                update_every=1,
+                updates_per_step=1,
                 beta_start=0.5,
                 beta_end=0.5,
                 save_every_steps=1,
-                dynamic_complexity=False,
                 aggregate_memory_budget=3,
                 rng=np.random.default_rng(0),
             )

@@ -4,6 +4,7 @@ import numpy as np
 from pathlib import Path
 from typing import List, Tuple, Optional, Dict, Union
 import warnings
+from qtpy.QtCore import center
 import torch
 from torch.utils.data import Dataset as TorchDataset
 from torch.utils.data import Sampler
@@ -48,6 +49,8 @@ class NeuronPatchDataset(TorchDataset):
         seeds_path: Optional[Union[str, Path]] = None,
         seed_points_by_image: Optional[Dict[str, List[List[float]]]] = None,
         root_sampling_probability: Optional[float] = None,
+        soma_sample_radius: float = 0.0,
+        random_offset: float = 0.0,
     ):
         """
         Initialize the dataset.
@@ -81,6 +84,11 @@ class NeuronPatchDataset(TorchDataset):
             If set, probability of sampling the subtree center from root nodes
             (parent_id == -1) instead of all SWC nodes when extracting cropped
             patches. If None, center sampling is fully random over all SWC nodes.
+        soma_sample_radius : float
+            Radius within which to sample soma points.
+        random_offset : float
+            Random offset to add to sampled points.
+
         """
         self.swc_files = []
         if swc_dir is not None:
@@ -121,6 +129,8 @@ class NeuronPatchDataset(TorchDataset):
         self.has_swc = len(self.swc_files) > 0
         self.inference_mode = inference_mode
         self.root_sampling_probability = None if root_sampling_probability is None else float(root_sampling_probability)
+        self.soma_sample_radius = float(soma_sample_radius)
+        self.random_offset = float(random_offset)
         self.seeds_path = str(seeds_path) if seeds_path is not None else None
         if seed_points_by_image is not None:
             self.seed_points_by_image = dict(seed_points_by_image)
@@ -424,14 +434,14 @@ class NeuronPatchDataset(TorchDataset):
     def _extract_subtree(
         self,
         swc_data: Union[List, np.ndarray],
-        center_node: np.ndarray,
+        center_node_id: int,
+        center_point: np.ndarray,
         swc_adj_dict: Optional[Dict[int, List[int]]] = None,
         image_shape_xyz: Optional[Tuple[int, int, int]] = None,
     ) -> List:
         """Extract the connected subtree within crop bounds around a center SWC node."""
-        swc_array = np.asarray(swc_data)
-        center_point = center_node[2:5]
 
+        swc_array = np.asarray(swc_data)
         min_coords = np.floor(center_point - self.crop_size // 2).astype(int)
         max_coords = np.ceil(center_point + self.crop_size // 2).astype(int)
         if image_shape_xyz is not None:
@@ -453,12 +463,11 @@ class NeuronPatchDataset(TorchDataset):
 
         # Keep only the connected component containing center_id under in-box node constraints.
         in_box_ids = set(in_box_nodes[:, 0].astype(np.int64).tolist())
-        center_id = int(center_node[0])
-        if center_id not in in_box_ids:
+        if center_node_id not in in_box_ids:
             return in_box_nodes.tolist()
 
         visited = set()
-        to_visit = [center_id]
+        to_visit = [center_node_id]
         while to_visit:
             node = to_visit.pop()
             if node in visited:
@@ -525,6 +534,35 @@ class NeuronPatchDataset(TorchDataset):
         #     subtree.append(new_node.tolist())
 
         return subtree
+    
+    def _sample_near_soma(self, swc_data: Union[List, np.ndarray], patch_rng: np.random.Generator, image_shape_xyz: Tuple[int, int, int], radius: float = 0.0, random_offset: float = 0.0) -> np.ndarray:
+        """Sample a point within radius of the soma (root nodes) with some random offset."""
+        swc_array = np.asarray(swc_data)
+        root_nodes = swc_array[swc_array[:, 6] == -1]
+        if len(root_nodes) == 0:
+            raise _ResamplePatch("No root nodes found in SWC data for soma-biased sampling.")
+        soma_center = root_nodes[0, 2:5]
+        if radius > 0.0:
+            in_radius_mask = np.sum((swc_array[:, 2:5] - soma_center) ** 2, axis=1) <= radius ** 2
+            candidates = swc_array[in_radius_mask]
+            if len(candidates) == 0:
+                raise _ResamplePatch(f"No nodes found within radius {radius} of soma for sampling.")
+            center_node = candidates[patch_rng.integers(len(candidates))]
+        else:
+            center_node = root_nodes[0]
+        seed_node_id = int(center_node[0])
+        if random_offset > 0.0:
+            # try to add random offset while keeping the point within image bounds if image_shape_xyz is provided
+
+            offset = patch_rng.uniform(-random_offset, random_offset, size=3)
+            seed_point_xyz = center_node[2:5] + offset
+            seed_point_xyz = np.maximum(seed_point_xyz, 0)
+            seed_point_xyz = np.minimum(seed_point_xyz, np.array(image_shape_xyz) - 1)
+        else:
+            seed_point_xyz = center_node[2:5]
+
+        return seed_point_xyz, seed_node_id
+        
 
     def _extract_random_patch(
         self,
@@ -554,19 +592,24 @@ class NeuronPatchDataset(TorchDataset):
         """
         # Choose center node (default random over all nodes, with optional root bias)
         swc_array = np.asarray(swc_data)
-        center_node = swc_array[patch_rng.integers(len(swc_array))]
-        root_prob = self.root_sampling_probability
-        if root_prob is not None and root_prob > 0.0 and patch_rng.random() < root_prob:
-            root_nodes = swc_array[swc_array[:, 6] == -1]
-            if len(root_nodes) > 0:
-                center_node = root_nodes[patch_rng.integers(len(root_nodes))]
-        seed_node_id = int(center_node[0])
+        image_shape_xyz = tuple(image.shape[-3:][::-1])
+        sample_from_root = self.root_sampling_probability is not None and patch_rng.random() < self.root_sampling_probability
+        if sample_from_root:
+            seed_point_xyz, seed_node_id = self._sample_near_soma(swc_array, patch_rng, radius=self.soma_sample_radius, random_offset=self.random_offset, image_shape_xyz=image_shape_xyz)
+        else:
+            center_node = swc_array[patch_rng.integers(len(swc_array))]
+            seed_node_id = int(center_node[0])
+            seed_point_xyz = center_node[2:5]
+            if self.random_offset > 0.0:
+                offset = patch_rng.uniform(-self.random_offset, self.random_offset, size=3)
+                seed_point_xyz = seed_point_xyz + offset
 
         subtree = self._extract_subtree(
             swc_array,
-            center_node=center_node,
+            center_node_id=seed_node_id,
+            center_point=seed_point_xyz,
             swc_adj_dict=swc_adj_dict,
-            image_shape_xyz=tuple(image.shape[-3:][::-1]),
+            image_shape_xyz=image_shape_xyz,
         )
         if len(subtree) == 0:
             raise _ResamplePatch("Extracted subtree is empty before cropping.")
@@ -575,7 +618,7 @@ class NeuronPatchDataset(TorchDataset):
             cropped_img, shifted_subtree = crop_around_subtree(
                 image,
                 subtree,
-                center_node=center_node,
+                center_point=seed_point_xyz,
                 size=self.crop_size,
             )
         except ValueError as exc:
@@ -611,11 +654,10 @@ class NeuronPatchDataset(TorchDataset):
             else:
                 image = cropped_img
 
-        # At runtime, sometimes the seed will be manually placed mid-neuron.
-        # To simulate this, sometimes do not add the previous path to the path
-        # channel and prune the subtree as if the seed is the new root.
-        prob_add_prev_path = 0.95
-        add_prev_path = patch_rng.random() < prob_add_prev_path
+        # At runtime, sometimes the seed will be manually placed near the soma.
+        # To simulate this, do not add the previous path to the path
+        # channel and prune the subtree as if the seed is the new root only if sample_from_root is True.
+        add_prev_path = not sample_from_root
         path_channel, shifted_subtree = self._build_predicted_path_channel(
             subtree=shifted_subtree,
             seed_node_id=seed_node_id,
@@ -866,7 +908,7 @@ class ShuffledPatchSampler(Sampler):
 
 
 def crop_around_subtree(image: torch.Tensor, subtree: List, 
-                        center_node: np.ndarray, size: int) -> Tuple[torch.Tensor, List]:
+                        center_point: np.ndarray, size: int) -> Tuple[torch.Tensor, List]:
     """
     Crop image around subtree coordinates and shift subtree coordinates.
     """
@@ -878,7 +920,6 @@ def crop_around_subtree(image: torch.Tensor, subtree: List,
     subtree_array = np.array(subtree)
     
     # Crop around the center of the subtree with given size
-    center_point = center_node[2:5] # X, Y, Z order from SWC
     if np.any(center_point < 0):
         raise ValueError(f"Center point has negative coordinates: {center_point}")
     min_coords = np.floor(center_point - size // 2).astype(int)

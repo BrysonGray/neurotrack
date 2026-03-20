@@ -96,6 +96,8 @@ def main():
     branching = params["branching"] if "branching" in params else 0
     seeds_path = params["seeds_path"] if "seeds_path" in params else None
     root_sampling_probability = params["root_sampling_probability"] if "root_sampling_probability" in params else None
+    soma_sample_radius = params["soma_sample_radius"] if "soma_sample_radius" in params else 0.0
+    random_offset = params["random_offset"] if "random_offset" in params else 0.0
     rng_seed = params["rng_seed"] if "rng_seed" in params else 1
     start_complexity = params["start_complexity"] if "start_complexity" in params else 0.0
     start_idx = params["start_idx"] if "start_idx" in params else 0
@@ -116,6 +118,8 @@ def main():
         inference_mode=False,
         seeds_path=seeds_path,
         root_sampling_probability=root_sampling_probability,
+        soma_sample_radius=soma_sample_radius,
+        random_offset=random_offset,
     )
 
     # Create environment

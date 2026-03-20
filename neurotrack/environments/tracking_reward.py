@@ -748,7 +748,7 @@ def _compute_target_point(
             adj_dict = load.adjacency_dict(swc_t)
 
         # Prefer a nearby terminal when it is reachable within one target step.
-        if terminals_exist and sq_dist_to_nearest_terminal <= step_size ** 2:
+        if nearest_valid_terminal is not None and sq_dist_to_nearest_terminal <= step_size ** 2:
             return nearest_valid_terminal.unsqueeze(0)
 
         nearest_point, _nearest_edge = _get_nearest_point(
@@ -760,7 +760,7 @@ def _compute_target_point(
         )
 
         if nearest_point is None:
-            if terminals_exist:
+            if nearest_valid_terminal is not None:
                 return nearest_valid_terminal.unsqueeze(0)
             return torch.empty((0, 3), dtype=torch.float32, device=swc_t.device)
 

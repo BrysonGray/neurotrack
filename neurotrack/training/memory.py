@@ -159,7 +159,7 @@ def _transform_bc_batch(obs, target_vectors, target_mask, include_z_flip):
 class BehaviorCloningReplayBuffer:
     """FIFO replay buffer for behavior-cloning supervision with optional augmentation on sampling."""
 
-    def __init__(self, capacity, include_z_flip=False):
+    def __init__(self, capacity, include_z_flip=True):
         if int(capacity) < 1:
             raise ValueError("capacity must be at least 1")
         self.capacity = int(capacity)
@@ -188,7 +188,7 @@ class BehaviorCloningReplayBuffer:
         self.idx = (self.idx + 1) % self.capacity
         self.full = self.idx == 0 or self.full
 
-    def sample(self, batch_size, replacement=False, transform=False):
+    def sample(self, batch_size, replacement=False, transform=True):
         real_size = len(self)
         if real_size == 0:
             raise ValueError("Cannot sample from an empty BehaviorCloningReplayBuffer.")

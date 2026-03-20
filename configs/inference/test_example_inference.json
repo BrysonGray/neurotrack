@@ -3,12 +3,12 @@
   "swc_dir": "/home/brysongray/data/neurotrack_data/gold166/gold166_cleaned/validate_set/morphology",
   "seeds_path": "/home/brysongray/data/neurotrack_data/gold166/gold166_cleaned/validate_set/seeds.json",
   "out_dir": "/home/brysongray/data/neurotrack_data/inference_outputs/bc_test_inference/",
-  "test_name": "test_bc_dagger_3_18_baseline",
+  "test_name": "test_bc_dagger_3_20",
 
-  "sac_weights": "/home/brysongray/data/neurotrack_data/model_weights/bc_weights/training_outputs_3_17/bc_early_stop_ablation__baseline/model_state_dicts_bc_early_stop_ablation__baseline_'2026-03-17_17-50-47'.pt",
+  "sac_weights": "/home/brysongray/data/neurotrack_data/model_weights/bc_weights/training_outputs_3_19/model_state_dicts_bc_experiment_'2026-03-20_10-39-16'.pt",
 
   "step_width": 2.0,
-  "repeat_starts": false,
+  "repeat_starts": true,
   "rng_seed": 1,
   "n_trials": 1,
   "review_before_next": true,

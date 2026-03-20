@@ -13,40 +13,45 @@ def plot_logs(logs_csv: Path, output_dir: Path):
         for line in f:
             fields = line.strip().split(",")
             log = {
-                "episode": int(fields[0]),
-                "image_file": fields[1],
-                "num_branches": int(fields[2]),
-                "episode_avg_reward": float(fields[3]),
-                "episode_avg_var": float(fields[4]),
-                "episode_return": float(fields[5]),
-                "episode_avg_policy_loss": float(fields[6]),
-                "moving_avg_reward": float(fields[7]),
-                "complexity": float(fields[8])
+                "episode": int(fields[2]),
+                "image_file": fields[3],
+                "episode_avg_reward": float(fields[4]),
+                "episode_avg_loss": float(fields[5]),
+                "false_stop_rate": float(fields[8]),
+                "false_continue_rate": float(fields[9])
             }
             logs.append(log)
 
     # Sort logs by episode
     logs.sort(key=lambda x: x["episode"])
     episodes = [log["episode"] for log in logs]
-    moving_avg_rewards = [log["moving_avg_reward"] for log in logs]
-    episode_returns = [log["episode_return"] for log in logs]
-    episode_avg_policy_losses = [log["episode_avg_policy_loss"] for log in logs]
+    episode_avg_rewards = [log["episode_avg_reward"] for log in logs]
+    update_episodes = [log["episode"] for log in logs if log["episode_avg_loss"] > 0.0]
+    episode_avg_loss = [log["episode_avg_loss"] for log in logs if log["episode_avg_loss"] > 0.0]
+    false_stop_rates = [log["false_stop_rate"] for log in logs if "false_stop_rate" in log]
+    false_continue_rates = [log["false_continue_rate"] for log in logs if "false_continue_rate" in log]
 
-    plt.figure(figsize=(12, 8))
-    plt.subplot(3, 1, 1)
-    plt.plot(episodes, moving_avg_rewards, label="Moving Avg Reward")
+
+    plt.figure(figsize=(16, 8))
+    plt.subplot(4, 1, 1)
+    plt.plot(episodes, episode_avg_rewards, label="Episode Avg Reward", color="blue")
     plt.xlabel("Episode")
     plt.ylabel("Moving Avg Reward")
     plt.legend()
-    plt.subplot(3, 1, 2)
-    plt.plot(episodes, episode_returns, label="Episode Return", color="orange")
+    plt.subplot(4, 1, 2)
+    plt.plot(update_episodes, episode_avg_loss, label="Episode Avg Loss", color="green")
     plt.xlabel("Episode")
-    plt.ylabel("Episode Return")
+    plt.ylabel("Episode Avg Loss")
     plt.legend()
-    plt.subplot(3, 1, 3)
-    plt.plot(episodes, episode_avg_policy_losses, label="Episode Avg Policy Loss", color="green")
+    plt.subplot(4, 1, 3)
+    plt.scatter(episodes, false_stop_rates, label="False Stop Rate", color="red", s=5)
     plt.xlabel("Episode")
-    plt.ylabel("Episode Avg Policy Loss")
+    plt.ylabel("False Stop Rate")
+    plt.legend()
+    plt.subplot(4, 1, 4)
+    plt.scatter(episodes, false_continue_rates, label="False Continue Rate", color="purple", s=5)
+    plt.xlabel("Episode")
+    plt.ylabel("False Continue Rate")
     plt.legend()
     plt.tight_layout()
     output_file = output_dir / f"training_logs_plot_{logs_csv.stem}.png"

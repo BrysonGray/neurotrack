@@ -840,7 +840,7 @@ def train_dagger(
     last_save_bucket = -1
     use_progress_bar = sys.stdout.isatty()
     csv_file_path = logdir / f"{name}_{date_time}_log.csv"
-    aggregate_buffer = BehaviorCloningReplayBuffer(capacity=aggregate_memory_budget)
+    aggregate_buffer = BehaviorCloningReplayBuffer(capacity=aggregate_memory_budget, include_z_flip=True)
     memory_budget_meta = int(aggregate_memory_budget)
     n_dagger_episodes = int(n_episodes - warmstart_episodes)
     false_stop_distance_threshold = float(loss_config.continue_target_norm_threshold)

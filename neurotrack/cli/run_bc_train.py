@@ -84,8 +84,8 @@ def _run_single_experiment(params: Dict, config_path: Path) -> None:
     root_sampling_probability = _get_param(params, "root_sampling_probability")
     soma_sample_radius = float(_get_param(params, "soma_sample_radius", default=0.0))
     random_offset = float(_get_param(params, "random_offset", default=0.0))
-    warmstart_episodes = int(_get_param(params, "warmstart_episodes", default=n_episodes))
-    update_after_steps_raw = _get_param(params, "update_after_steps", default=None)
+    warmstart_episodes = int(_get_param(params, "warmstart_episodes", default=n_episodes//5))
+    update_after_steps_raw = _get_param(params, "update_after_steps", default=500)
     update_after_steps = None if update_after_steps_raw is None else int(update_after_steps_raw)
     update_every = int(_get_param(params, "update_every", default=64))
     updates_per_step = int(_get_param(params, "updates_per_step", default=1))
@@ -124,7 +124,7 @@ def _run_single_experiment(params: Dict, config_path: Path) -> None:
         stall_threshold=stall_threshold,
         max_len=int(_get_param(params, "max_len", default=1000)),
         max_paths=int(_get_param(params, "max_paths", default=1000)),
-        gamma=float(_get_param(params, "gamma", default=0.99)),
+        gamma=float(_get_param(params, "gamma", default=0.0)),
         branching=branching,
         repeat_starts=repeat_starts,
         start_idx=start_idx,
@@ -136,6 +136,7 @@ def _run_single_experiment(params: Dict, config_path: Path) -> None:
     actor_optimizer = AdamW(actor.parameters(), lr=lr)
 
     if policy_weights is not None:
+        print("Loading policy weights from:", policy_weights)
         state_dicts = torch.load(policy_weights, map_location=DEVICE)
         actor.load_state_dict(state_dicts["policy_state_dict"])
         if "actor_optimizer_state_dict" in state_dicts:

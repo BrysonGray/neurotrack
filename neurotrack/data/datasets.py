@@ -291,7 +291,7 @@ class NeuronPatchDataset(TorchDataset):
         
         # lastly, draw the small segment from the seed node to the path if it is not zero length to ensure the seed point is included in the path channel
         if not torch.all(seed_point_xyz == point_b):
-            segment = torch.stack((seed_point_xyz, point_b), dtype=torch.float32, dim=0)
+            segment = torch.stack((seed_point_xyz, point_b), dim=0)
             path_image.draw_line_segment(segment, width=self.step_width, channel=0, mask=True)
 
         # remove path_ids from subtree.

@@ -1,6 +1,6 @@
 """Metric primitives for reconstruction evaluation."""
 
-from typing import Any, Dict
+from typing import Any, Dict, Tuple
 
 import numpy as np
 from scipy.spatial import KDTree
@@ -72,14 +72,73 @@ def _symmetric_localization_error(coords_a: np.ndarray, coords_b: np.ndarray) ->
     return float((forward + backward) / 2.0)
 
 
+def directed_divergence(tree_a, tree_b, threshold=4.0):
+    """
+    Calculate the directed divergence from tree_a to tree_b.
+    For each point in tree_a, find the nearest point in tree_b and compute the average distance.
+
+    Parameters
+    ----------
+    tree_a : list or array_like
+        Nx7 SWC formatted list or array of points representing the first tree.
+    tree_b : list or array_like
+        Mx7 SWC formatted list or array of points representing the second tree.
+    threshold : float
+        Distance threshold to consider for divergence calculation.
+
+    Returns
+    -------
+    avg_distance : float
+        The average distance from each point in tree_a to the nearest point in tree_b.
+    n_close : float
+        The number of points in tree_a that are within the threshold distance to tree_b.
+    n_far : float
+        The number of points in tree_a that are farther than the threshold distance to tree_b.
+    """
+    tree_a = np.asarray(tree_a)
+    tree_b = np.asarray(tree_b)
+    kdtree_b = KDTree(tree_b[:, 2:5])  # Use only x, y, z coordinates
+    distances, _ = kdtree_b.query(tree_a[:, 2:5]) # distances from points in tree_a to nearest points in tree_b
+    avg_distance = np.mean(distances)
+    n_close = np.sum(distances <= threshold)
+    n_far = len(tree_a) - n_close
+    return avg_distance, n_close, n_far
+
+
+def spatial_distance(tree_a, tree_b, threshold=4.0):
+    """
+    Calculate the average of the directed divergence from A to B and from B to A. 
+
+    Parameters
+    ----------
+    tree_a : list or array_like
+        Nx7 SWC formatted list or array of points representing the first tree.
+    tree_b : list or array_like
+        Mx7 SWC formatted list or array of points representing the second tree.
+
+    Returns
+    -------
+    float
+        The average bi-directional distance.
+    float
+        The proportion of points within the threshold distance in both directions.
+    """
+
+    divergence_a_to_b, _ = directed_divergence(tree_a, tree_b, threshold)
+    divergence_b_to_a, _ = directed_divergence(tree_b, tree_a, threshold)
+    avg_divergence = (divergence_a_to_b + divergence_b_to_a) / 2
+
+    return avg_divergence
+
+
 def evaluate_reconstruction(pred_swc: list, gt_swc: list, threshold: float = 4.0) -> Dict[str, Any]:
-    div_pred_to_gt, n_substantial_pred = tree.directed_divergence(
+    div_pred_to_gt, n_substantial_pred = directed_divergence(
         pred_swc,
         gt_swc,
         threshold=threshold,
     )
 
-    div_gt_to_pred, n_substantial_gt = tree.directed_divergence(
+    div_gt_to_pred, n_substantial_gt = directed_divergence(
         gt_swc,
         pred_swc,
         threshold=threshold,
@@ -128,3 +187,65 @@ def compute_precision(pred_swc: list, gt_swc: list, threshold: float = 4.0) -> f
     distances, _ = gt_tree.query(pred_coords)
     precision = np.mean(distances <= threshold)
     return float(precision)
+
+# L-Measures
+
+def num_bifurcations() -> int:
+    """Number of bifurcations in the tree"""
+    pass
+
+def num_branches() -> int:
+    """Number of segments in the tree between the root, branch points or termination points"""
+    pass
+
+def num_tips() -> int:
+    """Number of terminal points in the tree"""
+    pass
+
+def span() -> Tuple[float, float, float]:
+    """The spatial extent of the tree in x, y, z dimensions"""
+    pass
+
+def total_length() -> float:
+    """The total length of all segments in the tree"""
+    pass
+
+def max_euclidean_distance() -> float:
+    """Maximum euclidean distance between any point of the reconstruction and the root"""
+    pass
+
+def max_path_distance() -> float:
+    """Maximum path distance along the tree nodes between any node of the reconstruction and the root"""
+    pass
+
+def max_branch_order() -> int:
+    """Maximum branch order, defined as 1 in the first branch stemming from the root and increasing by 1 every time there is a new bifurcation point."""
+    pass
+
+def average_contraction() -> float:
+    """Contraction is defined as the ratio between euclidean distance and path length to the root at any node of the reconstruction. Average contraction is obtained by averaging over all the nodes of the tree"""
+    pass
+
+def average_fragmentation() -> float:
+    """Average number of segments in each branch"""
+    pass
+
+def bifurcation_angle_local() -> float:
+    """Angle between downstream nodes closest to a bifurcation"""
+    pass
+
+def bifurcation_angle_remote() -> float:
+    """Angle between downstream branch or termination points closest to a bifurcation"""
+    pass
+
+def different_structure_average(distance_threshold: float = 2.0) -> float:
+    """Average distance from neuron 1 to 2 and from neuron 2 to 1 for points that have a distance >= distance_threshold pixels"""
+    pass
+
+def percentage_different_structure(tree1, tree2, distance_threshold: float = 2.0) -> float:
+    """Percentage of points in neuron 1 that are >= distance_threshold pixels from any point in neuron 2 and vice versa"""
+    pass
+
+def percent_different_structure_average(tree1, tree2, distance_threshold: float = 2.0) -> float:
+    """Average of percent of different structure from neuron 1 to 2 and from neuron 2 to 1"""
+    pass

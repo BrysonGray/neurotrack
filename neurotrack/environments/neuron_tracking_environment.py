@@ -83,7 +83,7 @@ class NeuronTrackingEnvironment:
         self.branching = branching
         self.repeat_starts = repeat_starts
         self.inference_mode = inference_mode
-        self.close_dist2 = 7.0 ** 2  # distance threshold for cut end assignment and neuron end point assignment when removing visited edges
+        self.close_dist2 = 14.0 ** 2  # distance threshold for cut end assignment and neuron end point assignment when removing visited edges
         
         # Initialize other attributes that will be set when neuron data is loaded
         self.img = None

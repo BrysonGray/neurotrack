@@ -245,6 +245,7 @@ class NeuronPatchDataset(TorchDataset):
         self,
         subtree: List,
         seed_node_id: int,
+        seed_point_xyz: torch.Tensor,
         spatial_shape_zyx: torch.Size,
         add_prev_path: bool = True,
     ) -> torch.Tensor:
@@ -288,6 +289,11 @@ class NeuronPatchDataset(TorchDataset):
             segment = torch.stack((point_a, point_b), dim=0)
             path_image.draw_line_segment(segment, width=self.step_width, channel=0, mask=True)
         
+        # lastly, draw the small segment from the seed node to the path if it is not zero length to ensure the seed point is included in the path channel
+        if not torch.all(seed_point_xyz == point_b):
+            segment = torch.stack((seed_point_xyz, point_b), dtype=torch.float32, dim=0)
+            path_image.draw_line_segment(segment, width=self.step_width, channel=0, mask=True)
+
         # remove path_ids from subtree.
         # set removed node neighbors that are not removed to have parent_id = -1
         neighbors_to_update = set()
@@ -654,15 +660,12 @@ class NeuronPatchDataset(TorchDataset):
             else:
                 image = cropped_img
 
-        # At runtime, sometimes the seed will be manually placed near the soma.
-        # To simulate this, do not add the previous path to the path
-        # channel and prune the subtree as if the seed is the new root only if sample_from_root is True.
-        add_prev_path = not sample_from_root
         path_channel, shifted_subtree = self._build_predicted_path_channel(
             subtree=shifted_subtree,
             seed_node_id=seed_node_id,
+            seed_point_xyz=seed_xyz,
             spatial_shape_zyx=cropped_img.shape[-3:],
-            add_prev_path=add_prev_path
+            add_prev_path=True # always add the previous path.
         )
         if len(shifted_subtree) == 0:
             raise _ResamplePatch("Extracted subtree is empty after path pruning.")

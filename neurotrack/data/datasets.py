@@ -4,7 +4,6 @@ import numpy as np
 from pathlib import Path
 from typing import List, Tuple, Optional, Dict, Union
 import warnings
-from qtpy.QtCore import center
 import torch
 from torch.utils.data import Dataset as TorchDataset
 from torch.utils.data import Sampler
@@ -267,67 +266,68 @@ class NeuronPatchDataset(TorchDataset):
             seed_point = torch.as_tensor((seed_node[4], seed_node[3], seed_node[2]), dtype=torch.float32)
             path_image = Image(torch.zeros((1,) + spatial_shape, dtype=torch.uint8))
             path_image.draw_point(seed_point, radius=self.step_width, channel=0, mode="mask")
-            return path_image.data[0], subtree
+            
+        else:
+            start_node_id = min(id_to_node.keys())
+            adj_dict = load.adjacency_dict(subtree)
+            path_ids = self._find_path_ids(
+                adjacency=adj_dict,
+                start_node_id=start_node_id,
+                target_node_id=seed_id,
+            )
+            if len(path_ids) < 2:
+                return path_channel, subtree
+            path_id_set = set(path_ids)
 
-        start_node_id = min(id_to_node.keys())
-        adj_dict = load.adjacency_dict(subtree)
-        path_ids = self._find_path_ids(
-            adjacency=adj_dict,
-            start_node_id=start_node_id,
-            target_node_id=seed_id,
-        )
-        if len(path_ids) < 2:
-            return path_channel, subtree
-        path_id_set = set(path_ids)
+            path_image = Image(torch.zeros((1,) + spatial_shape, dtype=torch.uint8))
+            for idx in range(len(path_ids) - 1):
+                node_a = id_to_node[path_ids[idx]]
+                node_b = id_to_node[path_ids[idx + 1]]
+                point_a = torch.as_tensor((node_a[4], node_a[3], node_a[2]), dtype=torch.float32)
+                point_b = torch.as_tensor((node_b[4], node_b[3], node_b[2]), dtype=torch.float32)
+                segment = torch.stack((point_a, point_b), dim=0)
+                path_image.draw_line_segment(segment, width=self.step_width, channel=0, mask=True)
+            
+            # lastly, draw the small segment from the seed node to the path if it is not zero length to ensure the seed point is included in the path channel
+            seed_point_zyx = seed_point_xyz.flip(dims=(0,))
+            if not torch.all(seed_point_zyx == point_b):
+                segment = torch.stack((seed_point_zyx, point_b), dim=0)
+                path_image.draw_line_segment(segment, width=self.step_width, channel=0, mask=True)
 
-        path_image = Image(torch.zeros((1,) + spatial_shape, dtype=torch.uint8))
-        for idx in range(len(path_ids) - 1):
-            node_a = id_to_node[path_ids[idx]]
-            node_b = id_to_node[path_ids[idx + 1]]
-            point_a = torch.as_tensor((node_a[4], node_a[3], node_a[2]), dtype=torch.float32)
-            point_b = torch.as_tensor((node_b[4], node_b[3], node_b[2]), dtype=torch.float32)
-            segment = torch.stack((point_a, point_b), dim=0)
-            path_image.draw_line_segment(segment, width=self.step_width, channel=0, mask=True)
-        
-        # lastly, draw the small segment from the seed node to the path if it is not zero length to ensure the seed point is included in the path channel
-        seed_point_zyx = seed_point_xyz.flip(dims=(0,))
-        if not torch.all(seed_point_zyx == point_b):
-            segment = torch.stack((seed_point_zyx, point_b), dim=0)
-            path_image.draw_line_segment(segment, width=self.step_width, channel=0, mask=True)
+            # remove path_ids from subtree.
+            # set removed node neighbors that are not removed to have parent_id = -1
+            neighbors_to_update = set()
+            for node_id in path_ids:
+                neighbor_nodes = adj_dict.get(int(node_id), [])
+                for neighbor in neighbor_nodes:
+                    if int(neighbor) not in path_id_set:
+                        neighbors_to_update.add(int(neighbor))
+            updated_subtree = []
+            for node in subtree:
+                if int(node[0]) in path_id_set:
+                    continue
+                if int(node[0]) in neighbors_to_update:
+                    updated_node = list(node)
+                    updated_node[6] = -1
+                    updated_subtree.append(updated_node)
+                else:
+                    updated_subtree.append(node)
 
-        # remove path_ids from subtree.
-        # set removed node neighbors that are not removed to have parent_id = -1
-        neighbors_to_update = set()
-        for node_id in path_ids:
-            neighbor_nodes = adj_dict.get(int(node_id), [])
-            for neighbor in neighbor_nodes:
-                if int(neighbor) not in path_id_set:
-                    neighbors_to_update.add(int(neighbor))
-        updated_subtree = []
-        for node in subtree:
-            if int(node[0]) in path_id_set:
-                continue
-            if int(node[0]) in neighbors_to_update:
-                updated_node = list(node)
-                updated_node[6] = -1
-                updated_subtree.append(updated_node)
-            else:
-                updated_subtree.append(node)
+            # Keep subtree edge-based: drop any isolated leftovers after path removal.
+            if updated_subtree:
+                updated_adj = load.adjacency_dict(updated_subtree)
+                connected_ids = {
+                    int(node_id)
+                    for node_id, neighbors in updated_adj.items()
+                    if len(neighbors) > 0
+                }
+                if connected_ids:
+                    updated_subtree = [node for node in updated_subtree if int(node[0]) in connected_ids]
+                else:
+                    updated_subtree = []
+                subtree = updated_subtree
 
-        # Keep subtree edge-based: drop any isolated leftovers after path removal.
-        if updated_subtree:
-            updated_adj = load.adjacency_dict(updated_subtree)
-            connected_ids = {
-                int(node_id)
-                for node_id, neighbors in updated_adj.items()
-                if len(neighbors) > 0
-            }
-            if connected_ids:
-                updated_subtree = [node for node in updated_subtree if int(node[0]) in connected_ids]
-            else:
-                updated_subtree = []
-
-        return path_image.data[0], updated_subtree
+        return path_image.data[0], subtree
 
     @staticmethod
     def _append_path_channel(image: torch.Tensor, path_channel: Optional[torch.Tensor] = None) -> torch.Tensor:

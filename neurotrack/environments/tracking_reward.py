@@ -271,7 +271,14 @@ def _get_section_id(node: int, sections: Dict[int, Dict[int, int]]) -> Union[int
     return None
 
 
-def _get_connected_nodes(node: int, adj_dict: Dict[int, list], max_dist=None, swc_list=None, id_to_idx=None) -> list:
+def _get_connected_nodes(
+    node: int,
+    adj_dict: Dict[int, list],
+    max_dist=None,
+    swc_list=None,
+    id_to_idx=None,
+    neuron_root_ids=None,
+) -> list:
     """
     Get all the nodes on the same tree as the given node.
 
@@ -287,6 +294,8 @@ def _get_connected_nodes(node: int, adj_dict: Dict[int, list], max_dist=None, sw
         The SWC list representing the neuron. Required if max_dist is provided. Defaults to None.
     id_to_idx : dict, optional
         Mapping from node ID to index in swc_list. Required if max_dist is provided. Defaults to None.
+    neuron_root_ids : set, optional
+        Cached neuron root node IDs (where parent is -1). If None, roots are derived from swc_list.
 
     Returns:
     --------
@@ -302,13 +311,16 @@ def _get_connected_nodes(node: int, adj_dict: Dict[int, list], max_dist=None, sw
     visited = set()
     stack = [(node, 0.0)]  # (node_id, cumulative_distance_from_start)
     terminals = []
-
+    if neuron_root_ids is None:
+        root_nodes = {int(row[0]) for row in swc_list if row[6] == -1}
+    else:
+        root_nodes = {int(n) for n in neuron_root_ids}
     while stack:
         n, dist = stack.pop()
         if n in visited:
             continue
         visited.add(n)
-        if len(adj_dict.get(n, [])) == 1 and n != node:
+        if len(adj_dict.get(n, [])) == 1 and n != node and n not in root_nodes:  # terminal node (but not the starting node or a root node)
             terminals.append(n)
         
         # Check if we've exceeded max_dist. If so, don't explore neighbors
@@ -1583,7 +1595,17 @@ def update_visited_edges(
     return visited, unvisited_tree, adj_dict, cut_ends, id_to_idx
 
 
-def update_current_section(new_position, section_nodes, unvisited_tree, terminal_points, cut_ends, adj_dict, id_to_idx, valid_dist2=49.0):
+def update_current_section(
+    new_position,
+    section_nodes,
+    unvisited_tree,
+    terminal_points,
+    cut_ends,
+    adj_dict,
+    id_to_idx,
+    valid_dist2=49.0,
+    neuron_root_ids=None,
+):
     """
     Updates the current section nodes based on the proximity of cut ends to the new position. If no cut ends are within
     valid_dist2 pixels of the new position, the section nodes remain unchanged. For each cut end within
@@ -1610,6 +1632,8 @@ def update_current_section(new_position, section_nodes, unvisited_tree, terminal
         Mapping from node ID to index in the unvisited_tree tensor.
     valid_dist2 : float, optional
         The squared distance threshold for considering cut ends as part of the current section. Default is 49.0 (7 pixels).
+    neuron_root_ids : set, optional
+        Cached neuron root node IDs (where parent is -1). If None, roots are derived from unvisited_tree.
 
     Returns
     -------
@@ -1642,15 +1666,23 @@ def update_current_section(new_position, section_nodes, unvisited_tree, terminal
         section_nodes = []
         terminal_nodes = []
         for node in close_cut_ends:
-            connected_nodes, terminals = _get_connected_nodes(int(node), adj_dict=adj_dict, max_dist=12.0, swc_list=unvisited_tree, id_to_idx=id_to_idx)
+            connected_nodes, terminals = _get_connected_nodes(
+                int(node),
+                adj_dict=adj_dict,
+                max_dist=12.0,
+                swc_list=unvisited_tree,
+                id_to_idx=id_to_idx,
+                neuron_root_ids=neuron_root_ids,
+            )
             section_nodes.extend(connected_nodes)
             terminal_nodes.extend(terminals)
 
-    # remove terminal points that are not part of the section and farther than valid_dist from the new position
-    if terminal_points is not None and terminal_points.shape[0] > 0:
-        dists2 = torch.sum((terminal_points - pos_row) ** 2, dim=1)
-        valid_mask = dists2 <= valid_dist2
-        terminal_points = terminal_points[valid_mask]
+    # Don't remove terminal points
+    # # remove terminal points that are not part of the section and farther than valid_dist from the new position
+    # if terminal_points is not None and terminal_points.shape[0] > 0:
+    #     dists2 = torch.sum((terminal_points - pos_row) ** 2, dim=1)
+    #     valid_mask = dists2 <= valid_dist2
+    #     terminal_points = terminal_points[valid_mask]
     # and add new terminals to terminal points
     if terminal_nodes:
         new_terminal_points = [unvisited_tree[id_to_idx[int(t)], 2:5] for t in terminal_nodes]

@@ -138,5 +138,21 @@ dmypy.json
 *.tif
 *.swc
 *.gif
-*nohup.out
+*.out
+# Neuroimaging data
+*.nii
+*.nii.gz
 
+# HTML files
+*.html
+
+# Media
+*.png
+*.pdf
+*.jpg
+
+# notebooks
+*.ipynb
+
+*.md
+*.json

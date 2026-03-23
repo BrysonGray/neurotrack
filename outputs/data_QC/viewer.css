@@ -1,0 +1,245 @@
+body {
+    font-family: Arial, sans-serif;
+    margin: 20px;
+    background-color: #f5f5f5;
+}
+
+h1 {
+    color: #333;
+    text-align: center;
+}
+
+h2 {
+    color: #2c3e50;
+    text-align: center;
+    margin-top: 40px;
+}
+
+.review-filter-controls {
+    background-color: white;
+    max-width: 1400px;
+    margin: 10px auto 20px;
+    padding: 12px 16px;
+    border-radius: 8px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    text-align: center;
+    display: flex;
+    justify-content: center;
+    gap: 24px;
+    flex-wrap: wrap;
+}
+
+.review-toggle-label {
+    font-size: 15px;
+    font-weight: bold;
+    color: #2c3e50;
+}
+
+.dataset-block {
+    margin: 40px auto 18px;
+    max-width: 1400px;
+}
+
+.dataset-header {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    align-items: center;
+    gap: 16px;
+    background-color: #eef6fc;
+    border: 1px solid #d6e8f7;
+    border-radius: 8px;
+    padding: 16px 18px;
+    margin-bottom: 24px;
+}
+
+.dataset-title {
+    grid-column: 2;
+    text-align: center;
+    font-size: 34px;
+    font-weight: bold;
+    color: #1f4e79;
+}
+
+.dataset-review-label {
+    font-size: 14px;
+    color: #2c3e50;
+    white-space: nowrap;
+}
+
+.dataset-controls {
+    grid-column: 3;
+    justify-self: end;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+}
+
+.dataset-collapse-label {
+    font-size: 14px;
+    color: #2c3e50;
+    white-space: nowrap;
+}
+
+.dataset-collapsed .dataset-rows {
+    display: none;
+}
+
+.export-review-button {
+    padding: 6px 12px;
+    border: 1px solid #1f4e79;
+    border-radius: 6px;
+    background-color: #1f4e79;
+    color: white;
+    font-size: 13px;
+    cursor: pointer;
+}
+
+.export-review-button:hover {
+    background-color: #163956;
+}
+
+.image-container {
+    background-color: white;
+    margin: 20px auto;
+    padding: 20px;
+    border-radius: 8px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    max-width: 1400px;
+}
+
+.review-row-controls {
+    text-align: center;
+    margin-bottom: 10px;
+}
+
+.review-checkbox-label {
+    font-size: 14px;
+    color: #2c3e50;
+}
+
+.review-checked {
+    outline: 2px solid #3498db;
+}
+
+.filename {
+    font-size: 18px;
+    font-weight: bold;
+    color: #2c3e50;
+    margin-bottom: 10px;
+    text-align: center;
+}
+
+.shape-info {
+    font-size: 14px;
+    color: #7f8c8d;
+    margin-bottom: 15px;
+    text-align: center;
+}
+
+.slider-container {
+    text-align: center;
+    margin: 15px 0;
+}
+
+.opacity-slider {
+    width: 300px;
+    margin: 0 10px;
+}
+
+.slider-container label {
+    font-size: 14px;
+    color: #34495e;
+}
+
+.mip-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 15px;
+    margin-top: 15px;
+}
+
+.mip-column {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+
+.mip-label {
+    font-size: 12px;
+    font-weight: bold;
+    color: #34495e;
+    margin-bottom: 5px;
+    text-align: center;
+}
+
+.zoom-controls {
+    margin-bottom: 5px;
+    text-align: center;
+}
+
+.home-button {
+    padding: 4px 12px;
+    background-color: #3498db;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 11px;
+    transition: background-color 0.2s;
+}
+
+.home-button:hover {
+    background-color: #2980b9;
+}
+
+.home-button:disabled {
+    background-color: #bdc3c7;
+    cursor: not-allowed;
+}
+
+.image-stack {
+    position: relative;
+    width: 100%;
+    cursor: crosshair;
+}
+
+.image-wrapper {
+    position: relative;
+    overflow: hidden;
+    width: 100%;
+}
+
+.mip-image {
+    width: 100%;
+    height: auto;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    display: block;
+}
+
+.base-image {
+    display: block;
+}
+
+.overlay-image {
+    position: absolute;
+    top: 0;
+    left: 0;
+    opacity: 0.5;
+    pointer-events: none;
+}
+
+.selection-canvas {
+    position: absolute;
+    top: 0;
+    left: 0;
+    pointer-events: none;
+    z-index: 10;
+}
+
+.zoom-info {
+    font-size: 10px;
+    color: #95a5a6;
+    text-align: center;
+    margin-top: 5px;
+}

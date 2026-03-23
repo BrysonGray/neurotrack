@@ -1,183 +1,64 @@
-# Neurotrack AI Agent Instructions
+# Neurotrack AI Agent Instructions (Core)
 
-## Project Overview
-Neurotrack is a reinforcement learning system for automated neuron tracing from microscopy images. It uses two neural networks: a **Soft Actor-Critic (SAC) agent** for sequential path tracing and a **ResNet branch classifier** for detecting branch points.
+This file intentionally keeps only repository-wide guidance to minimize context size.
+Detailed, domain-specific operating rules are delegated to custom agents in `.github/agents/*.agent.md`.
 
-## Current Architecture Status
-The project is actively undergoing modernization with a focus on:
-- **Modular, class-based design** with clear separation of concerns
-- **Type-safe configuration management** with validation
-- **Sections-based data flow** where all drawing methods accept sections (not segments)
-- **Advanced post-processing** including simplex noise and foreground/background separation
-- **Backward compatibility** with legacy interfaces during transition
+## Project Snapshot
 
-## Package Structure
-```
-neurotrack/
-├── neurotrack/              # New modular package (evolving)
-│   ├── core/               # Core utilities (config, geometry, coordinates)
-│   ├── data/               # Data handling (loaders, formats)
-│   ├── training/           # Training components (memory buffers)
-│   ├── inference/          # Inference pipeline (placeholder)
-│   └── visualization/      # Visualization tools (placeholder)
-├── data_prep/              # Legacy data processing (being modernized)
-├── models/                 # Neural network models
-├── environments/           # RL environments
-├── scripts/                # Example scripts
-├── tests/                  # Test suite
-└── configs/                # Configuration files
-```
+- Neurotrack is a reinforcement learning system for automated neuron tracing from microscopy images.
+- The primary workflow uses a Soft Actor-Critic (SAC) agent and `neurotrack.data.datasets.NeuronPatchDataset`.
+- Core CLI workflows:
+    - `python -m neurotrack.cli.setup_sac_train`
+    - `python -m neurotrack.cli.run_sac_train`
+    - `python -m neurotrack.cli.run_inference`
+    - `python -m neurotrack.cli.interactive_tracing`
 
-## Core Modules
+## Current Preferences and Status
 
-### Drawing and Visualization (`data_prep.draw`) - **RECENTLY REFACTORED**
-Modern class-based neuron rendering with advanced post-processing:
-```python
-from data_prep.draw import NeuronRenderer, DrawingConfig, GifConfig
+- Prefer `deeper_cnn`; `cnn` is deprecated.
+- Branch-classifier modules are currently not in the main training path:
+    - `neurotrack.models.resnet`
+    - `neurotrack.models.resblock`
+    - `neurotrack.cli.classifier_train`
+    - `neurotrack.cli.collect_branch_data`
+- `neurotrack.data.neuron_data` is not currently used in the main training path.
 
-# All methods now accept SECTIONS (not segments)
-sections = {section_id: segments_array}  # Key architectural pattern
+## Global Engineering Rules (All Agents)
 
-renderer = NeuronRenderer(rng=np.random.default_rng())
-config = DrawingConfig(
-    width=3.0, noise=0.1, rgb=True,
-    # New post-processing parameters
-    foreground_mean=0.8, foreground_std=0.1,
-    background_mean=0.2, background_std=0.05,
-    mask_threshold=0.1, simplex_scale=10.0
-)
-img = renderer.draw_neuron(sections, shape, config)
-```
+1. Prioritize simplicity and readability over over-engineering.
+2. Preserve behavior unless the user explicitly asks for behavior changes.
+3. Keep clear layer boundaries across `core`, `data`, `environments`, `models`, `training`, `inference`, `evaluation`, `visualization`, `pipelines`, and `cli`.
+4. Avoid circular dependencies and hidden coupling; move shared utilities to `neurotrack/core`.
+5. Use explicit imports; do not use wildcard imports.
+6. Keep `__init__.py` files minimal and avoid heavy import side effects.
+7. Avoid global mutable state; pass configuration/state explicitly.
+8. Document public classes and functions with clear docstrings.
+9. Keep tests under top-level `tests/` (not inside `neurotrack/`).
+10. Keep notebooks in `notebooks/`; do not place notebooks in `docs/source/`.
 
-**Key Features:**
-- **Sections-based API**: All methods accept `sections` dictionary, not raw segments
-- **Internal consolidation**: `_consolidate_segments()` method handles sections → segments conversion
-- **Advanced post-processing**: Foreground/background separation with configurable means/stds
-- **Simplex noise**: Multi-octave noise generation for realistic image textures
-- **Type-safe configuration**: `DrawingConfig` with validation and sensible defaults
-- **Backward compatibility**: Legacy functions still available during transition
+## Repository Structure Expectations
 
-**Post-processing Pipeline:**
-1. **Foreground/background masking**: Uses `mask_threshold` to separate regions
-2. **Simplex noise generation**: Multi-octave noise with configurable `simplex_scale`
-3. **Differential scaling**: Separate `foreground_mean/std` and `background_mean/std`
-4. **Brightness clamping**: Results kept in [0,1] range with optional brightness variation
+- The canonical runtime package is top-level `neurotrack/` (not nested under `src/`).
+- Root should include packaging/project files (`README.md`, `LICENSE`, `requirements.txt`, and `pyproject.toml` or `setup.py`) plus `docs/`, `tests/`, and `configs/`.
 
-### Configuration Management (`neurotrack.core.config`)
-All training uses type-safe configuration with validation:
-```python
-from neurotrack.core.config import ConfigManager, TrainingConfig
-config = ConfigManager.load_training_config("configs/train_sac_gold166.json")
-ConfigManager.validate_config(config)  # Validates paths and parameters
-```
+## Anti-Patterns to Flag
 
-### Data Loading (`neurotrack.data.loaders`)
-Unified data loading with clear interfaces:
-```python
-from neurotrack.data.loaders import TIFFLoader, SWCLoader
-tiff_loader = TIFFLoader(pixelsize=[1.0, 1.0, 1.0], downsample_factor=1.0)
-swc_loader = SWCLoader(rotate=False, verbose=True)
-```
+- Circular dependencies
+- Hidden coupling across unrelated modules
+- Overloaded `__init__.py` files
+- Ravioli code (duplicated/ambiguous module responsibilities)
+- Variable name reuse across different types
+- Missing packaging file (`pyproject.toml` or `setup.py`)
 
-### Memory Buffers (`neurotrack.training.memory`)
-Clean replay buffer implementations:
-```python
-from neurotrack.training.memory import create_replay_buffer
-buffer = create_replay_buffer('prioritized', capacity=100000, obs_shape=(2,35,35,35), action_shape=(3,))
-```
+## Delegated Specialized Instructions
 
-### Core Utilities (`neurotrack.core`)
-- `geometry.py` - 3D interpolation, inhomogeneity correction, spatial operations
-- `coordinates.py` - Coordinate transformations, scaling, voxel/world conversions
-- `config.py` - Type-safe configuration management with validation
+Use these custom agents for detailed, task-specific instructions:
 
-## Migration Status
+- `architect` → `.github/agents/architect.agent.md`
+- `refactor` → `.github/agents/refactor.agent.md`
+- `gui` → `.github/agents/gui.agent.md`
+- `data-pipeline` → `.github/agents/data-pipeline.agent.md`
+- `inference-eval` → `.github/agents/inference-eval.agent.md`
+- `qa-tests` → `.github/agents/qa-tests.agent.md`
 
-### ✅ Completed (Current Phase)
-- **draw.py refactor**: Complete class-based rewrite with NeuronRenderer, DrawingConfig, GifConfig
-- **Sections-based architecture**: All drawing methods now accept sections, not segments
-- **Advanced post-processing**: Simplex noise, foreground/background separation, configurable means/stds
-- **Backward compatibility**: Legacy convenience functions maintained during transition
-- New package structure created
-- Core configuration management with type safety
-- Data loaders for TIFF and SWC formats
-- Format-specific utilities (SWC parsing, TIFF processing)
-- Memory buffers for RL training
-- Geometric and coordinate utilities
-- Basic test suite structure
-- Example scripts demonstrating new APIs
-
-### 🔄 Legacy Modules (Still Available)
-Original modules remain functional during transition:
-- `bin/` - Command-line scripts (to be replaced by unified CLI)
-- `data_prep/` - Original data processing (draw.py modernized, others being migrated to `neurotrack.data`)
-- `models/` - Neural network models (to be reorganized)
-- `solvers/` - Training algorithms (to be moved to `neurotrack.training`)
-- `environments/` - RL environments (to be moved to `neurotrack.environments`)
-
-## Development Patterns
-
-### Sections-First Architecture
-**Critical**: All draw methods now accept `sections`, not raw `segments`:
-```python
-# Correct format - sections dictionary
-sections = {
-    0: segments_array_1,  # section_id: segments for that section
-    1: segments_array_2,
-    # ...
-}
-renderer.draw_neuron(sections, shape, config)
-renderer.draw_density(sections, shape)
-renderer.draw_section_labels(sections, shape)
-
-# Internal consolidation happens automatically via _consolidate_segments()
-```
-
-### Import Strategy
-Use new package imports when available:
-```python
-# Preferred (new structure)
-from neurotrack.core.config import TrainingConfig
-from neurotrack.data.loaders import TIFFLoader
-from neurotrack.training.memory import ReplayBuffer
-
-# Drawing (modernized)
-from data_prep.draw import NeuronRenderer, DrawingConfig, GifConfig
-
-# Legacy (during transition)
-from data_prep.load import swc, tiff
-from memory.buffer import ReplayBuffer
-```
-
-### Configuration-Driven Development
-Always use the configuration system:
-```python
-config = TrainingConfig(step_size=2.0, alpha=1.0, batch_size=256)
-ConfigManager.validate_config(config)  # Catches errors early
-```
-
-### Device Management
-Consistent CUDA handling across modules:
-```python
-from neurotrack.core.config import get_device
-device = get_device()  # Returns "cuda:0" or "cpu"
-```
-
-## Next Phase Priorities
-1. **Models reorganization** - Move neural networks to `neurotrack.models`
-2. **Training integration** - Combine SAC and classifier training
-3. **Environment migration** - Move RL environments to new structure
-4. **CLI unification** - Replace bin scripts with `neurotrack` command
-5. **Inference pipeline** - Complete inference module implementation
-
-## Testing Strategy
-Use the established test structure:
-```bash
-pytest tests/unit/           # Unit tests for individual components
-pytest tests/integration/    # Integration tests for workflows
-```
-
-## Key Files for Reference
-- `scripts/train_sac_example.py` - Shows new training setup pattern
-- `scripts/data_preparation_example.py` - Demonstrates data processing workflow
-- `tests/unit/` - Examples of testing patterns for each module
+When a request is domain-specific, follow the matching custom agent file rather than expanding this core file.

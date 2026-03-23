@@ -137,3 +137,14 @@ dmypy.json
 *.csv
 *.tif
 *.swc
+
+*.html
+*.pdf
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.zip
+*.out
+*.json
+*.ipynb

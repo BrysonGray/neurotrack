@@ -84,15 +84,25 @@ def _run_single_experiment(params: Dict, config_path: Path) -> None:
     root_sampling_probability = _get_param(params, "root_sampling_probability")
     soma_sample_radius = float(_get_param(params, "soma_sample_radius", default=0.0))
     random_offset = float(_get_param(params, "random_offset", default=0.0))
-    warmstart_episodes = int(_get_param(params, "warmstart_episodes", default=n_episodes//5))
-    update_after_steps_raw = _get_param(params, "update_after_steps", default=500)
-    update_after_steps = None if update_after_steps_raw is None else int(update_after_steps_raw)
-    update_every = int(_get_param(params, "update_every", default=64))
+
+    # DAgger offline training parameters
+    dagger_rounds = int(_get_param(params, "dagger_rounds", default=0))
+    rollout_episodes_per_round = int(_get_param(params, "rollout_episodes_per_round", "episodes_per_round", default=n_episodes))
+    dataset_epochs_per_round = int(_get_param(params, "dataset_epochs_per_round", "epochs_per_round", default=1))
+
+    # DAgger online training parameters
+    update_after_steps = int(_get_param(params, "update_after_steps", default=500))
+    update_every_raw = _get_param(params, "update_every", default=None)
+    update_every = None if update_every_raw is None else int(update_every_raw)
     updates_per_step = int(_get_param(params, "updates_per_step", default=1))
+
+    warmstart_episodes = int(_get_param(params, "warmstart_episodes", default=n_episodes//5))
     beta_start = float(_get_param(params, "beta_start", default=1.0))
     beta_end = float(_get_param(params, "beta_end", default=0.0))
     aggregate_memory_budget = int(_get_param(params, "aggregate_memory_budget", "dagger_memory_budget", default=10000))
     stall_threshold = float(_get_param(params, "stall_threshold", default=1.0))
+
+    # Loss weighting parameters
     continue_target_norm_threshold_raw = _get_param(params, "continue_target_norm_threshold", default=None)
     continue_target_norm_threshold = None if continue_target_norm_threshold_raw is None else float(continue_target_norm_threshold_raw)
     continue_weight = float(_get_param(params, "continue_weight", default=1.0))
@@ -151,8 +161,33 @@ def _run_single_experiment(params: Dict, config_path: Path) -> None:
     with open(logdir / f"training_params_{date_time}.json", "w", encoding="utf-8") as handle:
         json.dump(params_to_save, handle, indent=4)
 
-    if warmstart_episodes < n_episodes:
+    # check for offline params first, if zero dagger rounds
+    # then check for online params, if update_every is set, otherwise default to regular BC training
+    if dagger_rounds > 0:
         behavior_cloning.train_dagger(
+            env=env,
+            actor=actor,
+            actor_optimizer=actor_optimizer,
+            outdir=outdir,
+            logdir=logdir,
+            name=name,
+            batch_size=batch_size,
+            warmstart_episodes=warmstart_episodes,
+            dagger_rounds=dagger_rounds,
+            rollout_episodes_per_round=rollout_episodes_per_round,
+            dataset_epochs_per_round=dataset_epochs_per_round,
+            beta_start=beta_start,
+            beta_end=beta_end,
+            save_every_steps=save_every_steps,
+            aggregate_memory_budget=aggregate_memory_budget,
+            rng=rng,
+            continue_target_norm_threshold=continue_target_norm_threshold,
+            continue_weight=continue_weight,
+            norm_floor=norm_floor,
+            norm_floor_weight=norm_floor_weight,
+        )
+    elif update_every is not None:
+        behavior_cloning.train_dagger_online(
             env=env,
             actor=actor,
             actor_optimizer=actor_optimizer,

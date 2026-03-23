@@ -5,17 +5,24 @@ Train a Soft Actor-Critic (SAC) model for neuron tracing.
 import argparse
 from datetime import datetime
 import json
+import numpy as np
+import os
 from pathlib import Path
 import sys
 import torch
 from torch.optim.adamw import AdamW
 from torch.optim.adam import Adam
 
-sys.path.append(str(Path(__file__).parents[1]))
+script_path = Path(os.path.abspath(__file__))
+parent_dir = script_path.parent.parent  # Go up two levels
+sys.path.append(str(parent_dir))
 from environments.sac_tracking_env import Environment
+from neurotrack.data.neuron_data import Dataset, DataLoader, DataGenerator, DrawingComplexityConfig
+# from environments.neuron_tracking_environment import NeuronTrackingEnvironment
+from environments.neuron_tracking_environment import NeuronTrackingEnvironment
 from memory.buffer import PrioritizedReplayBuffer
-from models.resblock import ResidualBlock
-from models.resnet import ResNet
+from models.resblock import ResidualBlock3D
+from models.resnet import ResNet3D
 from models.cnn import ConvNet
 from solvers import sac
 
@@ -34,8 +41,8 @@ def main():
     
     JSON Configuration Parameters
     -----------------------------
-    img_path : str
-        Path to the input image.
+    data_dir : str
+        Path to the input data directory.
     outdir : str
         Directory to save output results.
     name : str
@@ -78,7 +85,7 @@ def main():
     with open(args_json) as f:
         params = json.load(f)
     
-    img_path = params["img_path"]
+    data_dir = params["data_dir"]
     outdir = params["outdir"]
     name = params["name"]
     step_size = params["step_size"] if "step_size" in params else 1.0
@@ -93,29 +100,46 @@ def main():
     n_episodes = params["n_episodes"] if "n_episodes" in params else 100
     init_temperature = params["init_temperature"] if "init_temperature" in params else 0.005
     target_entropy = params["target_entropy"] if "target_entropy" in params else 0.0
+    repeat_starts = params["repeat_starts"] if "repeat_starts" in params else True
+    section_masking = params["section_masking"] if "section_masking" in params else False
+    branching = params["branching"] if "branching" in params else 0
+    rng_seed = params["rng_seed"] if "rng_seed" in params else 1
+    start_complexity = params["start_complexity"] if "start_complexity" in params else 0.0
     patch_radius = 17
+    in_channels = 2
 
     if "classifier_weights" in params:
         classifier_path = params["classifier_weights"]
-        classifier_state_dict = torch.load(classifier_path, weights_only=True)
-        classifier = ResNet(ResidualBlock, [3, 4, 6, 3], num_classes=1)
+        classifier_state_dict = torch.load(classifier_path)#, weights_only=True)
+        classifier = ResNet3D(ResidualBlock3D, [3, 4, 6, 3], in_channels=in_channels-1, num_classes=1)
         classifier = classifier.to(device=DEVICE, dtype=dtype)
         classifier.load_state_dict(classifier_state_dict)
         classifier.eval()
     else:
         classifier = None
-
-    env = Environment(img_path,
-                    radius=patch_radius,
-                    step_size=step_size,
-                    step_width=step_width,
-                    max_len=10000,
-                    alpha=alpha,
-                    beta=beta,
-                    friction=friction,
-                    classifier=classifier)
     
-    in_channels = 4
+    rng = np.random.default_rng(rng_seed)
+    # Create dataset
+    dataset = Dataset(data_dir=data_dir, rng=rng)
+    # Create dataloader
+    dataloader = DataLoader(dataset=dataset, complexity=start_complexity, rng=rng)
+
+    # Create environment
+    env = NeuronTrackingEnvironment(
+        dataloader=dataloader,
+        radius=patch_radius,
+        step_size=step_size,
+        step_width=step_width,
+        max_len=1000,
+        alpha=alpha,
+        beta=beta,
+        friction=friction,
+        repeat_starts=repeat_starts,
+        section_masking=section_masking,
+        branching=branching,
+        classifier=classifier
+    )
+    
     input_size = 2*patch_radius+1
     init_temperature = 0.005
     actor = ConvNet(chin=in_channels, chout=4)
@@ -125,36 +149,62 @@ def main():
     Q1 = Q1.to(device=DEVICE,dtype=dtype)
     Q2 = ConvNet(chin=in_channels+3,chout=1)
     Q2 = Q2.to(device=DEVICE,dtype=dtype)
-    Q1_target = ConvNet(chin=7,chout=1)
+    Q1_target = ConvNet(chin=in_channels+3,chout=1)
     Q1_target = Q1_target.to(device=DEVICE,dtype=dtype)
-    Q2_target = ConvNet(chin=7,chout=1)
+    Q2_target = ConvNet(chin=in_channels+3,chout=1)
     Q2_target = Q2_target.to(device=DEVICE,dtype=dtype)
-
-    if "sac_weights" in params:
-        sac_path = params["sac_weights"]
-        state_dicts = torch.load(sac_path, weights_only=True)
-        actor.load_state_dict(state_dicts["policy_state_dict"])
-        Q1.load_state_dict(state_dicts["Q1_state_dict"])
-        Q2.load_state_dict(state_dicts["Q2_state_dict"])
-
-    Q1_target.load_state_dict(Q1.state_dict())
-    Q2_target.load_state_dict(Q2.state_dict())
 
     log_alpha = torch.log(torch.tensor(init_temperature).to(DEVICE))
     log_alpha.requires_grad = True
+
+    if "sac_weights" in params:
+        sac_path = params["sac_weights"]
+        state_dicts = torch.load(sac_path)#, weights_only=True)
+        actor.load_state_dict(state_dicts["policy_state_dict"])
+        Q1.load_state_dict(state_dicts["Q1_state_dict"])
+        Q2.load_state_dict(state_dicts["Q2_state_dict"])
+        
+        # Load target networks if available
+        if "Q1_target_state_dict" in state_dicts:
+            Q1_target.load_state_dict(state_dicts["Q1_target_state_dict"])
+        else:
+            Q1_target.load_state_dict(Q1.state_dict())
+            
+        if "Q2_target_state_dict" in state_dicts:
+            Q2_target.load_state_dict(state_dicts["Q2_target_state_dict"])
+        else:
+            Q2_target.load_state_dict(Q2.state_dict())
+            
+    else:
+        Q1_target.load_state_dict(Q1.state_dict())
+        Q2_target.load_state_dict(Q2.state_dict())
+
+    # Initialize optimizers
     Q1_optimizer = AdamW(Q1.parameters(), lr=lr)
     Q2_optimizer = AdamW(Q2.parameters(), lr=lr)
     actor_optimizer = AdamW(actor.parameters(), lr=lr)
     log_alpha_optimizer = Adam([log_alpha], lr=lr)
 
-    criterion = torch.nn.MSELoss()
+    # Load optimizer states if available
+    if "sac_weights" in params:
+        if "Q1_optimizer_state_dict" in state_dicts:
+            Q1_optimizer.load_state_dict(state_dicts["Q1_optimizer_state_dict"])
+            
+        if "Q2_optimizer_state_dict" in state_dicts:
+            Q2_optimizer.load_state_dict(state_dicts["Q2_optimizer_state_dict"])
+            
+        if "actor_optimizer_state_dict" in state_dicts:
+            actor_optimizer.load_state_dict(state_dicts["actor_optimizer_state_dict"])
+
     memory = PrioritizedReplayBuffer(100000, obs_shape=(in_channels,input_size,input_size,input_size), action_shape=(3,), alpha=0.8)
 
+    logdir = script_path.parent.parent / "logs" / name
+    os.makedirs(logdir, exist_ok=True)
     sac.train(env, actor, Q1, Q2, Q1_target, Q2_target, log_alpha,
           actor_optimizer, Q1_optimizer, Q2_optimizer, log_alpha_optimizer,
-          memory, target_entropy, batch_size, gamma, tau, outdir, name,
-          show_states=True, save_snapshots=False, update_after=256,
-          updates_per_step=1, update_every=1, n_episodes=n_episodes, n_trials=5)
+          memory, target_entropy, batch_size, gamma, tau, outdir, logdir,
+          name, show=True, pause_after_episode=False, show_live=False,
+          update_after=256, updates_per_step=1, update_every=1, n_episodes=n_episodes)
     
     print("Done!")
     

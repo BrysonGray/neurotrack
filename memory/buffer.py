@@ -1,6 +1,7 @@
 
 import random
 import torch
+import numpy as np
 
 from memory.tree import SumTree
 
@@ -62,7 +63,7 @@ class ReplayBuffer():
         self.idx = (self.idx + 1) % self.capacity
         self.full = self.idx == 0 or self.full
     
-    def sample(self, batch_size, replacement=False):
+    def sample(self, batch_size, replacement=False, transform=False):
         sample_range = self.capacity if self.full else self.idx
         if replacement:
             idxs = torch.randint(sample_range, size=(batch_size,))
@@ -75,6 +76,25 @@ class ReplayBuffer():
         next_obs = self.next_obs[idxs].to(device=DEVICE)
         rewards = self.rewards[idxs].to(device=DEVICE)
         dones = self.dones[idxs].to(device=DEVICE)
+
+        if transform:
+            perm = torch.randperm(3) + 2
+            obs = obs.permute([0, 1, *perm])
+            next_obs = next_obs.permute([0, 1, *perm])
+            i,j,k = [x.item() - 2 for x in perm]
+            actions = torch.stack((actions[:,i], actions[:,j], actions[:,k]), dim=1)
+            if torch.rand(1)>0.5:
+                obs = obs.flip(-1)
+                next_obs = next_obs.flip(-1)
+                actions[:,-1] = -1*actions[:,-1]
+            if torch.rand(1)>0.5:
+                obs = obs.flip(-2)
+                next_obs = next_obs.flip(-2)
+                actions[:,-2] = -1*actions[:,-2]
+            if torch.rand(1)>0.5:
+                obs = obs.flip(-3)
+                next_obs = next_obs.flip(-3)
+                actions[:,-3] = -1*actions[:,-3]
 
         return obs, actions, next_obs, rewards, dones
     
@@ -178,7 +198,7 @@ class PrioritizedReplayBuffer:
         self.full = self.idx == 0 or self.full
         
 
-    def sample(self, batch_size):
+    def sample(self, batch_size, transform: bool=False):
         """
         Samples a batch of transitions from the buffer.
         
@@ -186,6 +206,8 @@ class PrioritizedReplayBuffer:
         ----------
         batch_size : int
             The number of transitions to sample.
+        transform : bool
+            Whether to randomly flip and permute images and actions. Default is False.
             
         Returns
         -------
@@ -213,6 +235,10 @@ class PrioritizedReplayBuffer:
         real_size = len(self)
         assert real_size >= batch_size, "buffer contains less samples than batch size"
         
+        # Handle edge case where tree.total might be 0
+        if self.tree.total <= 0:
+            raise ValueError(f"Tree total is {self.tree.total}, which should not happen. Buffer may be corrupted.")
+        
         sample_idxs, tree_idxs = [], []
         priorities = torch.empty(batch_size, 1, dtype=torch.float)
 
@@ -221,6 +247,8 @@ class PrioritizedReplayBuffer:
             a, b = segment * i, segment * (i + 1)
 
             cumsum = random.uniform(a, b)
+            # Ensure cumsum doesn't exceed tree.total due to floating point precision
+            cumsum = min(cumsum, self.tree.total)
             # sample_idx is a sample index in buffer, needed further to sample actual transitions
             # tree_idx is a index of a sample in the tree, needed further to update priorities
             tree_idx, priority, sample_idx = self.tree.get(cumsum)
@@ -239,6 +267,25 @@ class PrioritizedReplayBuffer:
         next_obs = self.next_obs[sample_idxs].to(DEVICE)
         rewards = self.rewards[sample_idxs].to(DEVICE)
         dones = self.dones[sample_idxs].to(DEVICE)
+
+        if transform:
+                perm = torch.randperm(3) + 2
+                obs = obs.permute([0, 1, *perm])
+                next_obs = next_obs.permute([0, 1, *perm])
+                i,j,k = [x.item() - 2 for x in perm]
+                actions = torch.stack((actions[:,i], actions[:,j], actions[:,k]), dim=1)
+                if torch.rand(1)>0.5:
+                    obs = obs.flip(-1)
+                    next_obs = next_obs.flip(-1)
+                    actions[:,-1] = -1*actions[:,-1]
+                if torch.rand(1)>0.5:
+                    obs = obs.flip(-2)
+                    next_obs = next_obs.flip(-2)
+                    actions[:,-2] = -1*actions[:,-2]
+                if torch.rand(1)>0.5:
+                    obs = obs.flip(-3)
+                    next_obs = next_obs.flip(-3)
+                    actions[:,-3] = -1*actions[:,-3]
 
         return obs, actions, next_obs, rewards, dones, weights, tree_idxs
     
@@ -265,7 +312,21 @@ class PrioritizedReplayBuffer:
 
         for data_idx, priority in zip(data_idxs, priorities):
             priority = priority.item()
-            priority = (priority + self.eps) ** self.alpha
+            
+            # Check for NaN or invalid values
+            if not isinstance(priority, (int, float)) or np.isnan(priority) or np.isinf(priority):
+                print(f"Warning: Invalid priority {priority} detected, using eps instead")
+                priority = self.eps
+            
+            # Ensure priority is non-negative before transformation
+            priority = abs(priority) + self.eps
+            priority = priority ** self.alpha
+            
+            # Check again after transformation
+            if np.isnan(priority) or np.isinf(priority):
+                print(f"Warning: Priority became invalid after transformation, using eps instead")
+                priority = self.eps
+                
             self.tree.update(data_idx, priority)
             self.max_priority = max(self.max_priority, priority)
     

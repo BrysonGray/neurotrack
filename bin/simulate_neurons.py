@@ -12,10 +12,13 @@ import numpy as np
 import os
 from pathlib import Path
 import sys
+import tifffile as tf
 import torch
 from tqdm import tqdm
 
-sys.path.append(str(Path(__file__).parents[1]))
+script_path = Path(os.path.abspath(__file__))
+parent_dir = script_path.parent.parent  # Go up two levels
+sys.path.append(str(parent_dir))
 from data_prep import generate, draw, load
 
 
@@ -29,52 +32,58 @@ def main():
     ---------
     -i, --input : str
         Path to input JSON file containing configuration parameters.
-    -h, --help : str
-        Display help string. 
     """
     
     help_string = """
-Generate and save simulated neuron images, either from existing neuron swc files or
-by generating new simulated neuron trees based on the provided parameters.
+    Generate and save simulated neuron images, either from existing neuron swc files or
+    by generating new simulated neuron trees based on the provided parameters.
 
-Takes one argument, `--input` which is a JSON file listing the following configuration parameters:  
+    Takes one argument, `--input` which is a JSON file listing the following configuration parameters:  
 
-JSON Configuration Parameters
------------------------------
-labels_dir : str, optional
-    Directory containing SWC files of existing neuron trees. If not provided, neuron trees will be simulated.
-out : str
-    Output directory to save the generated neuron images.
-width : int
-    Width of the generated neuron images in voxels.
-random_contrast : bool
-    Whether to apply random contrast to the neuron images.
-dropout : float
-    Density of intensity dropout points for the neuron images.
-random_brightness : bool
-    Whether to apply random signal to noise ratio to the neuron images.
-noise : float
-    Amount of noise to add to the neuron images.
-binary : bool
-    Whether to draw the neuron images as a binary mask.
-seed : int
-    Seed for the random number generator.
-count : int, optional
-    Number of neuron trees to simulate. Required if `labels_dir` is not provided.
-size : int, optional
-    Size of the simulated neuron trees. Required if `labels_dir` is not provided.
-length : int, optional
-    Length of the simulated neuron trees. Required if `labels_dir` is not provided.
-stepsize : float, optional
-    Step size for the simulated neuron trees. Required if `labels_dir` is not provided.
-uniform_len : bool, optional
-    Whether to use uniform length for the simulated neuron trees. Required if `labels_dir` is not provided.
-kappa : float, optional
-    Kappa parameter for the simulated neuron trees. Required if `labels_dir` is not provided.
-random_start : bool, optional
-    Whether to use random starting points for the simulated neuron trees. Required if `labels_dir` is not provided.
-branches : int, optional
-    Number of branches for the simulated neuron trees. Required if `labels_dir` is not provided.
+    JSON Configuration Parameters
+    -----------------------------
+    labels_dir : str, optional
+        Directory containing SWC files of existing neuron trees. If not provided, neuron trees will be simulated.
+    out : str
+        Output directory to save the generated neuron images.
+    width : int
+        Width of the generated neuron images in voxels.
+    random_contrast : bool
+        Whether to apply random contrast to the neuron images.
+    dropout : float
+        Density of intensity dropout points for the neuron images.
+    random_brightness : bool
+        Whether to apply random signal to noise ratio to the neuron images.
+    noise : float
+        Amount of noise to add to the neuron images.
+    random_noise : bool, optional
+        Generate noise with a random amplitude relative to the maximum intensity value in the range [0.05, noise).
+    binary : bool
+        Whether to draw the neuron images as a binary mask.
+    rgb : bool
+        Whether to draw the neuron images in RGB format.
+    seed : int
+        Seed for the random number generator.
+    sync : bool, optional
+        Whether to process only the neuron trees that are not already in the output directory.
+    count : int, optional
+        Number of neuron trees to simulate. Required if `labels_dir` is not provided.
+    size : int, optional
+        Size of the simulated neuron trees. Required if `labels_dir` is not provided.
+    length : int, optional
+        Length of the simulated neuron trees. Required if `labels_dir` is not provided.
+    stepsize : float, optional
+        Step size for the simulated neuron trees. Required if `labels_dir` is not provided.
+    random_len : bool, optional
+        Whether to use random length for the simulated neuron trees. Required if `labels_dir` is not provided.
+    random_width : bool, optional
+        Whether to use random width for the simulated neuron trees. Required if `labels_dir` is not provided.
+    kappa : float, optional
+        Kappa parameter for the simulated neuron trees. Required if `labels_dir` is not provided.
+    random_start : bool, optional
+        Whether to use random starting points for the simulated neuron trees. Required if `labels_dir` is not provided.
+    branches : int, optional
+        Number of branches for the simulated neuron trees. Required if `labels_dir` is not provided.
     """
     parser = argparse.ArgumentParser(formatter_class=RawTextHelpFormatter)
     parser.add_argument('-i', '--input', type=argparse.FileType('r'), help=help_string)
@@ -93,17 +102,25 @@ branches : int, optional
     noise = parameters["noise"]
     binary = parameters["binary"]
     seed = parameters["seed"]
+    random_noise = parameters["random_noise"] if "random_noise" in parameters else False
+    sync = parameters["sync"] if "sync" in parameters else False
+    rgb = parameters["rgb"] if "rgb" in parameters else True
     rng = np.random.default_rng(seed)
+    adjust=False
 
     if labels_dir is not None: # Load existing neuron trees as swc files
+        adjust=True
         print(f"Loading existing neuron trees as swc files...\n"
               f"    labels_dir: {labels_dir}")
         files = [f for x in os.walk(labels_dir) for f in glob(os.path.join(x[0], "*.swc"))]
+        if sync:
+            files = [f for f in files if not os.path.exists(os.path.join(out, f.split('/')[-1].split('.')[0]))]
+        print(f"    Found {len(files)} neuron trees to process.")
         swc_lists = []
         fnames = []
         for f in files:
             swc_lists.append(load.swc(f))
-            fnames.append(f.split('/')[-1].split('.swc')[0])
+            fnames.append(f.split('/')[-1].split('.')[0])
         print("done")
 
     else: # Generate simulated neuron trees
@@ -111,7 +128,10 @@ branches : int, optional
         size = (parameters["size"],)*3
         length = parameters["length"]
         stepsize = parameters["stepsize"]
-        uniform_len = parameters["uniform_len"]
+        random_len = parameters["random_len"]
+        random_width = parameters["random_width"]
+        if random_width:
+            width = None
         kappa = parameters["kappa"]
         random_start = parameters["random_start"]
         branches = parameters["branches"]
@@ -120,7 +140,8 @@ branches : int, optional
               f"    size: {size}\n"
               f"    length: {length}\n"
               f"    step size: {stepsize}\n"
-              f"    uniform_len: {uniform_len}\n"
+              f"    random_len: {random_len}\n"
+              f"    random_width: {random_width}\n"
               f"    kappa: {kappa}\n"
               f"    random_start: {random_start}\n"
               f"    branches: {branches}")
@@ -132,16 +153,22 @@ branches : int, optional
                                     length=length,
                                     step_size=stepsize,
                                     kappa=kappa,
-                                    uniform_len=uniform_len,
+                                    random_len=random_len,
+                                    random_width=random_width,
                                     random_start=random_start,
                                     rng=rng,
                                     num_branches=branches) # make simulated neuron paths.
             swc_lists.append(swc_list)
-            fnames.append(f"img_{i}")
+            if sync:
+                num_existing = len([f for f in os.listdir(out) if f.startswith(f"img_")])
+                n = num_existing + i
+            else:
+                n = i
+            fnames.append(f"img_{n}")
         print("done\n")
 
     print(
-        f"Drawing neuron images and saving to {out}..."
+        f"Drawing neuron images and saving to {out}...\n"
         f"    width: {width}\n"
         f"    random_contrast: {random_contrast}\n"
         f"    random_brightness: {random_brightness}\n"
@@ -152,6 +179,10 @@ branches : int, optional
     )
     
     for i in tqdm(range(len(swc_lists))):
+
+        if not os.path.exists(os.path.join(out, f"{fnames[i]}")):
+            os.makedirs(os.path.join(out, f"{fnames[i]}"), exist_ok=True)
+            
         color = np.array([1.0, 1.0, 1.0])
         background = np.array([0., 0., 0.])
         if random_contrast:
@@ -159,20 +190,46 @@ branches : int, optional
             color /= np.linalg.norm(color)
             background = np.random.rand(3)
             background = background / np.linalg.norm(background) * 0.01
-        swc_data = draw.neuron_from_swc(swc_lists[i],
-                                        width=width,
-                                        noise=noise,
-                                        adjust=True,
-                                        neuron_color=color,
-                                        background_color=background,
-                                        random_brightness=random_brightness,
-                                        dropout=dropout,
-                                        binary=binary) # Use simulated paths to draw the image.
         
-        torch.save(swc_data, os.path.join(out, f"{fnames[i]}.pt"))
+        if random_noise:
+            noise_ = np.random.random() * (noise - 0.05) + 0.05 # min: 0.05, max: noise
+        else:
+            noise_ = noise
+        renderer = draw.NeuronRenderer()
+        config = draw.DrawingConfig(
+            width=width,
+            rgb=rgb,
+            neuron_color=tuple(color.tolist()),
+            background_color=tuple(background.tolist()),
+        )
+        swc_data = renderer.neuron_from_swc(
+            swc_lists[i],
+            config=config,
+            shape=None,
+            dropout=dropout,
+            adjust=adjust,
+        )  # Use simulated paths to draw the image.
+        
+        # torch.save(swc_data, os.path.join(out, f"{fnames[i]}.pt"))
+        if not os.path.exists(os.path.join(out, f"{fnames[i]}")):
+            os.makedirs(os.path.join(out, f"{fnames[i]}"), exist_ok=True)
+        tf.imwrite(os.path.join(out, f"{fnames[i]}", f"{fnames[i]}_image.tif"), swc_data['image'].numpy().astype(np.float32), compression='zlib')
+        tf.imwrite(os.path.join(out, f"{fnames[i]}", f"{fnames[i]}_density.tif"), swc_data['neuron_density'].numpy().astype(np.float32), compression='zlib')
+        tf.imwrite(os.path.join(out, f"{fnames[i]}", f"{fnames[i]}_sections.tif"), swc_data['section_labels'].numpy().astype(np.float32), compression='zlib')
+        # tf.imwrite(os.path.join(out, f"{fnames[i]}", f"{fnames[i]}_branches.tif"), swc_data['branch_mask'].numpy().astype(np.float32), compression='zlib')
+        with open(os.path.join(out, f"{fnames[i]}", f"{fnames[i]}_branches.txt"), 'w') as f:
+            for branch_point in swc_data['branches']:
+                # Convert the branch points coordinates to string and write to file
+                f.write(f"{branch_point[0]} {branch_point[1]} {branch_point[2]}\n")
+        with open(os.path.join(out, f"{fnames[i]}", f"{fnames[i]}_seeds.txt"), 'w') as f:
+            for seed_point in swc_data['seeds']:
+                # Convert the seed point coordinates to string and write to file
+                f.write(f"{seed_point[0]} {seed_point[1]} {seed_point[2]}\n")
+        with open(os.path.join(out, f"{fnames[i]}", f"{fnames[i]}_section_graph.json"), 'w') as f:
+                json.dump(swc_data['graph'], f)
 
     print("done")
 
 
 if __name__ == "__main__":
-    main(parser)
+    main()

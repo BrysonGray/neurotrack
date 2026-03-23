@@ -54,6 +54,17 @@ class SumTree:
         to reflect the change in the tree structure.
         """
         
+        # Check for NaN or invalid values
+        if not isinstance(value, (int, float)):
+            raise ValueError(f"Tree update value must be numeric, got {type(value)}: {value}")
+        
+        import math
+        if math.isnan(value) or math.isinf(value):
+            raise ValueError(f"Tree update received invalid value: {value}")
+        
+        if value < 0:
+            raise ValueError(f"Tree update received negative value: {value}")
+        
         idx = data_idx + self.size - 1
         change = value - self.nodes[idx]
         self.nodes[idx] = value
@@ -79,13 +90,25 @@ class SumTree:
         increments the count, and adjusts the real size of the tree.
         """
         
+        # Check for NaN or invalid values
+        if not isinstance(value, (int, float)):
+            raise ValueError(f"Tree add value must be numeric, got {type(value)}: {value}")
+        
+        import math
+        if math.isnan(value) or math.isinf(value):
+            raise ValueError(f"Tree add received invalid value: {value}")
+        
+        if value < 0:
+            raise ValueError(f"Tree add received negative value: {value}")
+        
         self.data[self.count] = data
         self.update(self.count, value)
         self.count = (self.count + 1) % self.size
         self.real_size = min(self.size, self.real_size + 1)
 
     def get(self, cumsum):
-        assert cumsum <= self.total
+        if cumsum > self.total:
+            raise ValueError(f"cumsum ({cumsum}) exceeds tree.total ({self.total}).")
 
         idx = 0
         while 2 * idx + 1 < len(self.nodes):

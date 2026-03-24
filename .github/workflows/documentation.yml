@@ -36,6 +36,7 @@ jobs:
 
     # Deploy the newly generated html pages to the GitHub Pages associated with this repo
     - name: Deploy to GitHub Pages
+      if: github.repository == 'brysongray/neurotrack'
       uses: peaceiris/actions-gh-pages@v4
       with:
         github_token: ${{ secrets.GITHUB_TOKEN }}

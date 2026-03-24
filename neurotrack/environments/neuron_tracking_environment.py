@@ -425,6 +425,7 @@ class NeuronTrackingEnvironment:
         # Convert list of points to stacked tensor once when finalizing the path
         finished_path = torch.stack(self.paths.pop(0), dim=0)
         self.finished_paths.append(finished_path)
+
         # Check for max branches
         if len(self.finished_paths) > self.max_paths:
             terminate_episode = True

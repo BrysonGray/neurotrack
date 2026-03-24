@@ -1,11 +1,8 @@
 #!/usr/bin/env python
 
 """ Interface for interactively evaluating the tracking environment """
-
+from itertools import count
 from IPython import display
-from neurotrack.data.image import Image
-import matplotlib.pyplot as plt
-import numpy as np
 import torch
 from neurotrack.data import loading as load
 from neurotrack.environments import tracking_reward
@@ -177,6 +174,63 @@ def draw_2d_panel(ax, environment, cropped=False, sections=None,
     ax.axis('off')
 
 
+def run_expert_episode(env):
+    """Run one expert-only episode and visualize the final traced result.
+
+    Mirrors behavior_cloning expert stepping logic without storing transitions
+    or running optimization.
+    """
+    import matplotlib.pyplot as plt
+
+    def _current_target_action_from_env(environment):
+        target_vectors = getattr(environment, 'target_vectors', None)
+        if target_vectors is None:
+            target_vectors = torch.zeros((1, 3), dtype=torch.float32)
+        stop_label = bool(getattr(environment, 'target_stop_label', False))
+        return torch.as_tensor(target_vectors, dtype=torch.float32).view(-1, 3), stop_label
+
+    def _reward_to_float(reward):
+        return float(torch.as_tensor(reward, dtype=torch.float32).item())
+
+    obs = env.reset(return_state=True)
+    prev_expert_action = None
+    total_reward = 0.0
+    steps_done = 0
+
+    for _step_idx in count():
+        current_target_vectors, current_target_stop = _current_target_action_from_env(env)
+        expert_action = select_expert_action(current_target_vectors, previous_action=prev_expert_action)
+        expert_choose_stop = bool(current_target_stop)
+
+        next_obs, reward, terminated, _truncated, info = env.step(expert_action, stop=expert_choose_stop)
+        steps_done += 1
+        total_reward += _reward_to_float(reward)
+
+        if info.get('terminate_episode', False):
+            break
+
+        if terminated:
+            obs = env.get_state()
+            prev_expert_action = None
+        else:
+            obs = next_obs
+            prev_expert_action = expert_action.detach().cpu()
+
+    fig = plt.figure(figsize=(12, 8))
+    show_state(env, fig, live=False)
+
+    num_paths = len(getattr(env, 'finished_paths', []))
+    print(f"steps_done: {steps_done}")
+    print(f"finished_paths: {num_paths}")
+    print(f"total_reward: {total_reward:.6f}")
+
+    return {
+        'steps_done': int(steps_done),
+        'num_paths': num_paths,
+        'total_reward': float(total_reward),
+    }
+
+
 def manual_step(env, step_size=4.0):
     """
     Interactive manual stepping helper.
@@ -333,6 +387,142 @@ def manual_step(env, step_size=4.0):
         ipy_display(plt.gcf())
     except Exception:
         pass
+
+
+def show_state(env, fig, live=False, ep_return=None, reward=None, policy_loss=None):
+    """Show a single max-intensity projection (over first spatial axis) of the whole neuron.
+
+    - Base image: input neuron image (grayscale)
+    - Overlay: current path (plasma colormap, semi-transparent)
+    Also draws a red rectangle centered at the current position with
+    width and height equal to env.radius (in pixels).
+    If live=True, also show a second subplot to the right with the current
+    cropped state (env.get_state()) as an overlay: image (grayscale) + path (plasma).
+    """
+    from matplotlib import patches  # local import to avoid global dependency
+
+    print(f"image: {env.current_neuron_info['neuron_name']}")
+    display.clear_output(wait=True)
+
+    # Reset view; one or more axes depending on `live`
+    fig.clf()
+    if live:
+        # GridSpec: Left spans both rows, right has two stacked axes.
+        # Left is wider than each right axis; the midline aligns with the split between right-top and right-bottom.
+        gs = fig.add_gridspec(2, 2, width_ratios=[2.0, 1.0], wspace=0.05, hspace=0.05)
+        ax_left = fig.add_subplot(gs[:, 0])
+        ax_right = fig.add_subplot(gs[0, 1])
+        ax_right_bottom = fig.add_subplot(gs[1, 1])
+    else:
+        ax_left = fig.add_subplot(1, 1, 1)
+
+    # Prepare volumes
+    env_img = env.img.data.clone().detach().cpu()
+    if env_img.dtype == torch.uint8:
+        env_img = env_img.float() / 255.0
+
+    # Separate channels: img (all but last) and path (last)
+    img = env_img[:-1]                  # (C_img, H, W, D) or (1, H, W, D)
+    path = env_img[-1]                  # (H, W, D)
+
+    # Max-intensity projection of input image (img) and path
+    if img.ndim == 4:
+        img_vol = img.amax(dim=0)       # (H, W, D)
+    else:
+        img_vol = img                   # already 3D
+
+    img_proj = img_vol.amax(dim=0)      # (W, D)
+    path_proj = path.amax(dim=0)        # (W, D)
+
+    # Show RGB MIP (left axis)
+    ax_left.imshow(img_proj, cmap='gray', vmax=1.0, vmin=0.0)
+
+    # Overlay path as a transparent colored mask
+    ax_left.imshow(path_proj, cmap='plasma', alpha=0.5)
+
+    # Overlay seed points as red dots (projected using y=seed[1], x=seed[2])
+    h, w = img_proj.shape[0], img_proj.shape[1]
+    if hasattr(env, 'seeds') and env.seeds:
+        xs, ys = [], []
+        for s in env.seeds:
+            try:
+                y_s = int(round(s[1]))
+                x_s = int(round(s[2]))
+            except Exception:
+                continue
+            if 0 <= y_s < h and 0 <= x_s < w:
+                ys.append(y_s)
+                xs.append(x_s)
+        if xs:
+            ax_left.scatter(xs, ys, s=25, c='red', marker='o', linewidths=0)
+
+    if env.paths:
+        # Draw red box around current position with size env.radius x env.radius
+        pos = env.paths[0][-1]
+        y = int(round(pos[1].item()))  # axis-1 (rows)
+        x = int(round(pos[2].item()))  # axis-2 (cols)
+        r = int(env.radius)
+        h, w = img_proj.shape[0], img_proj.shape[1]
+
+        # Compute box extents; ensure width and height equal to r, clipped to bounds
+        half_down = r // 2
+        half_up = r - half_down
+        y0 = max(0, y - half_down)
+        x0 = max(0, x - half_down)
+        # Clip width/height so rectangle stays within image
+        width = min(r, w - x0)
+        height = min(r, h - y0)
+
+        rect = patches.Rectangle((x0, y0), width, height, linewidth=1.5, edgecolor='red', facecolor='none')
+        ax_left.add_patch(rect)
+
+    # Optional right subplot: current cropped state overlay
+    if live:
+        try:
+            obs = env.get_state()[0].detach().cpu()  # (C, H, W, D)
+            if obs.dtype == torch.uint8:
+                obs = obs.to(dtype=torch.float32) * (1.0 / 255.0)
+            img_obs = obs[:-1]
+            path_obs = obs[-1]
+            if img_obs.ndim == 4:
+                img_obs_vol = img_obs.amax(dim=0)  # (H, W, D)
+            else:
+                img_obs_vol = img_obs
+            img_obs_proj = img_obs_vol.amax(dim=0)
+            path_obs_proj = path_obs.amax(dim=0)
+            ax_right_bottom.imshow(img_obs_proj, cmap='gray', vmax=1.0, vmin=0.0)
+            ax_right_bottom.imshow(path_obs_proj, cmap='plasma', vmax=1.0, vmin=0.0, alpha=0.5)
+            ax_right_bottom.axis('off')
+
+            # Bottom-right: overlay path_obs on cropped true_density MIP
+            center = env.paths[0][-1]
+            density_patch = env.true_density.crop(center, env.radius, interp=False)[0]
+            if density_patch.dtype == torch.uint8:
+                density_patch = density_patch.float() / 255.0
+            # Use first channel of density if multi-channel
+            if density_patch.ndim == 4:
+                density_ch = density_patch[0]
+            else:
+                density_ch = density_patch
+
+            density_proj = density_ch[env.radius]  # single slice through center
+            ax_right.imshow(density_proj, cmap='Reds', vmax=1.0, vmin=0.0)
+            ax_right.imshow(path_obs_proj, cmap='Greens', vmax=1.0, vmin=0.0, alpha=0.5)
+            ax_right.axis('off')
+            if reward is not None:
+                ax_right.set_title(f'Reward: {reward:.4f}')
+        except Exception:
+            # Fail quietly if state isn't available
+            ax_right_bottom.axis('off')
+            try:
+                ax_right.axis('off')
+            except Exception:
+                pass
+
+    ax_left.axis('off')
+    display.display(fig)
+
+    return
 
 if __name__ == "__main__":
     pass

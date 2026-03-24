@@ -781,6 +781,7 @@ def _compute_target_action(
             targets = nearest_valid_terminal.unsqueeze(0)
         else:
             targets = torch.empty((0, 3), dtype=torch.float32, device=swc_t.device)
+            stop_target = True  # if there are no points in the neuron and no nearby terminals, signal to stop
     else:
         if adj_dict is None:
             adj_dict = load.adjacency_dict(swc_t)
@@ -806,6 +807,7 @@ def _compute_target_action(
                 return target_vectors, bool(stop_target)
             target_points = torch.empty((0, 3), dtype=torch.float32, device=swc_t.device)
             target_vectors = _target_vectors_from_points(pt, target_points, device=swc_t.device)
+            stop_target = True  # if we can't find a nearest point on the neuron and there are no nearby terminals, signal to stop
             return target_vectors, bool(stop_target)
 
         sq_dist_to_nearest_point = torch.sum((nearest_point - pt) ** 2).item()
@@ -822,6 +824,7 @@ def _compute_target_action(
                 else:
                     target_points = torch.empty((0, 3), dtype=torch.float32, device=swc_t.device)
                     target_vectors = _target_vectors_from_points(pt, target_points, device=swc_t.device)
+                    stop_target = True  # if we're too far from the neuron and there are no nearby terminals, signal to stop
                     return target_vectors, bool(stop_target)
         
         targets = _get_points_at_distance(
@@ -851,6 +854,8 @@ def _compute_target_action(
                 targets = nearest_point.unsqueeze(0)
 
     target_vectors = _target_vectors_from_points(pt, targets, device=swc_t.device)
+    if targets.numel() == 0:
+        stop_target = True  # if we couldn't find any target points, signal to stop
     return target_vectors, bool(stop_target)
 
 

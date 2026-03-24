@@ -15,11 +15,19 @@ import torch
 from tqdm import tqdm
 
 from neurotrack.training.memory import BehaviorCloningReplayBuffer
-from neurotrack.training.sac import prepare_observation_for_model
 
 DEVICE = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 dtype = torch.float32
 date_time = datetime.now().strftime("'%Y-%m-%d_%H-%M-%S'")
+
+
+def prepare_observation_for_model(obs, device=None, model_dtype=torch.float32):
+    """Convert uint8 observations to normalized float tensors at model input boundaries."""
+    if device is None:
+        device = obs.device
+    if obs.dtype == torch.uint8:
+        return obs.to(device=device, dtype=model_dtype) * (1.0 / 255.0)
+    return obs.to(device=device, dtype=model_dtype)
 
 
 @dataclass(frozen=True)
@@ -392,7 +400,11 @@ def _decode_policy_rollin_action(policy_output: torch.Tensor, stop_action_thresh
     output_t = torch.as_tensor(policy_output, dtype=torch.float32).view(-1)
     if output_t.numel() != 4:
         raise ValueError(f"Expected policy output with 4 elements, got shape {tuple(output_t.shape)}")
+    # scale the direction output to have a maximum norm of 10, using a tanh on the norm to smoothly limit it while preserving directionality
     direction = output_t[:3]
+    direction_norm = torch.linalg.norm(direction, dim=-1, keepdim=True)
+    direction_norm_ = torch.tanh(direction_norm)*10 # maximum of 10
+    direction = direction * direction_norm_/(direction_norm + torch.finfo(output_t.dtype).eps)
     choose_stop = bool(torch.sigmoid(output_t[3]).item() > float(stop_action_threshold))
     return direction, choose_stop
 

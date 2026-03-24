@@ -16,7 +16,7 @@ from neurotrack.training.behavior_cloning import (
     multi_target_direction_loss,
     pad_target_candidate_batch,
     select_expert_action,
-    train_dagger,
+    train_dagger_online,
 )
 from neurotrack.training.memory import BehaviorCloningReplayBuffer
 
@@ -38,24 +38,27 @@ class _ToyEnv:
         self.recorded_actions = []
         self._step_index = 0
         self.target_vectors = self._target_sequence[0].clone()
+        self.target_stop_label = False
 
     def reset(self, return_state=True):
         self._step_index = 0
         self.target_vectors = self._target_sequence[0].clone()
+        self.target_stop_label = False
         self.recorded_actions.clear()
         return self.get_state()
 
     def get_state(self):
         return torch.full((1, 2, 35, 35, 35), fill_value=self._step_index, dtype=torch.uint8)
 
-    def step(self, action):
+    def step(self, action, stop=None):
         action_t = torch.as_tensor(action, dtype=torch.float32).detach().cpu()
-        self.recorded_actions.append(action_t)
+        self.recorded_actions.append((action_t, bool(stop) if stop is not None else None))
 
         self._step_index += 1
         final_step = self._step_index >= len(self._target_sequence)
         if final_step:
             self.target_vectors = torch.zeros((1, 3), dtype=torch.float32)
+            self.target_stop_label = True
             return (
                 self.get_state(),
                 torch.tensor(1.0, dtype=torch.float32),
@@ -64,11 +67,14 @@ class _ToyEnv:
                 {
                     "terminate_episode": True,
                     "current_target_vectors": None,
+                    "current_target_stop_label": False,
                     "next_target_vectors": self.target_vectors,
+                    "next_target_stop_label": True,
                 },
             )
 
         self.target_vectors = self._target_sequence[self._step_index].clone()
+        self.target_stop_label = False
         return (
             self.get_state(),
             torch.tensor(1.0, dtype=torch.float32),
@@ -77,7 +83,9 @@ class _ToyEnv:
             {
                 "terminate_episode": False,
                 "current_target_vectors": self._target_sequence[self._step_index - 1].clone(),
+                "current_target_stop_label": False,
                 "next_target_vectors": self.target_vectors,
+                "next_target_stop_label": False,
             },
         )
 
@@ -94,6 +102,7 @@ class _TraceEnv:
             )
         ]
         self._current_target_vectors = torch.as_tensor(current_target_vectors, dtype=torch.float32).view(-1, 3)
+        self.target_stop_label = False
 
     def reset(self, dataset_index=None, move_to_next=True):
         return self.get_state()
@@ -101,7 +110,7 @@ class _TraceEnv:
     def get_state(self):
         return torch.zeros((1, 2, 35, 35, 35), dtype=torch.uint8)
 
-    def step(self, action):
+    def step(self, action, stop=None):
         return (
             self.get_state(),
             torch.tensor(0.0, dtype=torch.float32),
@@ -111,7 +120,9 @@ class _TraceEnv:
                 "terminate_episode": True,
                 "status": "choose_stop",
                 "current_target_vectors": self._current_target_vectors.clone(),
+                "current_target_stop_label": False,
                 "next_target_vectors": torch.zeros((1, 3), dtype=torch.float32),
+                "next_target_stop_label": True,
             },
         )
 
@@ -171,10 +182,11 @@ class BehaviorCloningReplayBufferTests(unittest.TestCase):
             targets = torch.tensor([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=torch.float32)
             buffer.push(obs, targets)
 
-        sampled_obs, sampled_targets, sampled_mask = buffer.sample(batch_size=2, replacement=False, transform=True)
+        sampled_obs, sampled_targets, sampled_mask, sampled_stop = buffer.sample(batch_size=2, replacement=False, transform=True)
         self.assertEqual(tuple(sampled_obs.shape), (2, 2, 35, 35, 35))
         self.assertEqual(tuple(sampled_targets.shape), (2, 2, 3))
         self.assertEqual(tuple(sampled_mask.shape), (2, 2))
+        self.assertEqual(tuple(sampled_stop.shape), (2,))
         self.assertEqual(sampled_obs.dtype, torch.uint8)
         self.assertEqual(sampled_targets.dtype, torch.float32)
         self.assertTrue(sampled_mask.all())
@@ -189,23 +201,25 @@ class BehaviorCloningPolicyTests(unittest.TestCase):
         torch.testing.assert_close(action, torch.tensor([1.0, 0.0, 0.0], dtype=torch.float32))
 
     def test_select_action_from_actor_output_supports_direct_vector_mode(self):
-        action, variance = _select_action_from_actor_output(
-            torch.tensor([[1.0, 2.0, 3.0]], dtype=torch.float32),
+        action, variance, choose_stop, stop_probability = _select_action_from_actor_output(
+            torch.tensor([[1.0, 2.0, 3.0, 0.0]], dtype=torch.float32),
             policy_output_mode="direct_vector",
             stochastic=False,
         )
         torch.testing.assert_close(action, torch.tensor([1.0, 2.0, 3.0], dtype=torch.float32))
         self.assertIsNone(variance)
+        self.assertFalse(choose_stop)
+        self.assertIsNotNone(stop_probability)
 
     def test_load_models_supports_direct_vector_checkpoints(self):
-        actor = ConvNet(chin=2, chout=3)
+        actor = ConvNet(chin=2, chout=4)
         with tempfile.TemporaryDirectory() as tmp_dir:
             weights_path = Path(tmp_dir) / "bc_weights.pt"
             torch.save(
                 {
                     "policy_state_dict": actor.state_dict(),
                     "policy_output_mode": "direct_vector",
-                    "policy_output_dim": 3,
+                    "policy_output_dim": 4,
                 },
                 weights_path,
             )
@@ -218,17 +232,17 @@ class BehaviorCloningPolicyTests(unittest.TestCase):
             self.assertEqual(getattr(loaded_actor, "policy_output_mode", None), "direct_vector")
             self.assertIsNone(q_net)
             output = loaded_actor(torch.zeros((1, 2, 35, 35, 35), dtype=torch.float32))
-            self.assertEqual(tuple(output.shape), (1, 3))
+            self.assertEqual(tuple(output.shape), (1, 4))
 
     def test_load_models_rejects_trials_without_q_network(self):
-        actor = ConvNet(chin=2, chout=3)
+        actor = ConvNet(chin=2, chout=4)
         with tempfile.TemporaryDirectory() as tmp_dir:
             weights_path = Path(tmp_dir) / "bc_weights.pt"
             torch.save(
                 {
                     "policy_state_dict": actor.state_dict(),
                     "policy_output_mode": "direct_vector",
-                    "policy_output_dim": 3,
+                    "policy_output_dim": 4,
                 },
                 weights_path,
             )
@@ -244,33 +258,37 @@ class BehaviorCloningPolicyTests(unittest.TestCase):
         self.assertAlmostEqual(_compute_dagger_beta(1, dagger_rounds=3, beta_start=1.0, beta_end=0.0), 0.5)
         self.assertEqual(_compute_dagger_beta(2, dagger_rounds=3, beta_start=1.0, beta_end=0.0), 0.0)
 
-    def test_optimize_prepared_batch_applies_continue_norm_floor(self):
-        actor = _ConstantActor([0.1, 0.0, 0.0])
+    def test_optimize_prepared_batch_combines_direction_and_stop_losses(self):
+        actor = _ConstantActor([0.1, 0.0, 0.0, -2.0])
         optimizer = torch.optim.SGD(actor.parameters(), lr=0.0)
         obs_tensor = torch.zeros((1, 2, 35, 35, 35), dtype=torch.uint8)
         target_tensor = torch.tensor([[[2.0, 0.0, 0.0]]], dtype=torch.float32)
         target_mask = torch.tensor([[True]], dtype=torch.bool)
+        stop_targets = torch.tensor([False], dtype=torch.bool)
         loss_config = _build_supervision_loss_config(
-            continue_target_norm_threshold=1.0,
+            stop_bce_weight=1.0,
+            stop_margin=0.0,
+            stop_margin_weight=0.0,
             continue_weight=1.0,
-            norm_floor=1.0,
-            norm_floor_weight=0.5,
         )
 
-        loss = _optimize_prepared_batch(
+        total_loss, direction_loss, stop_bce_loss = _optimize_prepared_batch(
             actor=actor,
             actor_optimizer=optimizer,
             obs_tensor=obs_tensor,
             target_tensor=target_tensor,
             target_mask=target_mask,
+            stop_targets=stop_targets,
             loss_config=loss_config,
         )
 
-        self.assertAlmostEqual(loss, 4.015, places=3)
+        self.assertAlmostEqual(total_loss, 3.737, places=3)
+        self.assertAlmostEqual(direction_loss, 3.610, places=3)
+        self.assertAlmostEqual(stop_bce_loss, 0.127, places=3)
 
     def test_trace_image_reports_false_stop_diagnostics(self):
         device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-        actor = _ConstantActor([0.2, 0.0, 0.0]).to(device=device)
+        actor = _ConstantActor([0.2, 0.0, 0.0, 4.0]).to(device=device)
         actor.policy_output_mode = "direct_vector"
         env = _TraceEnv(current_target_vectors=[[3.0, 0.0, 0.0]])
 
@@ -299,11 +317,11 @@ class BehaviorCloningPolicyTests(unittest.TestCase):
             torch.tensor([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=torch.float32),
             torch.tensor([[1.0, 0.0, 0.0]], dtype=torch.float32),
         ])
-        actor = _ConstantActor([0.0, 0.0, 2.0])
+        actor = _ConstantActor([0.0, 0.0, 2.0, -4.0])
         optimizer = torch.optim.SGD(actor.parameters(), lr=0.0)
 
         with tempfile.TemporaryDirectory() as tmp_dir:
-            train_dagger(
+            train_dagger_online(
                 env=env,
                 actor=actor,
                 actor_optimizer=optimizer,
@@ -322,20 +340,21 @@ class BehaviorCloningPolicyTests(unittest.TestCase):
                 rng=np.random.default_rng(0),
             )
 
-        torch.testing.assert_close(env.recorded_actions[0], torch.tensor([0.0, 0.0, 2.0], dtype=torch.float32))
+        torch.testing.assert_close(env.recorded_actions[0][0], torch.tensor([0.0, 0.0, 2.0], dtype=torch.float32))
+        self.assertFalse(env.recorded_actions[0][1])
 
     def test_train_dagger_saves_dagger_metadata(self):
         env = _ToyEnv([
             torch.tensor([[1.0, 0.0, 0.0]], dtype=torch.float32),
             torch.tensor([[0.0, 1.0, 0.0]], dtype=torch.float32),
         ])
-        actor = _ConstantActor([0.0, 0.0, 2.0])
+        actor = _ConstantActor([0.0, 0.0, 2.0, -4.0])
         optimizer = torch.optim.SGD(actor.parameters(), lr=0.0)
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             outdir = Path(tmp_dir) / "weights"
             logdir = Path(tmp_dir) / "logs"
-            train_dagger(
+            train_dagger_online(
                 env=env,
                 actor=actor,
                 actor_optimizer=optimizer,
@@ -359,7 +378,7 @@ class BehaviorCloningPolicyTests(unittest.TestCase):
 
         self.assertEqual(checkpoint["algorithm"], "multi_target_dagger_online")
         self.assertEqual(checkpoint["policy_output_mode"], "direct_vector")
-        self.assertEqual(checkpoint["policy_output_dim"], 3)
+        self.assertEqual(checkpoint["policy_output_dim"], 4)
         self.assertEqual(checkpoint["dagger_episode"], 1)
         self.assertEqual(checkpoint["beta"], 0.25)
         self.assertGreaterEqual(checkpoint["dataset_size"], 2)
@@ -374,13 +393,13 @@ class BehaviorCloningPolicyTests(unittest.TestCase):
             torch.tensor([[1.0, 0.0, 0.0]], dtype=torch.float32),
             torch.tensor([[0.0, 1.0, 0.0]], dtype=torch.float32),
         ])
-        actor = _ConstantActor([0.0, 0.0, 2.0])
+        actor = _ConstantActor([0.0, 0.0, 2.0, -4.0])
         optimizer = torch.optim.SGD(actor.parameters(), lr=0.0)
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             outdir = Path(tmp_dir) / "weights"
             logdir = Path(tmp_dir) / "logs"
-            train_dagger(
+            train_dagger_online(
                 env=env,
                 actor=actor,
                 actor_optimizer=optimizer,

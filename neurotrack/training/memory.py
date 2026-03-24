@@ -166,6 +166,7 @@ class BehaviorCloningReplayBuffer:
         self.include_z_flip = bool(include_z_flip)
         self.obs = None
         self.target_vectors = [None] * self.capacity
+        self.stop_labels = torch.empty((self.capacity,), dtype=torch.bool, device="cpu")
         self.idx = 0
         self.full = False
 
@@ -179,11 +180,12 @@ class BehaviorCloningReplayBuffer:
                 f"Expected {tuple(self.obs.shape[1:])}, got {tuple(obs_shape)}."
             )
 
-    def push(self, obs, target_vectors):
+    def push(self, obs, target_vectors, stop_label=False):
         obs_t = _normalize_bc_observation(obs)
         self._ensure_obs_storage(tuple(obs_t.shape))
         self.obs[self.idx] = obs_t
         self.target_vectors[self.idx] = _normalize_target_vectors(target_vectors)
+        self.stop_labels[self.idx] = bool(stop_label)
 
         self.idx = (self.idx + 1) % self.capacity
         self.full = self.idx == 0 or self.full
@@ -220,7 +222,9 @@ class BehaviorCloningReplayBuffer:
                 include_z_flip=self.include_z_flip,
             )
 
-        return obs, target_vectors, target_mask
+        stop_labels = self.stop_labels[idxs].to(device=DEVICE)
+
+        return obs, target_vectors, target_mask, stop_labels
 
     def __len__(self):
         return self.capacity if self.full else self.idx

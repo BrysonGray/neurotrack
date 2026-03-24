@@ -693,7 +693,23 @@ def _get_points_at_distance(
     return points_t[keep_indices]
 
 
-def _compute_target_point(
+def _target_vectors_from_points(
+    position: torch.Tensor,
+    target_points: torch.Tensor,
+    *,
+    device: torch.device,
+) -> torch.Tensor:
+    """Convert absolute target points to relative direction vectors."""
+    position_t = ensure_tensor(position, dtype=torch.float32, device=device).view(3)
+    if target_points is None:
+        return torch.zeros((1, 3), dtype=torch.float32, device=device)
+    target_points_t = ensure_tensor(target_points, dtype=torch.float32, device=device).view(-1, 3)
+    if target_points_t.numel() == 0:
+        return torch.zeros((1, 3), dtype=torch.float32, device=device)
+    return target_points_t - position_t.unsqueeze(0)
+
+
+def _compute_target_action(
     current_pos: Union[torch.Tensor, np.ndarray],
     swc_list: Union[torch.Tensor, list],
     step_size: float,
@@ -701,8 +717,9 @@ def _compute_target_point(
     adj_dict: Dict[int, list] = None,
     terminal_points: torch.Tensor = None,
     valid_nodes: set = None,
-    valid_dist2: float = 49.0
-) -> torch.Tensor:
+    valid_dist2: float = 49.0,
+    stop_distance: float = None,
+) -> Tuple[torch.Tensor, bool]:
     """
     Compute target points, usually one but potentially multiple possible target points, along the neuron structure at a specified distance from the nearest
     neuron point to the current position. Note: This function does not use the visited dictionary. It assumes the given swc_list has been pruned to remove
@@ -727,14 +744,21 @@ def _compute_target_point(
         
     Returns
     -------
-    torch.Tensor
-        N x 3 tensor of target point coordinates (x, y, z). Returns empty (0,3) if none.
+    tuple
+        (target_vectors, stop_target)
+        target_vectors : (K, 3) tensor of relative action vectors.
+        stop_target : bool indicating if current_pos is close enough to a terminal point.
     """
     swc_t = ensure_tensor(swc_list, dtype=torch.float32)
     pt = ensure_tensor(current_pos, dtype=torch.float32, device=swc_t.device)
     step_size = float(step_size)
     if step_size < 0:
         raise ValueError("step_size must be non-negative.")
+    if stop_distance is None:
+        stop_distance = step_size
+    stop_distance = float(stop_distance)
+    if stop_distance < 0:
+        raise ValueError("stop_distance must be non-negative.")
 
     terminals_t = None
     terminals_exist = False
@@ -743,11 +767,13 @@ def _compute_target_point(
         terminals_t = ensure_tensor(terminal_points, dtype=torch.float32, device=swc_t.device).view(-1, 3)
         terminals_exist = terminals_t.numel() > 0
 
+    stop_target = False
     if terminals_exist:
         sq_dists_to_terminals = torch.sum((terminals_t - pt.unsqueeze(0)) ** 2, dim=1)
         nearest_terminal = terminals_t[torch.argmin(sq_dists_to_terminals)]
         sq_dist_to_nearest_terminal = torch.min(sq_dists_to_terminals).item()
         nearest_valid_terminal = nearest_terminal if sq_dist_to_nearest_terminal <= valid_dist2 else None
+        stop_target = sq_dist_to_nearest_terminal <= (stop_distance ** 2)
 
     # if the swc_list is empty or has only one point, return the nearest terminal if within step size, otherwise return empty
     if swc_t.ndim < 2 or swc_t.shape[0] < 2:
@@ -761,7 +787,9 @@ def _compute_target_point(
 
         # Prefer a nearby terminal when it is reachable within one target step.
         if nearest_valid_terminal is not None and sq_dist_to_nearest_terminal <= step_size ** 2:
-            return nearest_valid_terminal.unsqueeze(0)
+            target_points = nearest_valid_terminal.unsqueeze(0)
+            target_vectors = _target_vectors_from_points(pt, target_points, device=swc_t.device)
+            return target_vectors, bool(stop_target)
 
         nearest_point, _nearest_edge = _get_nearest_point(
             pt,
@@ -773,18 +801,28 @@ def _compute_target_point(
 
         if nearest_point is None:
             if nearest_valid_terminal is not None:
-                return nearest_valid_terminal.unsqueeze(0)
-            return torch.empty((0, 3), dtype=torch.float32, device=swc_t.device)
+                target_points = nearest_valid_terminal.unsqueeze(0)
+                target_vectors = _target_vectors_from_points(pt, target_points, device=swc_t.device)
+                return target_vectors, bool(stop_target)
+            target_points = torch.empty((0, 3), dtype=torch.float32, device=swc_t.device)
+            target_vectors = _target_vectors_from_points(pt, target_points, device=swc_t.device)
+            return target_vectors, bool(stop_target)
 
         sq_dist_to_nearest_point = torch.sum((nearest_point - pt) ** 2).item()
         if sq_dist_to_nearest_point > step_size ** 2:
             if sq_dist_to_nearest_point <= valid_dist2:
-                return nearest_point.unsqueeze(0)
+                target_points = nearest_point.unsqueeze(0)
+                target_vectors = _target_vectors_from_points(pt, target_points, device=swc_t.device)
+                return target_vectors, bool(stop_target)
             else:
                 if nearest_valid_terminal is not None:
-                    return nearest_valid_terminal.unsqueeze(0)
+                    target_points = nearest_valid_terminal.unsqueeze(0)
+                    target_vectors = _target_vectors_from_points(pt, target_points, device=swc_t.device)
+                    return target_vectors, bool(stop_target)
                 else:
-                    return torch.empty((0, 3), dtype=torch.float32, device=swc_t.device)
+                    target_points = torch.empty((0, 3), dtype=torch.float32, device=swc_t.device)
+                    target_vectors = _target_vectors_from_points(pt, target_points, device=swc_t.device)
+                    return target_vectors, bool(stop_target)
         
         targets = _get_points_at_distance(
             current_pos=pt,
@@ -812,7 +850,8 @@ def _compute_target_point(
             else:
                 targets = nearest_point.unsqueeze(0)
 
-    return targets
+    target_vectors = _target_vectors_from_points(pt, targets, device=swc_t.device)
+    return target_vectors, bool(stop_target)
 
 
 # def _compute_target_point(

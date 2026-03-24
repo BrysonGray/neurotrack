@@ -17,11 +17,17 @@ def _select_action_from_actor_output(
     actor_out: torch.Tensor,
     policy_output_mode: str,
     stochastic: bool = False,
+    stop_action_threshold: float = 0.5,
 ):
     """Convert actor outputs into an action tensor for tracing."""
     if policy_output_mode == "direct_vector":
-        action = actor_out[0]
-        return action, None
+        action_out = actor_out[0].view(-1)
+        if action_out.numel() != 4:
+            raise ValueError(f"Expected direct_vector actor output of size 4, got {tuple(action_out.shape)}")
+        action = action_out[:3]
+        stop_probability = float(torch.sigmoid(action_out[3]).item())
+        choose_stop = stop_probability > float(stop_action_threshold)
+        return action, None, choose_stop, stop_probability
 
     direction_dist = sample_from_output(actor_out)
     if stochastic:
@@ -29,7 +35,7 @@ def _select_action_from_actor_output(
     else:
         action = direction_dist.mean[0]
     variance = float(direction_dist.variance[0].mean().detach().cpu())
-    return action, variance
+    return action, variance, False, None
 
 
 def _min_target_norm(target_vectors) -> Optional[float]:
@@ -221,10 +227,11 @@ def trace_image(
                 timing_ms["actor_forward"] += (time.perf_counter() - actor_start) * 1000.0
 
                 sample_start = time.perf_counter()
-                action, action_variance = _select_action_from_actor_output(
+                action, action_variance, choose_stop, stop_probability = _select_action_from_actor_output(
                     actor_out,
                     policy_output_mode=policy_output_mode,
                     stochastic=stochastic,
+                    stop_action_threshold=float(getattr(env, "stop_action_threshold", 0.5)),
                 )
                 if action_variance is not None:
                     variance.append(action_variance)
@@ -234,7 +241,9 @@ def trace_image(
 
             step_start = time.perf_counter()
             action_cpu = action.detach().cpu()
-            next_obs, reward, terminated, truncated, info = env.step(action_cpu)
+            next_obs, reward, terminated, truncated, info = env.step(action_cpu, stop=choose_stop)
+            if stop_probability is not None:
+                info["stop_probability"] = stop_probability
             timing_ms["env_step"] += (time.perf_counter() - step_start) * 1000.0
             timing_ms["steps"] += 1
 

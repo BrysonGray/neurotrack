@@ -83,7 +83,6 @@ def main():
     name = params["name"]
     target_step_len = params["target_step_len"] if "target_step_len" in params else 1.0
     step_width = params["step_width"] if "step_width" in params else 1.0
-    stall_threshold = params["stall_threshold"] if "stall_threshold" in params else 1.0
     batch_size = params["batchsize"] if "batchsize" in params else 256
     gamma = params["gamma"] if "gamma" in params else 0.99
     tau = params["tau"] if "tau" in params else 0.005
@@ -129,7 +128,6 @@ def main():
         radius=patch_radius,
         target_step_len=target_step_len,
         step_width=step_width,
-        stall_threshold=stall_threshold,
         max_len=1000,
         max_paths=1000,
         gamma=gamma,

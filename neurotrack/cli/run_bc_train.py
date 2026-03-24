@@ -100,14 +100,17 @@ def _run_single_experiment(params: Dict, config_path: Path) -> None:
     beta_start = float(_get_param(params, "beta_start", default=1.0))
     beta_end = float(_get_param(params, "beta_end", default=0.0))
     aggregate_memory_budget = int(_get_param(params, "aggregate_memory_budget", "dagger_memory_budget", default=10000))
-    stall_threshold = float(_get_param(params, "stall_threshold", default=1.0))
+    stop_action_threshold = float(_get_param(params, "stop_action_threshold", default=0.5))
+    stop_target_distance_raw = _get_param(params, "stop_target_distance", default=None)
+    stop_target_distance = None if stop_target_distance_raw is None else float(stop_target_distance_raw)
 
-    # Loss weighting parameters
-    continue_target_norm_threshold_raw = _get_param(params, "continue_target_norm_threshold", default=None)
-    continue_target_norm_threshold = None if continue_target_norm_threshold_raw is None else float(continue_target_norm_threshold_raw)
+    # Stop/continue supervision parameters
+    stop_bce_weight = float(_get_param(params, "stop_bce_weight", default=1.0))
+    stop_margin = float(_get_param(params, "stop_margin", default=0.0))
+    stop_margin_weight = float(_get_param(params, "stop_margin_weight", default=0.0))
+
+    # Direction loss weighting parameter
     continue_weight = float(_get_param(params, "continue_weight", default=1.0))
-    norm_floor = float(_get_param(params, "norm_floor", default=0.0))
-    norm_floor_weight = float(_get_param(params, "norm_floor_weight", default=0.0))
 
     rng = np.random.default_rng(rng_seed)
     dataset = NeuronPatchDataset(
@@ -131,7 +134,8 @@ def _run_single_experiment(params: Dict, config_path: Path) -> None:
         radius=17,
         target_step_len=target_step_len,
         step_width=step_width,
-        stall_threshold=stall_threshold,
+        stop_action_threshold=stop_action_threshold,
+        stop_target_distance=stop_target_distance,
         max_len=int(_get_param(params, "max_len", default=1000)),
         max_paths=int(_get_param(params, "max_paths", default=1000)),
         gamma=float(_get_param(params, "gamma", default=0.0)),
@@ -141,7 +145,7 @@ def _run_single_experiment(params: Dict, config_path: Path) -> None:
         inference_mode=False,
     )
 
-    actor = ConvNet(chin=2, chout=3).to(device=DEVICE, dtype=dtype)
+    actor = ConvNet(chin=2, chout=4).to(device=DEVICE, dtype=dtype)
     actor.policy_output_mode = "direct_vector"
     actor_optimizer = AdamW(actor.parameters(), lr=lr)
 
@@ -181,10 +185,10 @@ def _run_single_experiment(params: Dict, config_path: Path) -> None:
             save_every_steps=save_every_steps,
             aggregate_memory_budget=aggregate_memory_budget,
             rng=rng,
-            continue_target_norm_threshold=continue_target_norm_threshold,
+            stop_bce_weight=stop_bce_weight,
+            stop_margin=stop_margin,
+            stop_margin_weight=stop_margin_weight,
             continue_weight=continue_weight,
-            norm_floor=norm_floor,
-            norm_floor_weight=norm_floor_weight,
         )
     elif update_every is not None:
         behavior_cloning.train_dagger_online(
@@ -205,10 +209,10 @@ def _run_single_experiment(params: Dict, config_path: Path) -> None:
             save_every_steps=save_every_steps,
             aggregate_memory_budget=aggregate_memory_budget,
             rng=rng,
-            continue_target_norm_threshold=continue_target_norm_threshold,
+            stop_bce_weight=stop_bce_weight,
+            stop_margin=stop_margin,
+            stop_margin_weight=stop_margin_weight,
             continue_weight=continue_weight,
-            norm_floor=norm_floor,
-            norm_floor_weight=norm_floor_weight,
         )
     else:
         behavior_cloning.train(
@@ -221,10 +225,10 @@ def _run_single_experiment(params: Dict, config_path: Path) -> None:
             batch_size=batch_size,
             n_episodes=n_episodes,
             save_every_steps=save_every_steps,
-            continue_target_norm_threshold=continue_target_norm_threshold,
+            stop_bce_weight=stop_bce_weight,
+            stop_margin=stop_margin,
+            stop_margin_weight=stop_margin_weight,
             continue_weight=continue_weight,
-            norm_floor=norm_floor,
-            norm_floor_weight=norm_floor_weight,
         )
 
 

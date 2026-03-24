@@ -50,7 +50,8 @@ def build_env(params: Dict[str, Any]) -> NeuronTrackingEnvironment:
         dataset=dataset,
         radius=17,
         step_width=params.get("step_width", 2.0),
-        stall_threshold=float(params.get("stall_threshold", 1.0)),
+        stop_action_threshold=float(params.get("stop_action_threshold", 0.5)),
+        stop_target_distance=params.get("stop_target_distance", None),
         max_len=params.get("max_len", 10000),
         max_paths=params.get("max_paths", 1000),
         branching=params.get("branching", True),
@@ -74,7 +75,7 @@ def load_models(
     state_dicts = torch.load(params["sac_weights"], map_location=device)
     policy_output_mode = str(state_dicts.get("policy_output_mode", "gaussian"))
     if policy_output_mode == "direct_vector":
-        policy_output_dim = int(state_dicts.get("policy_output_dim", 3))
+        policy_output_dim = int(state_dicts.get("policy_output_dim", 4))
     else:
         policy_output_dim = int(state_dicts.get("policy_output_dim", 4))
 
@@ -114,7 +115,7 @@ def run_inference(params: Dict[str, Any], out_dir: Path | str) -> Dict[str, Any]
     stochastic = bool(params.get("stochastic_actions", False))
     return_stats = bool(params.get("return_stats", False))
     sync = bool(params.get("sync", False))
-    terminal_target_norm_threshold = float(params.get("terminal_target_norm_threshold", params.get("stall_threshold", 1.0)))
+    terminal_target_norm_threshold = float(params.get("terminal_target_norm_threshold", params.get("target_step_len", 1.0)))
     false_stop_distance_threshold = float(params.get("false_stop_distance_threshold", terminal_target_norm_threshold))
 
     img_indices = list(range(len(env.dataset.img_files)))

@@ -26,51 +26,37 @@ date_time = datetime.now().strftime("'%Y-%m-%d_%H-%M-%S'")
 class SupervisionLossConfig:
     """Configuration for continue-state stabilization losses."""
 
-    continue_target_norm_threshold: float = 1.0
+    stop_bce_weight: float = 1.0
+    stop_margin: float = 0.0
+    stop_margin_weight: float = 0.0
     continue_weight: float = 1.0
-    norm_floor: float = 0.0
-    norm_floor_weight: float = 0.0
 
 
 def _build_supervision_loss_config(
-    continue_target_norm_threshold: float,
+    stop_bce_weight: float,
+    stop_margin: float,
+    stop_margin_weight: float,
     continue_weight: float,
-    norm_floor: float,
-    norm_floor_weight: float,
 ) -> SupervisionLossConfig:
-    threshold = float(continue_target_norm_threshold)
+    stop_bce_weight_f = float(stop_bce_weight)
+    stop_margin_f = float(stop_margin)
+    stop_margin_weight_f = float(stop_margin_weight)
     continue_weight_f = float(continue_weight)
-    norm_floor_f = float(norm_floor)
-    norm_floor_weight_f = float(norm_floor_weight)
-
-    if threshold < 0.0:
-        raise ValueError("continue_target_norm_threshold must be non-negative")
+    if stop_bce_weight_f <= 0.0:
+        raise ValueError("stop_bce_weight must be positive")
+    if stop_margin_f < 0.0:
+        raise ValueError("stop_margin must be non-negative")
+    if stop_margin_weight_f < 0.0:
+        raise ValueError("stop_margin_weight must be non-negative")
     if continue_weight_f <= 0.0:
         raise ValueError("continue_weight must be positive")
-    if norm_floor_f < 0.0:
-        raise ValueError("norm_floor must be non-negative")
-    if norm_floor_weight_f < 0.0:
-        raise ValueError("norm_floor_weight must be non-negative")
 
     return SupervisionLossConfig(
-        continue_target_norm_threshold=threshold,
+        stop_bce_weight=stop_bce_weight_f,
+        stop_margin=stop_margin_f,
+        stop_margin_weight=stop_margin_weight_f,
         continue_weight=continue_weight_f,
-        norm_floor=norm_floor_f,
-        norm_floor_weight=norm_floor_weight_f,
     )
-
-
-def _compute_min_target_norm(
-    target_tensor: torch.Tensor,
-    target_mask: torch.Tensor,
-) -> Tuple[torch.Tensor, torch.Tensor]:
-    """Return per-sample minimum valid target norm and a valid-target mask."""
-    target_norms = torch.linalg.norm(target_tensor, dim=-1)
-    masked_norms = target_norms.masked_fill(~target_mask, torch.inf)
-    has_valid_target = target_mask.any(dim=1)
-    min_target_norm = masked_norms.min(dim=1).values
-    min_target_norm = torch.where(has_valid_target, min_target_norm, torch.zeros_like(min_target_norm))
-    return min_target_norm, has_valid_target
 
 
 def _ensure_action_batch(actions: torch.Tensor | np.ndarray | Sequence[float]) -> torch.Tensor:
@@ -223,11 +209,13 @@ def _optimize_batch(
     actor_optimizer: torch.optim.Optimizer,
     obs_batch: Sequence[torch.Tensor],
     target_batches: Sequence[torch.Tensor],
+    stop_targets: Sequence[bool],
     loss_config: SupervisionLossConfig,
-) -> float:
+) -> Tuple[float, float, float]:
     """Run one optimizer step on a buffered supervision batch."""
     obs_tensor = torch.cat([obs.detach().cpu() for obs in obs_batch], dim=0)
     target_tensor, target_mask = pad_target_candidate_batch(target_batches)
+    stop_target_tensor = torch.as_tensor(stop_targets, dtype=torch.bool)
 
     return _optimize_prepared_batch(
         actor=actor,
@@ -235,6 +223,7 @@ def _optimize_batch(
         obs_tensor=obs_tensor,
         target_tensor=target_tensor,
         target_mask=target_mask,
+        stop_targets=stop_target_tensor,
         loss_config=loss_config,
     )
 
@@ -245,24 +234,38 @@ def _optimize_prepared_batch(
     obs_tensor: torch.Tensor,
     target_tensor: torch.Tensor,
     target_mask: torch.Tensor,
+    stop_targets: torch.Tensor,
     loss_config: SupervisionLossConfig,
-) -> float:
+) -> Tuple[float, float, float]:
     """Run one optimizer step from an already-collated batch."""
     model_device = next(actor.parameters()).device
 
     obs_model = prepare_observation_for_model(obs_tensor, device=model_device, model_dtype=dtype)
-    pred_actions = actor(obs_model)
+    pred_output = actor(obs_model)
+    if pred_output.ndim != 2 or pred_output.shape[1] != 4:
+        raise ValueError(f"Expected actor output shape (B, 4), got {tuple(pred_output.shape)}")
+    pred_directions = pred_output[:, :3]
+    pred_stop_logits = pred_output[:, 3]
     target_tensor = target_tensor.to(device=model_device, dtype=dtype)
     target_mask = target_mask.to(device=model_device)
+    stop_targets = torch.as_tensor(stop_targets, dtype=torch.bool, device=model_device).view(-1)
+    if stop_targets.shape[0] != pred_output.shape[0]:
+        raise ValueError(
+            f"stop_targets batch {tuple(stop_targets.shape)} does not match model batch {tuple(pred_output.shape)}"
+        )
 
     direction_loss_per_sample = multi_target_direction_loss(
-        pred_actions,
+        pred_directions,
         target_tensor,
         valid_mask=target_mask,
         reduction="none",
     )
-    min_target_norm, has_valid_target = _compute_min_target_norm(target_tensor, target_mask)
-    continue_mask = has_valid_target & (min_target_norm > loss_config.continue_target_norm_threshold)
+    continue_mask = ~stop_targets
+
+    stop_loss = torch.nn.functional.binary_cross_entropy_with_logits(
+        pred_stop_logits,
+        stop_targets.to(dtype=dtype),
+    )
 
     sample_weights = torch.ones_like(direction_loss_per_sample)
     if loss_config.continue_weight != 1.0:
@@ -271,20 +274,27 @@ def _optimize_prepared_batch(
             torch.full_like(sample_weights, fill_value=loss_config.continue_weight),
             sample_weights,
         )
+    sample_weights = torch.where(continue_mask, sample_weights, torch.zeros_like(sample_weights))
 
-    direction_loss = (direction_loss_per_sample * sample_weights).sum() / sample_weights.sum().clamp_min(1.0)
+    direction_weight_sum = sample_weights.sum().clamp_min(1.0)
+    direction_loss = (direction_loss_per_sample * sample_weights).sum() / direction_weight_sum
 
-    norm_floor_loss = torch.zeros((), dtype=direction_loss.dtype, device=direction_loss.device)
-    if loss_config.norm_floor > 0.0 and loss_config.norm_floor_weight > 0.0 and torch.any(continue_mask):
-        pred_norms = torch.linalg.norm(pred_actions, dim=1)
-        norm_gap = torch.relu(loss_config.norm_floor - pred_norms)
-        norm_floor_loss = (norm_gap[continue_mask] ** 2).mean()
+    stop_margin_loss = torch.zeros((), dtype=direction_loss.dtype, device=direction_loss.device)
+    if loss_config.stop_margin > 0.0 and loss_config.stop_margin_weight > 0.0:
+        stop_target_f = stop_targets.to(dtype=dtype)
+        margin_term = stop_target_f * torch.relu(loss_config.stop_margin - pred_stop_logits)
+        margin_term = margin_term + (1.0 - stop_target_f) * torch.relu(loss_config.stop_margin + pred_stop_logits)
+        stop_margin_loss = (margin_term ** 2).mean()
 
-    loss = direction_loss + (loss_config.norm_floor_weight * norm_floor_loss)
+    loss = (
+        direction_loss
+        + (loss_config.stop_bce_weight * stop_loss)
+        + (loss_config.stop_margin_weight * stop_margin_loss)
+    )
     actor_optimizer.zero_grad()
     loss.backward()
     actor_optimizer.step()
-    return float(loss.item())
+    return float(loss.item()), float(direction_loss.item()), float(stop_loss.item())
 
 
 def _optimize_from_bc_replay_buffer(
@@ -294,12 +304,12 @@ def _optimize_from_bc_replay_buffer(
     batch_size: int,
     transform: bool,
     loss_config: SupervisionLossConfig,
-) -> Optional[float]:
+) -> Optional[Tuple[float, float, float]]:
     if len(replay_buffer) == 0:
         return None
 
     sample_size = min(batch_size, len(replay_buffer))
-    obs_tensor, target_tensor, target_mask = replay_buffer.sample(
+    obs_tensor, target_tensor, target_mask, stop_targets = replay_buffer.sample(
         batch_size=sample_size,
         replacement=False,
         transform=transform,
@@ -310,27 +320,32 @@ def _optimize_from_bc_replay_buffer(
         obs_tensor=obs_tensor,
         target_tensor=target_tensor,
         target_mask=target_mask,
+        stop_targets=stop_targets,
         loss_config=loss_config,
     )
 
 
-def _current_target_vectors_from_env(env) -> torch.Tensor:
+def _current_target_action_from_env(env) -> Tuple[torch.Tensor, bool]:
     current_target_vectors = env.target_vectors
     if current_target_vectors is None:
         current_target_vectors = torch.zeros((1, 3), dtype=torch.float32)
-    return torch.as_tensor(current_target_vectors, dtype=torch.float32).view(-1, 3)
+    stop_label = bool(getattr(env, "target_stop_label", False))
+    return torch.as_tensor(current_target_vectors, dtype=torch.float32).view(-1, 3), stop_label
 
 
 def _append_supervision_example(
     obs: torch.Tensor,
     target_vectors: torch.Tensor,
+    stop_target: bool,
     obs_store: List[torch.Tensor],
     target_store: List[torch.Tensor],
+    stop_store: List[bool],
 ) -> None:
     obs_cpu = obs.detach().cpu()
     targets_cpu = torch.as_tensor(target_vectors, dtype=torch.float32).detach().cpu().view(-1, 3)
     obs_store.append(obs_cpu)
     target_store.append(targets_cpu)
+    stop_store.append(bool(stop_target))
 
 
 def _flush_supervision_batch(
@@ -338,23 +353,48 @@ def _flush_supervision_batch(
     actor_optimizer: torch.optim.Optimizer,
     obs_store: List[torch.Tensor],
     target_store: List[torch.Tensor],
-    losses: List[float],
+    stop_store: List[bool],
+    total_losses: List[float],
+    direction_losses: List[float],
+    stop_bce_losses: List[float],
     loss_config: SupervisionLossConfig,
 ) -> None:
     if not obs_store:
         return
-    losses.append(_optimize_batch(actor, actor_optimizer, obs_store, target_store, loss_config=loss_config))
+    total_loss, direction_loss, stop_bce_loss = _optimize_batch(
+        actor,
+        actor_optimizer,
+        obs_store,
+        target_store,
+        stop_store,
+        loss_config=loss_config,
+    )
+    total_losses.append(total_loss)
+    direction_losses.append(direction_loss)
+    stop_bce_losses.append(stop_bce_loss)
     obs_store.clear()
     target_store.clear()
+    stop_store.clear()
 
 
 def _predict_policy_action(actor: torch.nn.Module, obs: torch.Tensor) -> torch.Tensor:
     model_device = next(actor.parameters()).device
     obs_model = prepare_observation_for_model(obs.detach(), device=model_device, model_dtype=dtype)
     with torch.no_grad():
-        pred_actions = actor(obs_model)
-    pred_actions = _ensure_action_batch(pred_actions)
-    return pred_actions[0].detach().to(dtype=torch.float32).cpu()
+        pred_output = actor(obs_model)
+    pred_output = torch.as_tensor(pred_output, dtype=torch.float32)
+    if pred_output.ndim != 2 or pred_output.shape[1] != 4:
+        raise ValueError(f"Expected actor output shape (B, 4), got {tuple(pred_output.shape)}")
+    return pred_output[0].detach().cpu()
+
+
+def _decode_policy_rollin_action(policy_output: torch.Tensor, stop_action_threshold: float = 0.5) -> Tuple[torch.Tensor, bool]:
+    output_t = torch.as_tensor(policy_output, dtype=torch.float32).view(-1)
+    if output_t.numel() != 4:
+        raise ValueError(f"Expected policy output with 4 elements, got shape {tuple(output_t.shape)}")
+    direction = output_t[:3]
+    choose_stop = bool(torch.sigmoid(output_t[3]).item() > float(stop_action_threshold))
+    return direction, choose_stop
 
 
 def _sample_rollin_source(
@@ -378,12 +418,14 @@ def _run_supervision_epoch(
     batch_size: int,
     transform: bool,
     loss_config: SupervisionLossConfig,
-) -> List[float]:
+) -> Tuple[List[float], List[float], List[float]]:
     if len(aggregate_buffer) == 0:
-        return []
+        return [], [], []
 
     n_batches = max(1, (len(aggregate_buffer) + batch_size - 1) // batch_size)
-    losses: List[float] = []
+    total_losses: List[float] = []
+    direction_losses: List[float] = []
+    stop_bce_losses: List[float] = []
     for _batch_idx in range(n_batches):
         maybe_loss = _optimize_from_bc_replay_buffer(
             actor=actor,
@@ -394,26 +436,15 @@ def _run_supervision_epoch(
             loss_config=loss_config,
         )
         if maybe_loss is not None:
-            losses.append(float(maybe_loss))
-    return losses
+            total_loss, direction_loss, stop_bce_loss = maybe_loss
+            total_losses.append(float(total_loss))
+            direction_losses.append(float(direction_loss))
+            stop_bce_losses.append(float(stop_bce_loss))
+    return total_losses, direction_losses, stop_bce_losses
 
 
 def _reward_to_float(reward: torch.Tensor | float) -> float:
     return float(torch.as_tensor(reward, dtype=torch.float32).item())
-
-
-def _min_target_norm(
-    target_vectors: Optional[torch.Tensor | np.ndarray | Sequence[float]],
-) -> Optional[float]:
-    if target_vectors is None:
-        return None
-    targets = torch.as_tensor(target_vectors, dtype=torch.float32).view(-1, 3)
-    if targets.numel() == 0:
-        return None
-    norms = torch.linalg.norm(targets, dim=1)
-    if norms.numel() == 0:
-        return None
-    return float(torch.min(norms).item())
 
 
 def _compute_dagger_beta(round_index: int, dagger_rounds: int, beta_start: float, beta_end: float) -> float:
@@ -437,22 +468,30 @@ def _run_expert_episode(
     prev_expert_action: Optional[torch.Tensor] = None
     supervision_obs: List[torch.Tensor] = []
     supervision_targets: List[torch.Tensor] = []
-    episode_losses: List[float] = []
+    supervision_stop_targets: List[bool] = []
+    episode_total_losses: List[float] = []
+    episode_direction_losses: List[float] = []
+    episode_stop_bce_losses: List[float] = []
     episode_rewards: List[float] = []
     episode_step_norms: List[float] = []
     steps_done = 0
-    false_stop_distance_threshold = float(loss_config.continue_target_norm_threshold)
-    false_continue_distance_threshold = float(loss_config.continue_target_norm_threshold)
     choose_stop_with_target_count = 0
     false_choose_stop_count = 0
     continue_with_target_count = 0
     false_continue_count = 0
 
     for _step_idx in count():
-        current_target_vectors = _current_target_vectors_from_env(env)
-        _append_supervision_example(obs, current_target_vectors, supervision_obs, supervision_targets)
+        current_target_vectors, current_target_stop = _current_target_action_from_env(env)
+        _append_supervision_example(
+            obs,
+            current_target_vectors,
+            current_target_stop,
+            supervision_obs,
+            supervision_targets,
+            supervision_stop_targets,
+        )
         if aggregate_buffer is not None:
-            aggregate_buffer.push(obs, current_target_vectors)
+            aggregate_buffer.push(obs, current_target_vectors, stop_label=current_target_stop)
 
         if len(supervision_obs) >= batch_size:
             _flush_supervision_batch(
@@ -460,28 +499,30 @@ def _run_expert_episode(
                 actor_optimizer,
                 supervision_obs,
                 supervision_targets,
-                episode_losses,
+                supervision_stop_targets,
+                episode_total_losses,
+                episode_direction_losses,
+                episode_stop_bce_losses,
                 loss_config=loss_config,
             )
 
         expert_action = select_expert_action(current_target_vectors, previous_action=prev_expert_action)
+        expert_choose_stop = bool(current_target_stop)
         episode_step_norms.append(float(torch.linalg.norm(expert_action).item()))
 
-        next_obs, reward, terminated, _truncated, info = env.step(expert_action)
+        next_obs, reward, terminated, _truncated, info = env.step(expert_action, stop=expert_choose_stop)
         steps_done += 1
         episode_rewards.append(_reward_to_float(reward))
 
-        current_target_distance = _min_target_norm(info.get("current_target_vectors"))
-        if current_target_distance is not None:
-            status = info.get("status")
-            if status == "choose_stop":
-                choose_stop_with_target_count += 1
-                if current_target_distance > false_stop_distance_threshold:
-                    false_choose_stop_count += 1
-            elif status == "continue":
-                continue_with_target_count += 1
-                if current_target_distance <= false_continue_distance_threshold:
-                    false_continue_count += 1
+        status = info.get("status")
+        if status == "choose_stop":
+            choose_stop_with_target_count += 1
+            if not bool(info.get("current_target_stop_label", False)):
+                false_choose_stop_count += 1
+        elif status == "continue":
+            continue_with_target_count += 1
+            if bool(info.get("current_target_stop_label", False)):
+                false_continue_count += 1
 
         if info["terminate_episode"]:
             _flush_supervision_batch(
@@ -489,7 +530,10 @@ def _run_expert_episode(
                 actor_optimizer,
                 supervision_obs,
                 supervision_targets,
-                episode_losses,
+                supervision_stop_targets,
+                episode_total_losses,
+                episode_direction_losses,
+                episode_stop_bce_losses,
                 loss_config=loss_config,
             )
             break
@@ -503,7 +547,9 @@ def _run_expert_episode(
 
     return {
         "episode_avg_reward": float(np.mean(episode_rewards)) if episode_rewards else 0.0,
-        "episode_avg_loss": float(np.mean(episode_losses)) if episode_losses else 0.0,
+        "episode_avg_loss": float(np.mean(episode_total_losses)) if episode_total_losses else 0.0,
+        "episode_avg_direction_loss": float(np.mean(episode_direction_losses)) if episode_direction_losses else 0.0,
+        "episode_avg_stop_bce_loss": float(np.mean(episode_stop_bce_losses)) if episode_stop_bce_losses else 0.0,
         "episode_avg_expert_step_norm": float(np.mean(episode_step_norms)) if episode_step_norms else 0.0,
         "false_stop_rate": (
             float(false_choose_stop_count / choose_stop_with_target_count)
@@ -525,6 +571,7 @@ def _run_dagger_collection_episode(
     aggregate_buffer: BehaviorCloningReplayBuffer,
     beta: float,
     rng: np.random.Generator,
+    loss_config: SupervisionLossConfig,
 ) -> dict[str, float | int]:
     obs = env.reset(return_state=True)
     prev_rollin_action: Optional[torch.Tensor] = None
@@ -534,21 +581,27 @@ def _run_dagger_collection_episode(
     policy_steps = 0
 
     for _step_idx in count():
-        current_target_vectors = _current_target_vectors_from_env(env)
-        aggregate_buffer.push(obs, current_target_vectors)
+        current_target_vectors, current_target_stop = _current_target_action_from_env(env)
+        aggregate_buffer.push(obs, current_target_vectors, stop_label=current_target_stop)
 
         expert_action = select_expert_action(current_target_vectors, previous_action=prev_rollin_action)
         episode_step_norms.append(float(torch.linalg.norm(expert_action).item()))
+        expert_choose_stop = bool(current_target_stop)
         if beta >= 1.0:
             rollin_action = expert_action.detach().cpu()
+            rollin_stop = expert_choose_stop
         elif float(rng.random()) < beta:
             rollin_action = expert_action.detach().cpu()
+            rollin_stop = expert_choose_stop
         else:
-            rollin_action = _predict_policy_action(actor, obs).detach().cpu()
+            policy_output = _predict_policy_action(actor, obs).detach().cpu()
+            rollin_action, rollin_stop = _decode_policy_rollin_action(
+                policy_output,
+                stop_action_threshold=float(getattr(env, "stop_action_threshold", 0.5)),
+            )
             policy_steps += 1
 
-
-        next_obs, reward, terminated, _truncated, info = env.step(rollin_action, training=True)
+        next_obs, reward, terminated, _truncated, info = env.step(rollin_action, stop=rollin_stop)
         steps_done += 1
         episode_rewards.append(_reward_to_float(reward))
 
@@ -576,6 +629,8 @@ def _write_bc_log_row(
     image_file: str,
     avg_reward: float,
     avg_loss: float,
+    avg_direction_loss: float,
+    avg_stop_bce_loss: float,
     avg_step_norm: float,
     false_stop_rate: float,
     false_continue_rate: float,
@@ -591,6 +646,8 @@ def _write_bc_log_row(
                 "image_file",
                 "episode_avg_reward",
                 "episode_avg_loss",
+                "episode_avg_direction_loss",
+                "episode_avg_stop_bce_loss",
                 "episode_avg_expert_step_norm",
                 "false_stop_rate",
                 "false_continue_rate",
@@ -602,6 +659,8 @@ def _write_bc_log_row(
             image_file,
             avg_reward,
             avg_loss,
+            avg_direction_loss,
+            avg_stop_bce_loss,
             avg_step_norm,
             false_stop_rate,
             false_continue_rate,
@@ -618,6 +677,8 @@ def _write_dagger_log_row(
     image_file: str,
     avg_reward: float,
     avg_loss: float,
+    avg_direction_loss: float,
+    avg_stop_bce_loss: float,
     avg_step_norm: float,
     policy_rollin_fraction: float,
     false_stop_rate: float,
@@ -638,6 +699,8 @@ def _write_dagger_log_row(
                 "image_file",
                 "episode_avg_reward",
                 "episode_avg_loss",
+                "episode_avg_direction_loss",
+                "episode_avg_stop_bce_loss",
                 "episode_avg_expert_step_norm",
                 "policy_rollin_fraction",
                 "false_stop_rate",
@@ -654,6 +717,8 @@ def _write_dagger_log_row(
             image_file,
             avg_reward,
             avg_loss,
+            avg_direction_loss,
+            avg_stop_bce_loss,
             avg_step_norm,
             policy_rollin_fraction,
             false_stop_rate,
@@ -681,7 +746,7 @@ def _save_checkpoint(
         "steps_done": int(steps_done),
         "episodes_done": int(episodes_done),
         "policy_output_mode": "direct_vector",
-        "policy_output_dim": 3,
+        "policy_output_dim": 4,
         "algorithm": algorithm,
     }
     if extra_metadata is not None:
@@ -732,10 +797,10 @@ def train(
     batch_size: int = 64,
     n_episodes: int = 1000,
     save_every_steps: int = 500,
-    continue_target_norm_threshold: Optional[float] = None,
+    stop_bce_weight: float = 1.0,
+    stop_margin: float = 0.0,
+    stop_margin_weight: float = 0.0,
     continue_weight: float = 1.0,
-    norm_floor: float = 0.0,
-    norm_floor_weight: float = 0.0,
 ) -> None:
     """Train a deterministic actor with multi-target behavior cloning."""
     if batch_size < 1:
@@ -746,13 +811,11 @@ def train(
     outdir.mkdir(parents=True, exist_ok=True)
     logdir.mkdir(parents=True, exist_ok=True)
 
-    if continue_target_norm_threshold is None:
-        continue_target_norm_threshold = float(getattr(env, "stall_threshold", 1.0))
     loss_config = _build_supervision_loss_config(
-        continue_target_norm_threshold=continue_target_norm_threshold,
+        stop_bce_weight=stop_bce_weight,
+        stop_margin=stop_margin,
+        stop_margin_weight=stop_margin_weight,
         continue_weight=continue_weight,
-        norm_floor=norm_floor,
-        norm_floor_weight=norm_floor_weight,
     )
 
     steps_done = 0
@@ -790,10 +853,10 @@ def train(
             last_save_bucket=last_save_bucket,
             algorithm="multi_target_behavior_cloning",
             extra_metadata={
-                "continue_target_norm_threshold": float(loss_config.continue_target_norm_threshold),
+                "stop_bce_weight": float(loss_config.stop_bce_weight),
+                "stop_margin": float(loss_config.stop_margin),
+                "stop_margin_weight": float(loss_config.stop_margin_weight),
                 "continue_weight": float(loss_config.continue_weight),
-                "norm_floor": float(loss_config.norm_floor),
-                "norm_floor_weight": float(loss_config.norm_floor_weight),
             },
         )
         _write_bc_log_row(
@@ -802,6 +865,8 @@ def train(
             image_file=env.current_neuron_info["neuron_name"],
             avg_reward=float(episode_metrics["episode_avg_reward"]),
             avg_loss=float(episode_metrics["episode_avg_loss"]),
+            avg_direction_loss=float(episode_metrics["episode_avg_direction_loss"]),
+            avg_stop_bce_loss=float(episode_metrics["episode_avg_stop_bce_loss"]),
             avg_step_norm=float(episode_metrics["episode_avg_expert_step_norm"]),
             false_stop_rate=float(episode_metrics["false_stop_rate"]),
             false_continue_rate=float(episode_metrics["false_continue_rate"]),
@@ -818,10 +883,10 @@ def train(
         episodes_done=n_episodes,
         algorithm="multi_target_behavior_cloning",
         extra_metadata={
-            "continue_target_norm_threshold": float(loss_config.continue_target_norm_threshold),
+            "stop_bce_weight": float(loss_config.stop_bce_weight),
+            "stop_margin": float(loss_config.stop_margin),
+            "stop_margin_weight": float(loss_config.stop_margin_weight),
             "continue_weight": float(loss_config.continue_weight),
-            "norm_floor": float(loss_config.norm_floor),
-            "norm_floor_weight": float(loss_config.norm_floor_weight),
         },
     )
 
@@ -844,10 +909,10 @@ def train_dagger(
     dynamic_complexity: bool = True,
     aggregate_memory_budget: int = 10000,
     rng: Optional[np.random.Generator] = None,
-    continue_target_norm_threshold: Optional[float] = None,
+    stop_bce_weight: float = 1.0,
+    stop_margin: float = 0.0,
+    stop_margin_weight: float = 0.0,
     continue_weight: float = 1.0,
-    norm_floor: float = 0.0,
-    norm_floor_weight: float = 0.0,
 ) -> None:
     """Train a deterministic actor with DAgger using aggregated multi-target supervision."""
     if batch_size < 1:
@@ -871,13 +936,11 @@ def train_dagger(
     if rng is None:
         rng = np.random.default_rng()
 
-    if continue_target_norm_threshold is None:
-        continue_target_norm_threshold = float(getattr(env, "stall_threshold", 1.0))
     loss_config = _build_supervision_loss_config(
-        continue_target_norm_threshold=continue_target_norm_threshold,
+        stop_bce_weight=stop_bce_weight,
+        stop_margin=stop_margin,
+        stop_margin_weight=stop_margin_weight,
         continue_weight=continue_weight,
-        norm_floor=norm_floor,
-        norm_floor_weight=norm_floor_weight,
     )
 
     steps_done = 0
@@ -926,10 +989,10 @@ def train_dagger(
                 "beta": 1.0,
                 "dataset_size": len(aggregate_buffer),
                 "aggregate_memory_budget": memory_budget_meta,
-                "continue_target_norm_threshold": float(loss_config.continue_target_norm_threshold),
+                "stop_bce_weight": float(loss_config.stop_bce_weight),
+                "stop_margin": float(loss_config.stop_margin),
+                "stop_margin_weight": float(loss_config.stop_margin_weight),
                 "continue_weight": float(loss_config.continue_weight),
-                "norm_floor": float(loss_config.norm_floor),
-                "norm_floor_weight": float(loss_config.norm_floor_weight),
             },
         )
         _write_dagger_log_row(
@@ -940,8 +1003,12 @@ def train_dagger(
             image_file=env.current_neuron_info["neuron_name"],
             avg_reward=float(episode_metrics["episode_avg_reward"]),
             avg_loss=float(episode_metrics["episode_avg_loss"]),
+            avg_direction_loss=float(episode_metrics["episode_avg_direction_loss"]),
+            avg_stop_bce_loss=float(episode_metrics["episode_avg_stop_bce_loss"]),
             avg_step_norm=float(episode_metrics["episode_avg_expert_step_norm"]),
             policy_rollin_fraction=0.0,
+            false_stop_rate=float(episode_metrics["false_stop_rate"]),
+            false_continue_rate=float(episode_metrics["false_continue_rate"]),
             steps_done=steps_done,
             dataset_size=len(aggregate_buffer),
             complexity=float(env.dataset.alpha),
@@ -973,6 +1040,7 @@ def train_dagger(
                 aggregate_buffer=aggregate_buffer,
                 beta=beta,
                 rng=rng,
+                loss_config=loss_config,
             )
             steps_done += int(episode_metrics["steps_done"])
             episodes_done += 1
@@ -987,18 +1055,21 @@ def train_dagger(
             if len(aggregate_buffer) >= aggregate_memory_budget and round_collection_steps >= aggregate_memory_budget:
                 break
 
-        round_losses: List[float] = []
+        round_total_losses: List[float] = []
+        round_direction_losses: List[float] = []
+        round_stop_bce_losses: List[float] = []
         for _epoch in range(dataset_epochs_per_round):
-            round_losses.extend(
-                _run_supervision_epoch(
-                    actor=actor,
-                    actor_optimizer=actor_optimizer,
-                    aggregate_buffer=aggregate_buffer,
-                    batch_size=batch_size,
-                    transform=True,
-                    loss_config=loss_config,
-                )
+            epoch_total_losses, epoch_direction_losses, epoch_stop_bce_losses = _run_supervision_epoch(
+                actor=actor,
+                actor_optimizer=actor_optimizer,
+                aggregate_buffer=aggregate_buffer,
+                batch_size=batch_size,
+                transform=True,
+                loss_config=loss_config,
             )
+            round_total_losses.extend(epoch_total_losses)
+            round_direction_losses.extend(epoch_direction_losses)
+            round_stop_bce_losses.extend(epoch_stop_bce_losses)
             last_save_bucket = _maybe_save_checkpoint(
                 actor=actor,
                 actor_optimizer=actor_optimizer,
@@ -1014,10 +1085,10 @@ def train_dagger(
                     "beta": float(beta),
                     "dataset_size": len(aggregate_buffer),
                     "aggregate_memory_budget": memory_budget_meta,
-                    "continue_target_norm_threshold": float(loss_config.continue_target_norm_threshold),
+                    "stop_bce_weight": float(loss_config.stop_bce_weight),
+                    "stop_margin": float(loss_config.stop_margin),
+                    "stop_margin_weight": float(loss_config.stop_margin_weight),
                     "continue_weight": float(loss_config.continue_weight),
-                    "norm_floor": float(loss_config.norm_floor),
-                    "norm_floor_weight": float(loss_config.norm_floor_weight),
                 },
             )
 
@@ -1028,9 +1099,13 @@ def train_dagger(
             episode_index=episodes_done,
             image_file="__round_summary__",
             avg_reward=float(np.mean(rollout_rewards)) if rollout_rewards else 0.0,
-            avg_loss=float(np.mean(round_losses)) if round_losses else 0.0,
+            avg_loss=float(np.mean(round_total_losses)) if round_total_losses else 0.0,
+            avg_direction_loss=float(np.mean(round_direction_losses)) if round_direction_losses else 0.0,
+            avg_stop_bce_loss=float(np.mean(round_stop_bce_losses)) if round_stop_bce_losses else 0.0,
             avg_step_norm=float(np.mean(rollout_step_norms)) if rollout_step_norms else 0.0,
             policy_rollin_fraction=float(np.mean(rollout_policy_fractions)) if rollout_policy_fractions else 0.0,
+            false_stop_rate=0.0,
+            false_continue_rate=0.0,
             steps_done=steps_done,
             dataset_size=len(aggregate_buffer),
             complexity=float(env.dataset.alpha),
@@ -1051,10 +1126,10 @@ def train_dagger(
             "beta": float(final_beta),
             "dataset_size": len(aggregate_buffer),
             "aggregate_memory_budget": memory_budget_meta,
-            "continue_target_norm_threshold": float(loss_config.continue_target_norm_threshold),
+            "stop_bce_weight": float(loss_config.stop_bce_weight),
+            "stop_margin": float(loss_config.stop_margin),
+            "stop_margin_weight": float(loss_config.stop_margin_weight),
             "continue_weight": float(loss_config.continue_weight),
-            "norm_floor": float(loss_config.norm_floor),
-            "norm_floor_weight": float(loss_config.norm_floor_weight),
         },
     )
 
@@ -1077,10 +1152,10 @@ def train_dagger_online(
     save_every_steps: int = 500,
     aggregate_memory_budget: int = 10000,
     rng: Optional[np.random.Generator] = None,
-    continue_target_norm_threshold: Optional[float] = None,
+    stop_bce_weight: float = 1.0,
+    stop_margin: float = 0.0,
+    stop_margin_weight: float = 0.0,
     continue_weight: float = 1.0,
-    norm_floor: float = 0.0,
-    norm_floor_weight: float = 0.0,
 ) -> None:
     """Train a deterministic actor with online DAgger and replay-buffer updates."""
     if batch_size < 1:
@@ -1110,13 +1185,11 @@ def train_dagger_online(
     if update_after_steps < 1:
         raise ValueError("update_after_steps must be at least 1")
 
-    if continue_target_norm_threshold is None:
-        continue_target_norm_threshold = float(getattr(env, "stall_threshold", 1.0))
     loss_config = _build_supervision_loss_config(
-        continue_target_norm_threshold=continue_target_norm_threshold,
+        stop_bce_weight=stop_bce_weight,
+        stop_margin=stop_margin,
+        stop_margin_weight=stop_margin_weight,
         continue_weight=continue_weight,
-        norm_floor=norm_floor,
-        norm_floor_weight=norm_floor_weight,
     )
 
     steps_done = 0
@@ -1127,8 +1200,6 @@ def train_dagger_online(
     aggregate_buffer = BehaviorCloningReplayBuffer(capacity=aggregate_memory_budget, include_z_flip=True)
     memory_budget_meta = int(aggregate_memory_budget)
     n_dagger_episodes = int(n_episodes - warmstart_episodes)
-    false_stop_distance_threshold = float(loss_config.continue_target_norm_threshold)
-    false_continue_distance_threshold = float(loss_config.continue_target_norm_threshold)
 
     warmstart_iter = tqdm(
         range(warmstart_episodes),
@@ -1171,10 +1242,10 @@ def train_dagger_online(
                 "update_after_steps": int(update_after_steps),
                 "update_every": int(update_every),
                 "updates_per_step": int(updates_per_step),
-                "continue_target_norm_threshold": float(loss_config.continue_target_norm_threshold),
+                "stop_bce_weight": float(loss_config.stop_bce_weight),
+                "stop_margin": float(loss_config.stop_margin),
+                "stop_margin_weight": float(loss_config.stop_margin_weight),
                 "continue_weight": float(loss_config.continue_weight),
-                "norm_floor": float(loss_config.norm_floor),
-                "norm_floor_weight": float(loss_config.norm_floor_weight),
             },
         )
         _write_dagger_log_row(
@@ -1185,6 +1256,8 @@ def train_dagger_online(
             image_file=env.current_neuron_info["neuron_name"],
             avg_reward=float(episode_metrics["episode_avg_reward"]),
             avg_loss=float(episode_metrics["episode_avg_loss"]),
+            avg_direction_loss=float(episode_metrics["episode_avg_direction_loss"]),
+            avg_stop_bce_loss=float(episode_metrics["episode_avg_stop_bce_loss"]),
             avg_step_norm=float(episode_metrics["episode_avg_expert_step_norm"]),
             policy_rollin_fraction=0.0,
             false_stop_rate=float(episode_metrics["false_stop_rate"]),
@@ -1221,7 +1294,9 @@ def train_dagger_online(
         prev_rollin_action: Optional[torch.Tensor] = None
         episode_rewards: List[float] = []
         episode_step_norms: List[float] = []
-        episode_losses: List[float] = []
+        episode_total_losses: List[float] = []
+        episode_direction_losses: List[float] = []
+        episode_stop_bce_losses: List[float] = []
         policy_steps = 0
         episode_steps = 0
         choose_stop_with_target_count = 0
@@ -1230,33 +1305,36 @@ def train_dagger_online(
         false_continue_count = 0
 
         for _step_idx in count():
-            current_target_vectors = _current_target_vectors_from_env(env)
-            aggregate_buffer.push(obs, current_target_vectors)
+            current_target_vectors, current_target_stop = _current_target_action_from_env(env)
+            aggregate_buffer.push(obs, current_target_vectors, stop_label=current_target_stop)
 
             action_source = _sample_rollin_source(beta=beta, rng=rng)
             if action_source == "expert":
                 rollin_action = select_expert_action(current_target_vectors, previous_action=prev_rollin_action)
+                rollin_stop = bool(current_target_stop)
             else:
-                rollin_action = _predict_policy_action(actor, obs)
+                policy_output = _predict_policy_action(actor, obs)
+                rollin_action, rollin_stop = _decode_policy_rollin_action(
+                    policy_output,
+                    stop_action_threshold=float(getattr(env, "stop_action_threshold", 0.5)),
+                )
                 policy_steps += 1
             episode_step_norms.append(float(torch.linalg.norm(rollin_action).item()))
 
-            next_obs, reward, terminated, _truncated, info = env.step(rollin_action)
+            next_obs, reward, terminated, _truncated, info = env.step(rollin_action, stop=rollin_stop)
             steps_done += 1
             episode_steps += 1
             episode_rewards.append(_reward_to_float(reward))
 
-            current_target_distance = _min_target_norm(info.get("current_target_vectors"))
-            if current_target_distance is not None:
-                status = info.get("status")
-                if status == "choose_stop":
-                    choose_stop_with_target_count += 1
-                    if current_target_distance > false_stop_distance_threshold:
-                        false_choose_stop_count += 1
-                elif status == "continue":
-                    continue_with_target_count += 1
-                    if current_target_distance <= false_continue_distance_threshold:
-                        false_continue_count += 1
+            status = info.get("status")
+            if status == "choose_stop":
+                choose_stop_with_target_count += 1
+                if not bool(info.get("current_target_stop_label", False)):
+                    false_choose_stop_count += 1
+            elif status == "continue":
+                continue_with_target_count += 1
+                if bool(info.get("current_target_stop_label", False)):
+                    false_continue_count += 1
 
             learning_started = len(aggregate_buffer) >= update_after_steps
             if learning_started and steps_done % update_every == 0:
@@ -1270,7 +1348,10 @@ def train_dagger_online(
                         loss_config=loss_config,
                     )
                     if maybe_loss is not None:
-                        episode_losses.append(float(maybe_loss))
+                        total_loss, direction_loss, stop_bce_loss = maybe_loss
+                        episode_total_losses.append(float(total_loss))
+                        episode_direction_losses.append(float(direction_loss))
+                        episode_stop_bce_losses.append(float(stop_bce_loss))
 
                 last_save_bucket = _maybe_save_checkpoint(
                     actor=actor,
@@ -1290,10 +1371,10 @@ def train_dagger_online(
                         "update_after_steps": int(update_after_steps),
                         "update_every": int(update_every),
                         "updates_per_step": int(updates_per_step),
-                        "continue_target_norm_threshold": float(loss_config.continue_target_norm_threshold),
+                        "stop_bce_weight": float(loss_config.stop_bce_weight),
+                        "stop_margin": float(loss_config.stop_margin),
+                        "stop_margin_weight": float(loss_config.stop_margin_weight),
                         "continue_weight": float(loss_config.continue_weight),
-                        "norm_floor": float(loss_config.norm_floor),
-                        "norm_floor_weight": float(loss_config.norm_floor_weight),
                     },
                 )
 
@@ -1325,7 +1406,9 @@ def train_dagger_online(
             episode_index=episodes_done,
             image_file=env.current_neuron_info["neuron_name"],
             avg_reward=float(np.mean(episode_rewards)) if episode_rewards else 0.0,
-            avg_loss=float(np.mean(episode_losses)) if episode_losses else 0.0,
+            avg_loss=float(np.mean(episode_total_losses)) if episode_total_losses else 0.0,
+            avg_direction_loss=float(np.mean(episode_direction_losses)) if episode_direction_losses else 0.0,
+            avg_stop_bce_loss=float(np.mean(episode_stop_bce_losses)) if episode_stop_bce_losses else 0.0,
             avg_step_norm=float(np.mean(episode_step_norms)) if episode_step_norms else 0.0,
             policy_rollin_fraction=float(policy_steps / episode_steps) if episode_steps > 0 else 0.0,
             false_stop_rate=false_stop_rate,
@@ -1358,10 +1441,10 @@ def train_dagger_online(
             "update_after_steps": int(update_after_steps),
             "update_every": int(update_every),
             "updates_per_step": int(updates_per_step),
-            "continue_target_norm_threshold": float(loss_config.continue_target_norm_threshold),
+            "stop_bce_weight": float(loss_config.stop_bce_weight),
+            "stop_margin": float(loss_config.stop_margin),
+            "stop_margin_weight": float(loss_config.stop_margin_weight),
             "continue_weight": float(loss_config.continue_weight),
-            "norm_floor": float(loss_config.norm_floor),
-            "norm_floor_weight": float(loss_config.norm_floor_weight),
         },
     )
 

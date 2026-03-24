@@ -252,21 +252,20 @@ class EnvironmentMultiTargetStepTests(unittest.TestCase):
             current_position = env.paths[0][-1].clone()
             action = torch.tensor([0.0, 0.0, 1.0], dtype=torch.float32)
             next_position = current_position + action
-            target_points = next_position.unsqueeze(0) + torch.tensor(
+            expected_target_vectors = torch.tensor(
                 [[0.0, 0.0, 1.0], [0.0, 1.0, 0.0]],
                 dtype=torch.float32,
             )
 
             with mock.patch(
-                "neurotrack.environments.neuron_tracking_environment._compute_target_point",
-                return_value=target_points,
+                "neurotrack.environments.neuron_tracking_environment._compute_target_action",
+                return_value=(expected_target_vectors, False),
             ):
                 _observation, reward, terminated, truncated, info = env.step(action)
 
             self.assertFalse(terminated)
             self.assertFalse(truncated)
             torch.testing.assert_close(reward, torch.tensor([0.0], dtype=torch.float32))
-            expected_target_vectors = target_points - next_position.unsqueeze(0)
             torch.testing.assert_close(info["next_target_vectors"], expected_target_vectors)
             torch.testing.assert_close(env.target_vectors, expected_target_vectors)
 

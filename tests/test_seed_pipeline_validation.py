@@ -103,6 +103,59 @@ class SeedPipelineValidationTests(unittest.TestCase):
         self.assertIn("42", report)
         self.assertIn("40", report)
 
+    def test_format_eval_report_omits_legacy_lines_for_new_default_schema(self):
+        report = interactive_pipeline._format_eval_report(
+            "sample.tif",
+            {
+                "bidirectional_distance": 1.25,
+                "directed_div_pred_to_gt": 0.5,
+                "directed_div_gt_to_pred": 0.75,
+                "precision": 0.8,
+                "coverage": 0.9,
+                "endpoint_localization_error": 0.25,
+                "endpoint_count_error": 2,
+                "branchpoint_localization_error": 0.5,
+                "branchpoint_count_error": 1,
+            },
+        )
+
+        self.assertNotIn("Substantial pred→gt", report)
+        self.assertNotIn("Substantial gt→pred", report)
+        self.assertNotIn("Pred Nodes:", report)
+        self.assertNotIn("N/A", report)
+
+    def test_format_eval_report_includes_l_measures_when_present(self):
+        report = interactive_pipeline._format_eval_report(
+            "sample.tif",
+            {
+                "bidirectional_distance": 1.25,
+                "directed_div_pred_to_gt": 0.5,
+                "directed_div_gt_to_pred": 0.75,
+                "precision": 0.8,
+                "coverage": 0.9,
+                "endpoint_localization_error": 0.25,
+                "endpoint_count_error": 2,
+                "branchpoint_localization_error": 0.5,
+                "branchpoint_count_error": 1,
+                "num_bifurcations_pred": 3,
+                "num_bifurcations_gt": 2,
+                "span_pred": (12.0, 10.0, 9.0),
+                "span_gt": (11.0, 9.0, 8.0),
+                "different_structure_average": 1.5,
+                "percentage_different_structure_pred_to_gt": 0.2,
+                "percentage_different_structure_gt_to_pred": 0.1,
+                "percent_different_structure_average": 0.15,
+            },
+        )
+
+        self.assertIn("L-Measures", report)
+        self.assertIn("Num Bifurcations (pred/gt): 3 / 2", report)
+        self.assertIn("Span (pred/gt): (12.0, 10.0, 9.0) / (11.0, 9.0, 8.0)", report)
+        self.assertIn("Different Structure Avg: 1.5000", report)
+        self.assertIn("% Different Structure pred→gt: 0.2000", report)
+        self.assertIn("% Different Structure gt→pred: 0.1000", report)
+        self.assertIn("% Different Structure Avg: 0.1500", report)
+
     def test_adjacency_dict_handles_empty_and_single_row_inputs(self):
         self.assertEqual(adjacency_dict([]), {})
 

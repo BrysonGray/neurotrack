@@ -86,22 +86,92 @@ def _format_eval_report(image_key: str, result: Dict) -> str:
         f"Evaluation: {image_key}",
         sep,
         f"  Bidirectional Distance:    {_format_eval_value(result.get('bidirectional_distance'))}",
-        f"  Directed Div pred\u2192gt:  {_format_eval_value(result.get('directed_div_pred_to_gt'))}"
-        f"  (N={_format_eval_value(result.get('n_substantial_pred_to_gt'), decimals=0)})",
-        f"  Directed Div gt\u2192pred:  {_format_eval_value(result.get('directed_div_gt_to_pred'))}"
-        f"  (N={_format_eval_value(result.get('n_substantial_gt_to_pred'), decimals=0)})",
+        f"  Directed Div pred\u2192gt:  {_format_eval_value(result.get('directed_div_pred_to_gt'))}",
+        f"  Directed Div gt\u2192pred:  {_format_eval_value(result.get('directed_div_gt_to_pred'))}",
         f"  Precision:                {_format_eval_value(result.get('precision'))}",
         f"  Coverage:                 {_format_eval_value(result.get('coverage'))}",
         f"  Endpoint Loc Error:       {_format_eval_value(result.get('endpoint_localization_error'))}",
         f"  Endpoint Count Error:     {_format_eval_value(result.get('endpoint_count_error'), decimals=0)}",
         f"  Branchpoint Loc Error:    {_format_eval_value(result.get('branchpoint_localization_error'))}",
         f"  Branchpoint Count Error:  {_format_eval_value(result.get('branchpoint_count_error'), decimals=0)}",
-        f"  Pred Nodes: {_format_eval_value(result.get('n_points_pred'), decimals=0)}",
-        f"  |  GT Nodes: {_format_eval_value(result.get('n_points_gt'), decimals=0)}",
-
     ]
+
+    # Optional legacy/extended fields: show only when provided.
+    if "n_substantial_pred_to_gt" in result:
+        lines.append(
+            f"  Substantial pred\u2192gt:     {_format_eval_value(result.get('n_substantial_pred_to_gt'), decimals=0)}"
+        )
+    if "n_substantial_gt_to_pred" in result:
+        lines.append(
+            f"  Substantial gt\u2192pred:     {_format_eval_value(result.get('n_substantial_gt_to_pred'), decimals=0)}"
+        )
+    if "n_points_pred" in result or "n_points_gt" in result:
+        lines.append(
+            f"  Pred Nodes: {_format_eval_value(result.get('n_points_pred'), decimals=0)}"
+            f"  |  GT Nodes: {_format_eval_value(result.get('n_points_gt'), decimals=0)}"
+        )
+
     if "gt_file" in result:
         lines.append(f"  GT File: {result['gt_file']}")
+
+    l_measure_pairs = [
+        ("num_bifurcations", "Num Bifurcations"),
+        ("num_branches", "Num Branches"),
+        ("num_tips", "Num Tips"),
+        ("span", "Span"),
+        ("total_length", "Total Length"),
+        ("max_euclidean_distance", "Max Euclidean Distance"),
+        ("max_path_distance", "Max Path Distance"),
+        ("max_branch_order", "Max Branch Order"),
+        ("average_contraction", "Average Contraction"),
+        ("average_fragmentation", "Average Fragmentation"),
+        ("bifurcation_angle_local", "Bifurcation Angle Local"),
+        ("bifurcation_angle_remote", "Bifurcation Angle Remote"),
+    ]
+    pairwise_l_measure_keys = [
+        "different_structure_average",
+        "percentage_different_structure_pred_to_gt",
+        "percentage_different_structure_gt_to_pred",
+        "percent_different_structure_average",
+    ]
+
+    has_l_measures = any(
+        f"{prefix}_pred" in result or f"{prefix}_gt" in result
+        for prefix, _ in l_measure_pairs
+    ) or any(k in result for k in pairwise_l_measure_keys)
+
+    if has_l_measures:
+        lines.append(sep)
+        lines.append("L-Measures")
+        for prefix, label in l_measure_pairs:
+            pred_key = f"{prefix}_pred"
+            gt_key = f"{prefix}_gt"
+            if pred_key in result or gt_key in result:
+                lines.append(
+                    f"  {label} (pred/gt): "
+                    f"{_format_eval_value(result.get(pred_key))}"
+                    f" / {_format_eval_value(result.get(gt_key))}"
+                )
+        if "different_structure_average" in result:
+            lines.append(
+                f"  Different Structure Avg: {_format_eval_value(result.get('different_structure_average'))}"
+            )
+        if "percentage_different_structure_pred_to_gt" in result:
+            lines.append(
+                "  % Different Structure pred→gt: "
+                f"{_format_eval_value(result.get('percentage_different_structure_pred_to_gt'))}"
+            )
+        if "percentage_different_structure_gt_to_pred" in result:
+            lines.append(
+                "  % Different Structure gt→pred: "
+                f"{_format_eval_value(result.get('percentage_different_structure_gt_to_pred'))}"
+            )
+        if "percent_different_structure_average" in result:
+            lines.append(
+                "  % Different Structure Avg: "
+                f"{_format_eval_value(result.get('percent_different_structure_average'))}"
+            )
+
     return "\n".join(lines)
 
 
@@ -824,6 +894,7 @@ class _TraceSessionManager:
             result = evaluate_reconstruction(
                 pred_swc, gt_swc,
                 threshold=self.postprocess_config.distance_threshold / self.postprocess_config.get_scale_for_image(image_key),
+                return_l_measures=True,
             )
             result["image_key"] = image_key
             result["gt_file"] = str(gt_file)

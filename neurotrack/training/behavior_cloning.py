@@ -601,10 +601,8 @@ def _run_dagger_collection_episode(
         expert_choose_stop = bool(current_target_stop)
         if beta >= 1.0:
             rollin_action = expert_action.detach().cpu()
-            rollin_stop = expert_choose_stop
         elif float(rng.random()) < beta:
             rollin_action = expert_action.detach().cpu()
-            rollin_stop = expert_choose_stop
         else:
             policy_output = _predict_policy_action(actor, obs).detach().cpu()
             rollin_action, rollin_stop = _decode_policy_rollin_action(
@@ -613,7 +611,7 @@ def _run_dagger_collection_episode(
             )
             policy_steps += 1
 
-        next_obs, reward, terminated, _truncated, info = env.step(rollin_action, stop=rollin_stop)
+        next_obs, reward, terminated, _truncated, info = env.step(rollin_action, stop=expert_choose_stop) # use expert stop signal for path termination to ensure episodes aren't cut short due to policy mistakes during roll-in.
         steps_done += 1
         episode_rewards.append(_reward_to_float(reward))
 

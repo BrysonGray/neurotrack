@@ -77,6 +77,7 @@ def evaluate_postprocessed_results(
                 pred_swc,
                 gt_swc,
                 threshold=distance_threshold,
+                return_l_measures=True,
             )
             metrics["neuron_name"] = neuron_name
             metrics["gt_file"] = str(gt_file)

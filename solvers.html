@@ -77,14 +77,193 @@
 <section id="submodules">
 <h2>Submodules<a class="headerlink" href="#submodules" title="Link to this heading"></a></h2>
 </section>
-<section id="solvers-branch-classifier-module">
-<h2>solvers.branch_classifier module<a class="headerlink" href="#solvers-branch-classifier-module" title="Link to this heading"></a></h2>
+<section id="module-solvers.branch_classifier">
+<span id="solvers-branch-classifier-module"></span><h2>solvers.branch_classifier module<a class="headerlink" href="#module-solvers.branch_classifier" title="Link to this heading"></a></h2>
+<dl class="py class">
+<dt class="sig sig-object py" id="solvers.branch_classifier.StateData">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">solvers.branch_classifier.</span></span><span class="sig-name descname"><span class="pre">StateData</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">labels_file</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">img_dir</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">transform</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">target_transform</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">seed</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">0</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#solvers.branch_classifier.StateData" title="Link to this definition"></a></dt>
+<dd><p>Bases: <code class="xref py py-class docutils literal notranslate"><span class="pre">Dataset</span></code></p>
+<p>A custom Dataset class for loading and transforming image data and labels.</p>
+<dl class="py attribute">
+<dt class="sig sig-object py" id="solvers.branch_classifier.StateData.img_labels">
+<span class="sig-name descname"><span class="pre">img_labels</span></span><a class="headerlink" href="#solvers.branch_classifier.StateData.img_labels" title="Link to this definition"></a></dt>
+<dd><p>DataFrame containing image file names and corresponding labels.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>pd.DataFrame</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="solvers.branch_classifier.StateData.img_dir">
+<span class="sig-name descname"><span class="pre">img_dir</span></span><a class="headerlink" href="#solvers.branch_classifier.StateData.img_dir" title="Link to this definition"></a></dt>
+<dd><p>Directory where image files are stored.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>str</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="solvers.branch_classifier.StateData.transform">
+<span class="sig-name descname"><span class="pre">transform</span></span><a class="headerlink" href="#solvers.branch_classifier.StateData.transform" title="Link to this definition"></a></dt>
+<dd><p>A function/transform to apply to the images.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>callable, optional</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="solvers.branch_classifier.StateData.target_transform">
+<span class="sig-name descname"><span class="pre">target_transform</span></span><a class="headerlink" href="#solvers.branch_classifier.StateData.target_transform" title="Link to this definition"></a></dt>
+<dd><p>A function/transform to apply to the labels.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>callable, optional</p>
+</dd>
+</dl>
+</dd></dl>
+
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="solvers.branch_classifier.init_dataloader">
+<span class="sig-prename descclassname"><span class="pre">solvers.branch_classifier.</span></span><span class="sig-name descname"><span class="pre">init_dataloader</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">state_data</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">batchsize</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">64</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#solvers.branch_classifier.init_dataloader" title="Link to this definition"></a></dt>
+<dd><p>Initializes a DataLoader with a WeightedRandomSampler to handle imbalanced datasets.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>state_data</strong> (<em>Dataset</em>) – The dataset containing the image labels and other relevant data.</p></li>
+<li><p><strong>batchsize</strong> (<em>int</em><em>, </em><em>optional</em>) – The number of samples per batch to load (default is 64).</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>A DataLoader instance with a WeightedRandomSampler to balance the classes.</p>
+</dd>
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>DataLoader</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="solvers.branch_classifier.log_training">
+<span class="sig-prename descclassname"><span class="pre">solvers.branch_classifier.</span></span><span class="sig-name descname"><span class="pre">log_training</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">filename</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">mode</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">'a'</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#solvers.branch_classifier.log_training" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="solvers.branch_classifier.test_loop">
+<span class="sig-prename descclassname"><span class="pre">solvers.branch_classifier.</span></span><span class="sig-name descname"><span class="pre">test_loop</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">dataloader</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">model</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">loss_fn</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">logger</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#solvers.branch_classifier.test_loop" title="Link to this definition"></a></dt>
+<dd><p>Evaluate the model on the test dataset and compute various metrics.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>dataloader</strong> (<em>torch.utils.data.DataLoader</em>) – DataLoader for the test dataset.</p></li>
+<li><p><strong>model</strong> (<em>torch.nn.Module</em>) – The model to be evaluated.</p></li>
+<li><p><strong>loss_fn</strong> (<em>callable</em>) – The loss function used to compute the loss.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>This function prints the test error, accuracy, average loss, precision, and recall.</p>
+</dd>
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>None</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="solvers.branch_classifier.train">
+<span class="sig-prename descclassname"><span class="pre">solvers.branch_classifier.</span></span><span class="sig-name descname"><span class="pre">train</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">train_dataloader</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">test_dataloader</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">out_dir</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">lr</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">epochs</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">classifier</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">state_dict</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#solvers.branch_classifier.train" title="Link to this definition"></a></dt>
+<dd><p>Train a classifier model using the provided dataloaders and parameters.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>train_dataloader</strong> (<em>DataLoader</em>) – DataLoader for the training dataset.</p></li>
+<li><p><strong>test_dataloader</strong> (<em>DataLoader</em>) – DataLoader for the testing dataset.</p></li>
+<li><p><strong>out_dir</strong> (<em>str</em>) – Directory where the model checkpoints will be saved.</p></li>
+<li><p><strong>lr</strong> (<em>float</em>) – Learning rate for the optimizer.</p></li>
+<li><p><strong>epochs</strong> (<em>int</em>) – Number of epochs to train the model.</p></li>
+<li><p><strong>classifier</strong> (<em>torch.nn.Module</em>) – The classifier model to be trained.</p></li>
+<li><p><strong>state_dict</strong> (<em>dict</em><em>, </em><em>optional</em>) – State dictionary to load a previously trained model (default is None).</p></li>
+</ul>
+</dd>
+<dt class="field-even">Return type<span class="colon">:</span></dt>
+<dd class="field-even"><p>None</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="solvers.branch_classifier.train_loop">
+<span class="sig-prename descclassname"><span class="pre">solvers.branch_classifier.</span></span><span class="sig-name descname"><span class="pre">train_loop</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">dataloader</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">model</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">loss_fn</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">optimizer</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">logger</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#solvers.branch_classifier.train_loop" title="Link to this definition"></a></dt>
+<dd><p>Train the model for one epoch.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>dataloader</strong> (<em>torch.utils.data.DataLoader</em>) – DataLoader for the training data.</p></li>
+<li><p><strong>model</strong> (<em>torch.nn.Module</em>) – The model to be trained.</p></li>
+<li><p><strong>loss_fn</strong> (<em>callable</em>) – The loss function to be used.</p></li>
+<li><p><strong>optimizer</strong> (<em>torch.optim.Optimizer</em>) – The optimizer to be used for updating the model parameters.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>A list of loss values recorded during training.</p>
+</dd>
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>list</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="solvers.branch_classifier.transform">
+<span class="sig-prename descclassname"><span class="pre">solvers.branch_classifier.</span></span><span class="sig-name descname"><span class="pre">transform</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">image</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#solvers.branch_classifier.transform" title="Link to this definition"></a></dt>
+<dd><p>Apply random transformations to the input image tensor.
+The function performs the following transformations:
+1. Randomly permutes the dimensions of the image tensor.
+2. Randomly flips the image tensor along each of the last three dimensions.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>image</strong> (<em>torch.Tensor</em>) – The input image tensor to be transformed. It is expected to have at least 4 dimensions.</p>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>The transformed image tensor with the same shape as the input.</p>
+</dd>
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>torch.Tensor</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="solvers.branch_classifier.transform_spherical_patch">
+<span class="sig-prename descclassname"><span class="pre">solvers.branch_classifier.</span></span><span class="sig-name descname"><span class="pre">transform_spherical_patch</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">image</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#solvers.branch_classifier.transform_spherical_patch" title="Link to this definition"></a></dt>
+<dd><p>Apply random transformations to the input image tensor.
+The function randomly flips the image tensor along each of the last two dimensions.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters<span class="colon">:</span></dt>
+<dd class="field-odd"><p><strong>image</strong> (<em>torch.Tensor</em>) – The input image tensor to be transformed. It is expected to have at least 4 dimensions.</p>
+</dd>
+<dt class="field-even">Returns<span class="colon">:</span></dt>
+<dd class="field-even"><p>The transformed image tensor with the same shape as the input.</p>
+</dd>
+<dt class="field-odd">Return type<span class="colon">:</span></dt>
+<dd class="field-odd"><p>torch.Tensor</p>
+</dd>
+</dl>
+</dd></dl>
+
 </section>
 <section id="solvers-sac-module">
 <h2>solvers.sac module<a class="headerlink" href="#solvers-sac-module" title="Link to this heading"></a></h2>
 </section>
-<section id="module-contents">
-<h2>Module contents<a class="headerlink" href="#module-contents" title="Link to this heading"></a></h2>
+<section id="module-solvers">
+<span id="module-contents"></span><h2>Module contents<a class="headerlink" href="#module-solvers" title="Link to this heading"></a></h2>
 </section>
 </section>
 

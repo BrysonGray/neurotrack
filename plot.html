@@ -77,14 +77,39 @@
 <section id="submodules">
 <h2>Submodules<a class="headerlink" href="#submodules" title="Link to this heading"></a></h2>
 </section>
-<section id="plot-show-state-module">
-<h2>plot.show_state module<a class="headerlink" href="#plot-show-state-module" title="Link to this heading"></a></h2>
+<section id="module-plot.show_state">
+<span id="plot-show-state-module"></span><h2>plot.show_state module<a class="headerlink" href="#module-plot.show_state" title="Link to this heading"></a></h2>
+<dl class="py function">
+<dt class="sig sig-object py" id="plot.show_state.show_state">
+<span class="sig-prename descclassname"><span class="pre">plot.show_state.</span></span><span class="sig-name descname"><span class="pre">show_state</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">env</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">fig</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">returns</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">rewards</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">policy_loss</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#plot.show_state.show_state" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
 </section>
-<section id="plot-tracking-interface-module">
-<h2>plot.tracking_interface module<a class="headerlink" href="#plot-tracking-interface-module" title="Link to this heading"></a></h2>
+<section id="module-plot.tracking_interface">
+<span id="plot-tracking-interface-module"></span><h2>plot.tracking_interface module<a class="headerlink" href="#module-plot.tracking_interface" title="Link to this heading"></a></h2>
+<p>Interface for interactively evaluating the tracking environment</p>
+<dl class="py function">
+<dt class="sig sig-object py" id="plot.tracking_interface.manual_step">
+<span class="sig-prename descclassname"><span class="pre">plot.tracking_interface.</span></span><span class="sig-name descname"><span class="pre">manual_step</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">env</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">step_size</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">2.0</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#plot.tracking_interface.manual_step" title="Link to this definition"></a></dt>
+<dd></dd></dl>
+
+<dl class="py function">
+<dt class="sig sig-object py" id="plot.tracking_interface.show_state">
+<span class="sig-prename descclassname"><span class="pre">plot.tracking_interface.</span></span><span class="sig-name descname"><span class="pre">show_state</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">env</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">fig</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">live</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">ep_return</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">reward</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">policy_loss</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#plot.tracking_interface.show_state" title="Link to this definition"></a></dt>
+<dd><p>Show a single max-intensity projection (over first spatial axis) of the whole neuron.</p>
+<ul class="simple">
+<li><p>Base image: input neuron image (grayscale)</p></li>
+<li><p>Overlay: current path (plasma colormap, semi-transparent)</p></li>
+</ul>
+<p>Also draws a red rectangle centered at the current position with
+width and height equal to env.radius (in pixels).
+If live=True, also show a second subplot to the right with the current
+cropped state (env.get_state()) as an overlay: image (grayscale) + path (plasma).</p>
+</dd></dl>
+
 </section>
-<section id="module-contents">
-<h2>Module contents<a class="headerlink" href="#module-contents" title="Link to this heading"></a></h2>
+<section id="module-plot">
+<span id="module-contents"></span><h2>Module contents<a class="headerlink" href="#module-plot" title="Link to this heading"></a></h2>
 </section>
 </section>
 

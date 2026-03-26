@@ -1392,6 +1392,7 @@ def run_interactive_tracing_session(
         "img_dir": str(image_root),
         "swc_dir": config.get("swc_dir"),
         "sac_weights": config.get("sac_weights"),
+        "policy_output_mode": config.get("policy_output_mode", "direct_vector"),
         "rng_seed": config.get("rng_seed", 0),
         "step_width": config.get("step_width", 4.0),
         "soma_sample_radius": config.get("soma_sample_radius", 0.0),

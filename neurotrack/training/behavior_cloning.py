@@ -15,19 +15,15 @@ import torch
 from tqdm import tqdm
 
 from neurotrack.training.memory import BehaviorCloningReplayBuffer
+from neurotrack.training.policy_utils import (
+    bound_direction_magnitude,
+    decode_direct_vector_output,
+    prepare_observation_for_model,
+)
 
 DEVICE = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 dtype = torch.float32
 date_time = datetime.now().strftime("'%Y-%m-%d_%H-%M-%S'")
-
-
-def prepare_observation_for_model(obs, device=None, model_dtype=torch.float32):
-    """Convert uint8 observations to normalized float tensors at model input boundaries."""
-    if device is None:
-        device = obs.device
-    if obs.dtype == torch.uint8:
-        return obs.to(device=device, dtype=model_dtype) * (1.0 / 255.0)
-    return obs.to(device=device, dtype=model_dtype)
 
 
 @dataclass(frozen=True)
@@ -252,7 +248,7 @@ def _optimize_prepared_batch(
     pred_output = actor(obs_model)
     if pred_output.ndim != 2 or pred_output.shape[1] != 4:
         raise ValueError(f"Expected actor output shape (B, 4), got {tuple(pred_output.shape)}")
-    pred_directions, _, _ = _decode_policy_rollin_action(pred_output, stop_action_threshold=0.5)
+    pred_directions = bound_direction_magnitude(pred_output[:, :3], max_norm=10.0)
     pred_stop_logits = pred_output[:, 3]
     target_tensor = target_tensor.to(device=model_device, dtype=dtype)
     target_mask = target_mask.to(device=model_device)
@@ -396,37 +392,6 @@ def _predict_policy_action(actor: torch.nn.Module, obs: torch.Tensor) -> torch.T
     return pred_output[0].detach().cpu()
 
 
-def _decode_policy_rollin_action(
-    policy_output: torch.Tensor,
-    stop_action_threshold: float = 0.5,
-) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor | bool]:
-    output_t = torch.as_tensor(policy_output, dtype=torch.float32)
-    if output_t.ndim == 1:
-        if output_t.numel() != 4:
-            raise ValueError(f"Expected policy output with 4 elements, got shape {tuple(output_t.shape)}")
-        output_t = output_t.unsqueeze(0)
-        squeeze_output = True
-    elif output_t.ndim == 2:
-        if output_t.shape[1] != 4:
-            raise ValueError(f"Expected policy output shape (B, 4), got {tuple(output_t.shape)}")
-        squeeze_output = False
-    else:
-        raise ValueError(f"Expected policy output with shape (4,) or (B, 4), got {tuple(output_t.shape)}")
-
-    # Smoothly scale direction magnitudes into [0, 10] while preserving direction.
-    direction = output_t[:, :3]
-    direction_norm = torch.linalg.norm(direction, dim=-1, keepdim=True)
-    direction_scale = torch.tanh(direction_norm) * 10.0
-    direction = direction * direction_scale / (direction_norm + torch.finfo(output_t.dtype).eps)
-
-    stop_prob = torch.sigmoid(output_t[:, 3])
-    choose_stop = stop_prob > float(stop_action_threshold)
-
-    if squeeze_output:
-        return direction[0], stop_prob[0], bool(choose_stop[0].item())
-    return direction, stop_prob, choose_stop
-
-
 def _sample_rollin_source(
     beta: float,
     rng: np.random.Generator,
@@ -471,10 +436,6 @@ def _run_supervision_epoch(
             direction_losses.append(float(direction_loss))
             stop_bce_losses.append(float(stop_bce_loss))
     return total_losses, direction_losses, stop_bce_losses
-
-
-def _reward_to_float(reward: torch.Tensor | float) -> float:
-    return float(torch.as_tensor(reward, dtype=torch.float32).item())
 
 
 def _compute_dagger_beta(round_index: int, dagger_rounds: int, beta_start: float, beta_end: float) -> float:
@@ -542,7 +503,7 @@ def _run_expert_episode(
 
         next_obs, reward, terminated, _truncated, info = env.step(expert_action, stop=expert_choose_stop)
         steps_done += 1
-        episode_rewards.append(_reward_to_float(reward))
+        episode_rewards.append(float(torch.as_tensor(reward, dtype=torch.float32).item()))
 
         status = info.get("status")
         if status == "choose_stop":
@@ -623,7 +584,7 @@ def _run_dagger_collection_episode(
             rollin_action = expert_action.detach().cpu()
         else:
             policy_output = _predict_policy_action(actor, obs).detach().cpu()
-            rollin_action, _, _ = _decode_policy_rollin_action(
+            rollin_action, _, _ = decode_direct_vector_output(
                 policy_output,
                 stop_action_threshold=float(getattr(env, "stop_action_threshold", 0.5)),
             )
@@ -631,7 +592,7 @@ def _run_dagger_collection_episode(
 
         next_obs, reward, terminated, _truncated, info = env.step(rollin_action, stop=expert_choose_stop) # use expert stop signal for path termination to ensure episodes aren't cut short due to policy mistakes during roll-in.
         steps_done += 1
-        episode_rewards.append(_reward_to_float(reward))
+        episode_rewards.append(float(torch.as_tensor(reward, dtype=torch.float32).item()))
 
         if info["terminate_episode"]:
             break
@@ -1341,7 +1302,7 @@ def train_dagger_online(
                 rollin_action = select_expert_action(current_target_vectors, previous_action=prev_rollin_action)
             else:
                 policy_output = _predict_policy_action(actor, obs)
-                rollin_action, _, _ = _decode_policy_rollin_action(
+                rollin_action, _, _ = decode_direct_vector_output(
                     policy_output,
                     stop_action_threshold=float(getattr(env, "stop_action_threshold", 0.5)),
                 )
@@ -1351,7 +1312,7 @@ def train_dagger_online(
             next_obs, reward, terminated, _truncated, info = env.step(rollin_action, stop=current_target_stop) # use expert stop signal for path termination to ensure episodes aren't cut short due to policy mistakes during roll-in.
             steps_done += 1
             episode_steps += 1
-            episode_rewards.append(_reward_to_float(reward))
+            episode_rewards.append(float(torch.as_tensor(reward, dtype=torch.float32).item()))
 
             status = info.get("status")
             if status == "choose_stop":

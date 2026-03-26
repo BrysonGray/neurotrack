@@ -73,7 +73,9 @@ def load_models(
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     state_dicts = torch.load(params["sac_weights"], map_location=device)
-    policy_output_mode = str(state_dicts.get("policy_output_mode", "gaussian"))
+    policy_output_mode = str(
+        params.get("policy_output_mode", state_dicts.get("policy_output_mode", "direct_vector"))
+    )
     if policy_output_mode == "direct_vector":
         policy_output_dim = int(state_dicts.get("policy_output_dim", 4))
     else:

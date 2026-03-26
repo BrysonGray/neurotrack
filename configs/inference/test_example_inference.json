@@ -5,10 +5,10 @@
   "out_dir": "/home/brysongray/data/neurotrack_data/inference_outputs/bc_test_inference/",
   "test_name": "test_bc_stop_head_inference",
 
-  "sac_weights": "/home/brysongray/data/neurotrack_data/model_weights/bc_weights/training_outputs_stop_head/model_state_dicts_bc_stop_head_experiment_'2026-03-24_12-39-58'.pt",
+  "sac_weights": "/home/brysongray/data/neurotrack_data/model_weights/bc_weights/training_outputs_stop_head/model_state_dicts_bc_stop_head_experiment_'2026-03-25_18-28-55'.pt",
 
   "step_width": 2.0,
-  "repeat_starts": true,
+  "repeat_starts": false,
   "rng_seed": 1,
   "n_trials": 1,
   "review_before_next": true,

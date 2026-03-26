@@ -228,25 +228,6 @@ class NeuronTrackingEnvironment:
                 binary=False
             )
 
-    def _decode_action(self, action: torch.Tensor, stop: Optional[bool] = None) -> Tuple[torch.Tensor, bool, Optional[float]]:
-        """Decode raw policy output into direction, stop decision, and optional stop probability."""
-        action_t = torch.as_tensor(action, dtype=torch.float32)
-        if action_t.ndim != 1:
-            action_t = action_t.view(-1)
-        if action_t.numel() < 3:
-            raise ValueError(f"Action must have at least 3 values, got shape {tuple(action_t.shape)}")
-
-        direction = action_t[:3]
-        stop_probability: Optional[float] = None
-        if stop is None and action_t.numel() >= 4:
-            stop_probability = float(torch.sigmoid(action_t[3]).item())
-            choose_stop = stop_probability > self.stop_action_threshold
-        elif stop is None:
-            choose_stop = False
-        else:
-            choose_stop = bool(stop)
-        return direction, choose_stop, stop_probability
-
     def _get_status(self, new_position):
         """
         Determine the status of a proposed new position and whether to terminate the path.
@@ -283,7 +264,17 @@ class NeuronTrackingEnvironment:
         """Step function for inference-only mode without neuron tree or mask."""
         terminated = False
         truncated = False
-        direction, choose_stop, stop_probability = self._decode_action(action, stop=stop)
+        direction = torch.as_tensor(action, dtype=torch.float32)
+        if direction.ndim != 1:
+            direction = direction.view(-1)
+        if direction.numel() != 3:
+            raise ValueError(
+                "env.step expects a decoded 3D direction action. "
+                "Decode policy outputs before stepping and pass stop explicitly. "
+                f"Got shape {tuple(direction.shape)}"
+            )
+        choose_stop = bool(stop) if stop is not None else False
+        stop_probability = None
 
         info = {
             'terminate_episode': False,
@@ -362,10 +353,11 @@ class NeuronTrackingEnvironment:
             self.id_to_idx,
             self.close_dist2,
             neuron_root_ids=self.neuron_root_ids,
+            max_dist=2*self.radius,
         )
         if self.section_nodes is not None:
             self.section_assigned = True
-            self.target_vectors, self.target_stop_label = _compute_target_action(
+            self.target_vectors, self.target_stop_label, _ = _compute_target_action(
                 current_position,
                 self.unvisited_tree,
                 self.target_step_len,
@@ -386,7 +378,7 @@ class NeuronTrackingEnvironment:
                 self.section_nodes, terminals = _get_connected_nodes(
                     nearest_node,
                     adj_dict=self.adj_dict,
-                    max_dist=12.0,
+                    max_dist=2*self.radius,
                     swc_list=self.unvisited_tree,
                     id_to_idx=self.id_to_idx,
                     neuron_root_ids=self.neuron_root_ids,
@@ -394,7 +386,7 @@ class NeuronTrackingEnvironment:
                 if terminals:
                     self.terminal_points = torch.stack([self.unvisited_tree[self.id_to_idx[int(t)], 2:5] for t in terminals])
                 self.section_assigned = True
-                self.target_vectors, self.target_stop_label = _compute_target_action(
+                self.target_vectors, self.target_stop_label, _ = _compute_target_action(
                     current_position,
                     self.unvisited_tree,
                     self.target_step_len,
@@ -457,7 +449,7 @@ class NeuronTrackingEnvironment:
         tuple
             (observation, reward, terminated, truncated, info) - the new state, reward, termination flag,
             truncation flag, and additional information.
-            Path termination occurs on explicit stop decisions (via ``stop`` or action[3] logit),
+            Path termination occurs on explicit stop decisions via ``stop``,
             out-of-image moves, and path limits.
         """
         if self.img is None:
@@ -473,7 +465,17 @@ class NeuronTrackingEnvironment:
                     'current_target_vectors': None,
                     'next_target_vectors': None,}
 
-            direction, choose_stop, stop_probability = self._decode_action(action, stop=stop)
+            direction = torch.as_tensor(action, dtype=torch.float32)
+            if direction.ndim != 1:
+                direction = direction.view(-1)
+            if direction.numel() != 3:
+                raise ValueError(
+                    "env.step expects a decoded 3D direction action. "
+                    "Decode policy outputs before stepping and pass stop explicitly. "
+                    f"Got shape {tuple(direction.shape)}"
+                )
+            choose_stop = bool(stop) if stop is not None else False
+            stop_probability = None
             info['stop_probability'] = stop_probability
             current_position = self.paths[0][-1]
             info['current_target_vectors'] = self.target_vectors
@@ -532,8 +534,7 @@ class NeuronTrackingEnvironment:
                             self.adj_dict,
                             self.id_to_idx,
                             close_dist2,
-                            neuron_root_ids=self.neuron_root_ids,
-                        )
+                            neuron_root_ids=self.neuron_root_ids,                            max_dist=2*self.radius,                        )
                         
                         self.section_assigned = True
                     
@@ -563,6 +564,7 @@ class NeuronTrackingEnvironment:
                                     self.id_to_idx,
                                     close_dist2,
                                     neuron_root_ids=self.neuron_root_ids,
+                                    max_dist=2*self.radius,
                             )
 
                     # Create new branches
@@ -576,7 +578,7 @@ class NeuronTrackingEnvironment:
                             self._append_branch_root(new_position)
 
                     # Compute next target action
-                    self.target_vectors, self.target_stop_label = _compute_target_action(
+                    self.target_vectors, self.target_stop_label, nearest_section_point_dist2 = _compute_target_action(
                         new_position,
                         self.unvisited_tree,
                         self.target_step_len,
@@ -590,39 +592,12 @@ class NeuronTrackingEnvironment:
                     info['next_target_vectors'] = self.target_vectors
                     info['next_target_stop_label'] = bool(self.target_stop_label)
 
-                    # If the section is assigned but no section nodes are found in the window, this means the agent has walked away from the assigned section. In this case, truncate the path.
-                    # if self.section_assigned and self.section_nodes is not None:
-                    #     # Filter section_nodes to only include nodes still in id_to_idx (not visited/removed yet)
-                    #     valid_section_nodes = [node for node in self.section_nodes if int(node) in self.id_to_idx]
-                    #     if valid_section_nodes:
-                    #         section_indices = [self.id_to_idx[int(node)] for node in valid_section_nodes]
-                    #         section_points = self.unvisited_tree[section_indices, 2:5]
-                    #         nearest_section_node_dist2 = torch.sum((section_points - new_position.unsqueeze(0)) ** 2, dim=1).min()
-                    #         if nearest_section_node_dist2 > self.radius**2:
-                    #             truncated = True
-                    #             info['terminate_episode'] = self._terminate_path()
-                    #     else:
-                    #         # All section nodes have been visited; truncate the path
-                    #         truncated = True
-                    #         info['terminate_episode'] = self._terminate_path()
+                    # If the section is assigned but no section nodes are found within the distance cutoff, this means the agent has walked away from the assigned section. In this case, truncate the path.
+                    if self.section_assigned and self.section_nodes is not None:
+                        if nearest_section_point_dist2 > self.close_dist2:
+                            truncated = True
+                            info['terminate_episode'] = self._terminate_path()
 
-                    # # if no neuron nodes or termination points are within radius, then if the path has already been assigned
-                    # # a section but walked away from it, truncate the path. If the path has no section assigned, i.e. it started
-                    # # at a new path with no neuron within the agent window, then the target point is the current position.
-                    # target_out_of_window = len(target_points) == 0 or ((target_points - new_position)**2).sum(dim=1).min() > self.radius**2
-                    # if target_out_of_window: # target out of window
-                    #     if self.section_assigned: # if no target points found in window and section already assigned, truncate.
-                    #         # truncate path
-                    #         truncated = True
-                    #         info['terminate_episode'] = self._terminate_path()
-                    #     else: # if no target points found and no section assigned, set target to current position.
-                    #         self.target_vectors = self._zero_target_vectors(device=direction.device)
-                    #         info['next_target_vectors'] = self.target_vectors
-                    # else: # target points found in window
-                    #     if not self.section_assigned: # if target points found and no section assigned, assign section.
-                    #         self.section_assigned = True
-                    #     self.target_vectors = self._target_vectors_from_points(new_position, target_points)
-                    #     info['next_target_vectors'] = self.target_vectors
 
         return observation, reward, terminated, truncated, info
 

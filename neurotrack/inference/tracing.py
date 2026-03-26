@@ -7,7 +7,11 @@ import torch
 from itertools import count
 from typing import Optional
 
-from neurotrack.training.sac import sample_from_output, prepare_observation_for_model
+from neurotrack.training.policy_utils import (
+    decode_direct_vector_output,
+    prepare_observation_for_model,
+    sample_from_output,
+)
 from neurotrack.training.env_inspector import show_state
 
 DEVICE = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -21,13 +25,12 @@ def _select_action_from_actor_output(
 ):
     """Convert actor outputs into an action tensor for tracing."""
     if policy_output_mode == "direct_vector":
-        action_out = actor_out[0].view(-1)
-        if action_out.numel() != 4:
-            raise ValueError(f"Expected direct_vector actor output of size 4, got {tuple(action_out.shape)}")
-        action = action_out[:3]
-        stop_probability = float(torch.sigmoid(action_out[3]).item())
-        choose_stop = stop_probability > float(stop_action_threshold)
-        return action, None, choose_stop, stop_probability
+        direction, stop_prob, choose_stop = decode_direct_vector_output(
+            actor_out[0],
+            stop_action_threshold=stop_action_threshold,
+        )
+        stop_probability = float(stop_prob.item())
+        return direction, None, choose_stop, stop_probability
 
     direction_dist = sample_from_output(actor_out)
     if stochastic:
@@ -135,7 +138,7 @@ def trace_image(
         plt.ion()
 
     actor.eval()
-    policy_output_mode = getattr(actor, "policy_output_mode", "gaussian")
+    policy_output_mode = getattr(actor, "policy_output_mode", "direct_vector")
     trace_start_time = time.perf_counter()
     timing_ms = {
         "reset_and_mask": 0.0,

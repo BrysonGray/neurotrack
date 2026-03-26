@@ -7,6 +7,11 @@ import torch
 from neurotrack.data import loading as load
 from neurotrack.environments import tracking_reward
 from neurotrack.training.behavior_cloning import select_expert_action
+from neurotrack.training.policy_utils import (
+    decode_direct_vector_output,
+    prepare_observation_for_model,
+    sample_from_output,
+)
 
 def get_unvisited_sections(env):
     """Safely parse the current unvisited tree into drawable sections."""
@@ -189,9 +194,6 @@ def run_expert_episode(env):
         stop_label = bool(getattr(environment, 'target_stop_label', False))
         return torch.as_tensor(target_vectors, dtype=torch.float32).view(-1, 3), stop_label
 
-    def _reward_to_float(reward):
-        return float(torch.as_tensor(reward, dtype=torch.float32).item())
-
     obs = env.reset(return_state=True)
     prev_expert_action = None
     total_reward = 0.0
@@ -204,7 +206,7 @@ def run_expert_episode(env):
 
         next_obs, reward, terminated, _truncated, info = env.step(expert_action, stop=expert_choose_stop)
         steps_done += 1
-        total_reward += _reward_to_float(reward)
+        total_reward += float(torch.as_tensor(reward, dtype=torch.float32).item())
 
         if info.get('terminate_episode', False):
             break
@@ -231,6 +233,178 @@ def run_expert_episode(env):
     }
 
 
+def _policy_action_step(actor, obs, stochastic=False):
+    """Compute one policy action from the current observation.
+
+    Returns
+    -------
+    direction : torch.Tensor
+        Decoded 3D direction vector to pass to env.step.
+    choose_stop : bool
+        Explicit stop decision decoded from policy output when applicable.
+    stop_probability : Optional[float]
+        Decoded stop probability for logging (None for non-direct-vector policies).
+    """
+    model_device = next(actor.parameters()).device
+    obs_model = prepare_observation_for_model(obs.detach(), device=model_device, model_dtype=torch.float32)
+
+    with torch.no_grad():
+        actor_out = actor(obs_model)
+
+    policy_output_mode = getattr(actor, 'policy_output_mode', 'direct_vector')
+    if policy_output_mode == 'direct_vector':
+        direction, stop_prob, _choose_stop = decode_direct_vector_output(
+            actor_out,
+            stop_action_threshold=float(getattr(getattr(actor, 'env', None), 'stop_action_threshold', 0.5)),
+        )
+        if direction.ndim == 2:
+            direction = direction[0]
+        if stop_prob.ndim > 0:
+            stop_prob = stop_prob[0]
+        choose_stop = bool(stop_prob.item() > float(getattr(getattr(actor, 'env', None), 'stop_action_threshold', 0.5)))
+        return direction.view(3).detach().cpu(), choose_stop, float(stop_prob.item())
+
+    direction_dist = sample_from_output(actor_out)
+    if stochastic:
+        action = direction_dist.sample()[0]
+    else:
+        action = direction_dist.mean[0]
+    return action.detach().cpu(), False, None
+
+
+def policy_step(env, actor, stochastic=False):
+    """
+    Step through environment dynamics one policy action at a time.
+
+    Controls:
+      - Enter: take one policy step
+      - t: force explicit stop on this step
+      - r: reset environment
+      - b: branch at current point
+      - q: quit
+    """
+    from IPython.display import clear_output, display as ipy_display
+    import matplotlib.pyplot as plt
+
+    plt.ioff()
+
+    fig = plt.figure(figsize=(16, 12))
+    gs = fig.add_gridspec(3, 2, wspace=0.05, hspace=0.15)
+
+    ax0 = fig.add_subplot(gs[0, 0])
+    ax1 = fig.add_subplot(gs[0, 1])
+    ax2 = fig.add_subplot(gs[1, 0])
+    ax3 = fig.add_subplot(gs[1, 1])
+    ax4 = fig.add_subplot(gs[2, 0])
+    ax5 = fig.add_subplot(gs[2, 1])
+    axes = [ax0, ax1, ax2, ax3, ax4, ax5]
+
+    skeleton_color = 'tab:gray'
+    path_color = 'tab:orange'
+    target_color = 'tab:red'
+    sections = get_unvisited_sections(env)
+
+    total_steps = 0
+    total_policy_steps = 0
+
+    while True:
+        action_key = input('Press Enter for policy step, or [t stop, r reset, b branch, q quit]: ').strip().lower()
+        reward = None
+
+        if action_key == 'q':
+            break
+        elif action_key == 'r':
+            env.reset()
+            sections = get_unvisited_sections(env)
+            print('Environment reset.')
+            continue
+        elif action_key == 'b':
+            if len(env.paths) > 0 and len(env.paths[0]) > 0:
+                point = env.paths[0][-1]
+                env.paths.append([point])
+                env._append_branch_root(point)
+                env.img.draw_point(point, radius=(env.step_width / 2.35), channel=-1, mode='gaussian', binary=False)
+            sections = get_unvisited_sections(env)
+            print('Added branch at current point.')
+            continue
+
+        clear_output(wait=True)
+
+        if action_key == 't':
+            direction = torch.zeros((3,), dtype=torch.float32)
+            observation, reward, terminated, truncated, info = env.step(direction, verbose=True, stop=True)
+        else:
+            obs = env.get_state()
+            direction, choose_stop, stop_probability = _policy_action_step(actor=actor, obs=obs, stochastic=stochastic)
+            observation, reward, terminated, truncated, info = env.step(direction, verbose=True, stop=choose_stop)
+            if stop_probability is not None:
+                info['stop_probability'] = stop_probability
+            total_policy_steps += 1
+
+        total_steps += 1
+
+        for a in axes:
+            a.clear()
+
+        img = env.img.data[0].amax(dim=0)
+        path_im = env.img.data[-1].amax(dim=0)
+        ax0.imshow(img, cmap='gray')
+        ax0.imshow(path_im, cmap='gray', alpha=0.5)
+        ax0.set_title('Full image + path')
+        ax0.axis('off')
+
+        patch = observation[0]
+        z_index = getattr(env, 'radius', patch.shape[1] // 2)
+        z_index = int(max(0, min(int(z_index), patch.shape[1] - 1)))
+        slice_ = patch[:, z_index]
+        ax1.imshow(slice_[0], cmap='gray')
+        ax1.imshow(slice_[-1], cmap='gray', alpha=0.5)
+        ax1.set_title('Cropped patch + path')
+        ax1.axis('off')
+
+        sections = get_unvisited_sections(env)
+
+        draw_2d_panel(ax2, env, cropped=False, sections=sections, dim=0,
+                      skeleton_color=skeleton_color, path_color=path_color, target_color=target_color)
+        draw_2d_panel(ax3, env, cropped=True, sections=sections, dim=0,
+                      skeleton_color=skeleton_color, path_color=path_color, target_color=target_color)
+        draw_2d_panel(ax4, env, cropped=True, sections=sections, dim=1,
+                      skeleton_color=skeleton_color, path_color=path_color, target_color=target_color)
+        draw_2d_panel(ax5, env, cropped=True, sections=sections, dim=2,
+                      skeleton_color=skeleton_color, path_color=path_color, target_color=target_color)
+
+        ipy_display(plt.gcf())
+
+        direction_norm = float(torch.linalg.norm(torch.as_tensor(direction, dtype=torch.float32)).item())
+        print(f'step: {total_steps} (policy steps: {total_policy_steps})')
+        print(f'direction: {torch.as_tensor(direction, dtype=torch.float32).tolist()}')
+        print(f'direction_norm: {direction_norm:.4f}')
+        print(f'reward: {reward}')
+        print(f"status: {info.get('status')}")
+        print(f"terminated: {info.get('terminate_episode')}")
+        print(f"stop_probability: {info.get('stop_probability')}")
+        print(f"current_target_stop_label: {info.get('current_target_stop_label')}")
+
+        if info.get('terminate_episode'):
+            print('All paths finished. Resetting environment.')
+            env.reset()
+            sections = get_unvisited_sections(env)
+
+    try:
+        sections = get_unvisited_sections(env)
+        draw_2d_panel(ax2, env, cropped=False, sections=sections, dim=0,
+                      skeleton_color=skeleton_color, path_color=path_color, target_color=target_color)
+        draw_2d_panel(ax3, env, cropped=True, sections=sections, dim=0,
+                      skeleton_color=skeleton_color, path_color=path_color, target_color=target_color)
+        draw_2d_panel(ax4, env, cropped=True, sections=sections, dim=1,
+                      skeleton_color=skeleton_color, path_color=path_color, target_color=target_color)
+        draw_2d_panel(ax5, env, cropped=True, sections=sections, dim=2,
+                      skeleton_color=skeleton_color, path_color=path_color, target_color=target_color)
+        ipy_display(plt.gcf())
+    except Exception:
+        pass
+
+
 def manual_step(env, step_size=4.0):
     """
     Interactive manual stepping helper.
@@ -241,7 +415,7 @@ def manual_step(env, step_size=4.0):
         - t: explicit stop (calls env.step(..., stop=True))
         - z: zero direction without stop (debug no-op)
         - x: use expert direction + expert stop label
-        - g: raw 4D action mode; prompts for stop logit and uses env action[3] decoding
+                - g: enter stop logit; decoded with policy_utils before env.step
       - r: reset environment
       - b: branch at current point
       - q: quit
@@ -290,7 +464,7 @@ def manual_step(env, step_size=4.0):
         elif action_key == 'b':
             point = env.paths[0][-1]
             env.paths.append([point])
-            env._append_root(point)
+            env._append_branch_root(point)
             env.img.draw_point(point, radius=(env.step_width / 2.35), channel=-1, mode='gaussian', binary=False)
 
         else:
@@ -315,9 +489,13 @@ def manual_step(env, step_size=4.0):
                 except ValueError:
                     stop_logit = 4.0
                     print('Invalid stop logit; defaulting to 4.0')
-                action = torch.cat((direction.to(device=device, dtype=torch.float32), torch.tensor([stop_logit], device=device)))
-                choose_stop = False
-                use_explicit_stop = False
+                action4 = torch.cat((direction.to(device=device, dtype=torch.float32), torch.tensor([stop_logit], device=device)))
+                direction_decoded, _stop_prob, choose_stop = decode_direct_vector_output(
+                    action4,
+                    stop_action_threshold=float(getattr(env, 'stop_action_threshold', 0.5)),
+                )
+                action = direction_decoded.to(device=device, dtype=torch.float32)
+                use_explicit_stop = True
             else:
                 action = user_input_dict[action_key].to(device=device)
                 action = action * getattr(env, 'target_step_len', step_size)
@@ -325,10 +503,7 @@ def manual_step(env, step_size=4.0):
                 use_explicit_stop = True
 
             clear_output(wait=True)
-            if use_explicit_stop:
-                observation, reward, terminated, truncated, info = env.step(action, verbose=True, stop=choose_stop)
-            else:
-                observation, reward, terminated, truncated, info = env.step(action, verbose=True)
+            observation, reward, terminated, truncated, info = env.step(action, verbose=True, stop=choose_stop)
 
             for a in axes:
                 a.clear()

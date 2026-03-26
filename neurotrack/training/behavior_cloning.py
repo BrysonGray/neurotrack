@@ -252,7 +252,7 @@ def _optimize_prepared_batch(
     pred_output = actor(obs_model)
     if pred_output.ndim != 2 or pred_output.shape[1] != 4:
         raise ValueError(f"Expected actor output shape (B, 4), got {tuple(pred_output.shape)}")
-    pred_directions = pred_output[:, :3]
+    pred_directions, _, _ = _decode_policy_rollin_action(pred_output, stop_action_threshold=0.5)
     pred_stop_logits = pred_output[:, 3]
     target_tensor = target_tensor.to(device=model_device, dtype=dtype)
     target_mask = target_mask.to(device=model_device)
@@ -396,17 +396,35 @@ def _predict_policy_action(actor: torch.nn.Module, obs: torch.Tensor) -> torch.T
     return pred_output[0].detach().cpu()
 
 
-def _decode_policy_rollin_action(policy_output: torch.Tensor, stop_action_threshold: float = 0.5) -> Tuple[torch.Tensor, bool]:
-    output_t = torch.as_tensor(policy_output, dtype=torch.float32).view(-1)
-    if output_t.numel() != 4:
-        raise ValueError(f"Expected policy output with 4 elements, got shape {tuple(output_t.shape)}")
-    # scale the direction output to have a maximum norm of 10, using a tanh on the norm to smoothly limit it while preserving directionality
-    direction = output_t[:3]
+def _decode_policy_rollin_action(
+    policy_output: torch.Tensor,
+    stop_action_threshold: float = 0.5,
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor | bool]:
+    output_t = torch.as_tensor(policy_output, dtype=torch.float32)
+    if output_t.ndim == 1:
+        if output_t.numel() != 4:
+            raise ValueError(f"Expected policy output with 4 elements, got shape {tuple(output_t.shape)}")
+        output_t = output_t.unsqueeze(0)
+        squeeze_output = True
+    elif output_t.ndim == 2:
+        if output_t.shape[1] != 4:
+            raise ValueError(f"Expected policy output shape (B, 4), got {tuple(output_t.shape)}")
+        squeeze_output = False
+    else:
+        raise ValueError(f"Expected policy output with shape (4,) or (B, 4), got {tuple(output_t.shape)}")
+
+    # Smoothly scale direction magnitudes into [0, 10] while preserving direction.
+    direction = output_t[:, :3]
     direction_norm = torch.linalg.norm(direction, dim=-1, keepdim=True)
-    direction_norm_ = torch.tanh(direction_norm)*10 # maximum of 10
-    direction = direction * direction_norm_/(direction_norm + torch.finfo(output_t.dtype).eps)
-    choose_stop = bool(torch.sigmoid(output_t[3]).item() > float(stop_action_threshold))
-    return direction, choose_stop
+    direction_scale = torch.tanh(direction_norm) * 10.0
+    direction = direction * direction_scale / (direction_norm + torch.finfo(output_t.dtype).eps)
+
+    stop_prob = torch.sigmoid(output_t[:, 3])
+    choose_stop = stop_prob > float(stop_action_threshold)
+
+    if squeeze_output:
+        return direction[0], stop_prob[0], bool(choose_stop[0].item())
+    return direction, stop_prob, choose_stop
 
 
 def _sample_rollin_source(
@@ -605,7 +623,7 @@ def _run_dagger_collection_episode(
             rollin_action = expert_action.detach().cpu()
         else:
             policy_output = _predict_policy_action(actor, obs).detach().cpu()
-            rollin_action, rollin_stop = _decode_policy_rollin_action(
+            rollin_action, _, _ = _decode_policy_rollin_action(
                 policy_output,
                 stop_action_threshold=float(getattr(env, "stop_action_threshold", 0.5)),
             )
@@ -1321,17 +1339,16 @@ def train_dagger_online(
             action_source = _sample_rollin_source(beta=beta, rng=rng)
             if action_source == "expert":
                 rollin_action = select_expert_action(current_target_vectors, previous_action=prev_rollin_action)
-                rollin_stop = bool(current_target_stop)
             else:
                 policy_output = _predict_policy_action(actor, obs)
-                rollin_action, rollin_stop = _decode_policy_rollin_action(
+                rollin_action, _, _ = _decode_policy_rollin_action(
                     policy_output,
                     stop_action_threshold=float(getattr(env, "stop_action_threshold", 0.5)),
                 )
                 policy_steps += 1
             episode_step_norms.append(float(torch.linalg.norm(rollin_action).item()))
 
-            next_obs, reward, terminated, _truncated, info = env.step(rollin_action, stop=rollin_stop)
+            next_obs, reward, terminated, _truncated, info = env.step(rollin_action, stop=current_target_stop) # use expert stop signal for path termination to ensure episodes aren't cut short due to policy mistakes during roll-in.
             steps_done += 1
             episode_steps += 1
             episode_rewards.append(_reward_to_float(reward))

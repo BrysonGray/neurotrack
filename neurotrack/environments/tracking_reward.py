@@ -1316,35 +1316,43 @@ def _add_to_visited(start_point: Union[torch.Tensor, np.ndarray],
     # Check if start and end points are on the same edge.
     if start_edge == end_edge or start_edge == (end_edge[1], end_edge[0]):
         edge = start_edge
+        if visited.get(edge) is None:
+            edge = (edge[1], edge[0])
+
         start_node_pos = swc_t[id_to_idx[int(edge[0])], 2:5]
         end_node_pos = swc_t[id_to_idx[int(edge[1])], 2:5]
         edge_vec = end_node_pos - start_node_pos
-        edge_length = torch.linalg.norm(edge_vec).item()
-        if edge_length > 0.0:
-            # Determine direction: which node is closer to the points
-            # Start from node nearest to any path point and go from that node to the farthest path point from it.
-            dists_sq = torch.tensor([
-                torch.sum((start_node_pos - neuron_start_point) ** 2),
-                torch.sum((start_node_pos - neuron_end_point) ** 2),
-                torch.sum((end_node_pos - neuron_start_point) ** 2),
-                torch.sum((end_node_pos - neuron_end_point) ** 2)
-            ], dtype=torch.float32)
+        edge_len_sq = torch.dot(edge_vec, edge_vec)
 
-            nearest_node_index = int(torch.argmin(dists_sq).item())
-            if nearest_node_index in [2, 3]: # nearest to end_node
-                # reverse edge order so coverage is positive from edge[1] toward edge[0].
-                edge = (edge[1], edge[0])
-                t = torch.sqrt(dists_sq[2:].max()).item() / edge_length
-            else: # nearest to start_node
-                t = torch.sqrt(dists_sq[:2].max()).item() / edge_length
+        if float(edge_len_sq.item()) <= 1e-12:
+            visited[edge] = 1.0
+            return visited, neuron_end_point
 
+        def _project_fraction(point_on_edge: torch.Tensor) -> float:
+            frac = torch.dot(point_on_edge - start_node_pos, edge_vec) / edge_len_sq
+            return float(torch.clamp(frac, min=0.0, max=1.0).item())
+
+        frac_start = _project_fraction(neuron_start_point)
+        frac_end = _project_fraction(neuron_end_point)
+        low = min(frac_start, frac_end)
+        high = max(frac_start, frac_end)
+        eps = 1e-4
+
+        # Ignore numerically tiny steps.
+        if high - low <= eps:
+            return visited, neuron_end_point
+
+        # Keep the existing scalar format for one-sided traversals.
+        # For true middle-segment traversal, store an interval (low, high)
+        # so remove_visited can split into two cut boundaries.
+        if low <= eps and high >= (1.0 - eps):
+            visited[edge] = 1.0
+        elif low <= eps:
+            visited[edge] = float(high)
+        elif high >= (1.0 - eps):
+            visited[edge] = float(low - 1.0)
         else:
-            t = 1.0
-
-        if visited.get(edge) is None:
-            edge = (edge[1], edge[0])
-            t = -t
-        visited[edge] = float(t)
+            visited[edge] = (float(low), float(high))
 
     else:
         # find path between start and end nodes
@@ -1425,12 +1433,109 @@ def remove_visited(swc_list: Union[np.ndarray, torch.Tensor],
     # Compute max node ID once; incremented per new node to avoid O(n) scan per partial edge.
     next_node_id = int(swc_list[:, 0].max().item()) + 1
     for edge, coverage in visited.copy().items():
-        if abs(coverage) < 1e-3:
+        if isinstance(coverage, (tuple, list)) and len(coverage) == 2:
+            low, high = float(coverage[0]), float(coverage[1])
+            low = max(0.0, min(1.0, low))
+            high = max(0.0, min(1.0, high))
+            if high - low <= 1e-3:
+                nodes_to_keep.update(edge)
+                continue
+
+            n0 = int(edge[0])
+            n1 = int(edge[1])
+            if n0 not in id_to_idx or n1 not in id_to_idx:
+                del visited[edge]
+                continue
+
+            n0_idx = id_to_idx[n0]
+            n1_idx = id_to_idx[n1]
+            node0_pos = swc_list[n0_idx, 2:5]
+            node1_pos = swc_list[n1_idx, 2:5]
+            edge_vec = node1_pos - node0_pos
+
+            low_pos = node0_pos + edge_vec * low
+            high_pos = node0_pos + edge_vec * high
+
+            low_id = next_node_id
+            next_node_id += 1
+            high_id = next_node_id
+            next_node_id += 1
+
+            low_parent = n0
+            if int(swc_list[n0_idx, 6].item()) == n1:
+                low_parent = -1
+                swc_list[n0_idx, 6] = low_id
+            high_parent = n1
+            if int(swc_list[n1_idx, 6].item()) == n0:
+                high_parent = -1
+                swc_list[n1_idx, 6] = high_id
+
+            low_node = torch.tensor(
+                [
+                    low_id,
+                    swc_list[n0_idx, 1],
+                    low_pos[0],
+                    low_pos[1],
+                    low_pos[2],
+                    swc_list[n0_idx, 5],
+                    low_parent,
+                ],
+                dtype=swc_list.dtype,
+                device=swc_list.device,
+            )
+            high_node = torch.tensor(
+                [
+                    high_id,
+                    swc_list[n1_idx, 1],
+                    high_pos[0],
+                    high_pos[1],
+                    high_pos[2],
+                    swc_list[n1_idx, 5],
+                    high_parent,
+                ],
+                dtype=swc_list.dtype,
+                device=swc_list.device,
+            )
+            swc_list = torch.cat([swc_list, low_node.reshape(1, -1), high_node.reshape(1, -1)])
+
+            nodes_to_keep.update([n0, n1, low_id, high_id])
+            cut_ends.update([low_id, high_id])
+
+            del visited[edge]
+            visited[(n0, low_id)] = 0.0
+            visited[(high_id, n1)] = 0.0
+
+            if n0 in adj_dict and n1 in adj_dict[n0]:
+                adj_dict[n0].remove(n1)
+            if n1 in adj_dict and n0 in adj_dict[n1]:
+                adj_dict[n1].remove(n0)
+
+            if n0 in adj_dict:
+                adj_dict[n0].append(low_id)
+            else:
+                adj_dict[n0] = [low_id]
+            adj_dict[low_id] = [n0]
+
+            if n1 in adj_dict:
+                adj_dict[n1].append(high_id)
+            else:
+                adj_dict[n1] = [high_id]
+            adj_dict[high_id] = [n1]
+
+            if n0 in adj_dict and not adj_dict[n0]:
+                del adj_dict[n0]
+            if n1 in adj_dict and not adj_dict[n1]:
+                del adj_dict[n1]
+
+            continue
+
+        coverage_val = float(coverage)
+        if abs(coverage_val) < 1e-3:
             nodes_to_keep.update(edge)
         # for partially visited edges, identify the node to keep
-        elif 1e-3 < abs(coverage) < 0.999:
+        elif 1e-3 < abs(coverage_val) < 0.999:
             # if coverage is positive keep the second node, otherwise keep the first node
-            to_keep = int(coverage > 0)
+            to_keep = int(coverage_val > 0)
             keep_node_id = edge[to_keep]
             other_node_id = edge[1 - to_keep]
             nodes_to_keep.add(keep_node_id)
@@ -1442,7 +1547,7 @@ def remove_visited(swc_list: Union[np.ndarray, torch.Tensor],
             node2_pos = swc_list[id_to_idx[edge[1]], 2:5]
             # if coverage is positive, new node is at coverage fraction along the edge from node1 to node2
             # if coverage is negative, new node is at (1 + coverage) fraction along the edge from node1 to node2
-            frac = coverage if coverage > 0 else (1 + coverage)
+            frac = coverage_val if coverage_val > 0 else (1 + coverage_val)
             new_node_pos = node1_pos + (node2_pos - node1_pos) * frac
 
             new_node_id = next_node_id
@@ -1484,7 +1589,9 @@ def remove_visited(swc_list: Union[np.ndarray, torch.Tensor],
 
     # remove all edges that are fully visited from the visited dictionary and adj_dict
     for edge, coverage in list(visited.items()):
-        if abs(coverage) > 0.999:
+        if not isinstance(coverage, (int, float, np.floating)):
+            continue
+        if abs(float(coverage)) > 0.999:
             del visited[edge]
             # Check if nodes still exist in adj_dict before accessing
             if edge[0] in adj_dict:

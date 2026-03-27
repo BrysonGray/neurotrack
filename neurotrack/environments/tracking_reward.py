@@ -289,7 +289,7 @@ def _get_connected_nodes(
     adj_dict : dict
         Undirected edge list from load.adjacency_dict()
     max_dist : float, optional
-        Maximum Euclidean distance from the starting node. If None, traverse until end point is reached. Requires swc_list and id_to_idx if provided. Defaults to None.
+        Maximum distance to traverse in coordinate space. If None, traverse until end point is reached. Requires swc_list and id_to_idx if provided. Defaults to None.
     swc_list : np.ndarray, optional
         The SWC list representing the neuron. Required if max_dist is provided. Defaults to None.
     id_to_idx : dict, optional
@@ -308,34 +308,33 @@ def _get_connected_nodes(
         raise ValueError("swc_list and id_to_idx must be provided if max_dist is specified.")
     if max_dist is not None:
         swc_array = np.array(swc_list)
-        start_pos = swc_array[id_to_idx[node], 2:5]
     visited = set()
-    stack = [node]
+    stack = [(node, 0.0)]  # (node_id, cumulative_distance_from_start)
     terminals = []
     if neuron_root_ids is None:
         root_nodes = {int(row[0]) for row in swc_list if row[6] == -1}
     else:
         root_nodes = {int(n) for n in neuron_root_ids}
     while stack:
-        n = stack.pop()
+        n, dist = stack.pop()
         if n in visited:
             continue
         visited.add(n)
-        
-        # Check if current node is within max_dist from starting node
-        if max_dist is not None:
-            node_pos = swc_array[id_to_idx[n], 2:5]
-            euc_dist = np.linalg.norm(node_pos - start_pos)
-            if euc_dist > max_dist:
-                visited.discard(n)  # Remove from visited so it won't be returned
-                continue
-        
         if len(adj_dict.get(n, [])) == 1 and n != node and n not in root_nodes:  # terminal node (but not the starting node or a root node)
             terminals.append(n)
+        
+        # Check if we've exceeded max_dist. If so, don't explore neighbors
+        if max_dist is not None and dist > max_dist:
+            continue
             
         for nb in adj_dict.get(n, []):
             if nb not in visited:
-                stack.append(nb)
+                if max_dist is not None:
+                    edge_dist = sum((swc_array[id_to_idx[nb], 2:5] - swc_array[id_to_idx[n], 2:5]) ** 2) ** 0.5
+                    new_dist = dist + edge_dist
+                    stack.append((nb, new_dist))
+                else:
+                    stack.append((nb, 0.0))
             
     connected_nodes = list(visited)
 
@@ -1761,12 +1760,11 @@ def update_current_section(
     id_to_idx,
     valid_dist2=49.0,
     neuron_root_ids=None,
-    max_dist=None,
 ):
     """
     Updates the current section nodes based on the proximity of cut ends to the new position. If no cut ends are within
     valid_dist2 pixels of the new position, the section nodes remain unchanged. For each cut end within
-    valid_dist2 pixels of the new position, add descendants of the cut end, up to a maximum Euclidean distance, to the
+    valid_dist2 pixels of the new position, add descendants of the cut end, up to a maximum geodesic distance,to the
     current section nodes. Add terminal points encountered in the new section to the terminal points list. Remove
     terminal points not in the new section and farther than valid_dist2 pixels from the new position from the terminal
     points list.
@@ -1791,8 +1789,6 @@ def update_current_section(
         The squared distance threshold for considering cut ends as part of the current section. Default is 49.0 (7 pixels).
     neuron_root_ids : set, optional
         Cached neuron root node IDs (where parent is -1). If None, roots are derived from unvisited_tree.
-    max_dist : float, optional
-        Maximum Euclidean distance from a cut end node to include connected nodes. If None, all connected nodes are included.
 
     Returns
     -------
@@ -1828,7 +1824,7 @@ def update_current_section(
             connected_nodes, terminals = _get_connected_nodes(
                 int(node),
                 adj_dict=adj_dict,
-                max_dist=max_dist,
+                max_dist=12.0,
                 swc_list=unvisited_tree,
                 id_to_idx=id_to_idx,
                 neuron_root_ids=neuron_root_ids,

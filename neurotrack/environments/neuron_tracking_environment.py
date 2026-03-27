@@ -353,7 +353,6 @@ class NeuronTrackingEnvironment:
             self.id_to_idx,
             self.close_dist2,
             neuron_root_ids=self.neuron_root_ids,
-            max_dist=2*self.radius,
         )
         if self.section_nodes is not None:
             self.section_assigned = True
@@ -378,7 +377,7 @@ class NeuronTrackingEnvironment:
                 self.section_nodes, terminals = _get_connected_nodes(
                     nearest_node,
                     adj_dict=self.adj_dict,
-                    max_dist=2*self.radius,
+                    max_dist=12.0,
                     swc_list=self.unvisited_tree,
                     id_to_idx=self.id_to_idx,
                     neuron_root_ids=self.neuron_root_ids,
@@ -534,7 +533,8 @@ class NeuronTrackingEnvironment:
                             self.adj_dict,
                             self.id_to_idx,
                             close_dist2,
-                            neuron_root_ids=self.neuron_root_ids,                            max_dist=2*self.radius,                        )
+                            neuron_root_ids=self.neuron_root_ids
+                            )
                         
                         self.section_assigned = True
                     
@@ -564,7 +564,6 @@ class NeuronTrackingEnvironment:
                                     self.id_to_idx,
                                     close_dist2,
                                     neuron_root_ids=self.neuron_root_ids,
-                                    max_dist=2*self.radius,
                             )
 
                     # Create new branches

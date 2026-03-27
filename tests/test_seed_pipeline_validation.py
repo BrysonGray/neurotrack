@@ -326,15 +326,17 @@ class SeedPipelineValidationTests(unittest.TestCase):
                 [2, 3, 9.0, 8.0, 8.0, 1.0, 1],
                 [3, 3, 10.0, 8.0, 8.0, 1.0, 2],
             ]
-            path_channel, updated_subtree = dataset._build_predicted_path_channel(
+            path_channel, updated_subtree, cut_end_ids = dataset._build_predicted_path_channel(
                 subtree=subtree,
                 seed_node_id=3,
+                seed_point_xyz=torch.tensor([10.0, 8.0, 8.0], dtype=torch.float32),
                 spatial_shape_zyx=torch.Size([16, 16, 16]),
             )
 
             self.assertEqual(path_channel.dtype, torch.uint8)
             self.assertEqual(tuple(path_channel.shape), (16, 16, 16))
             self.assertEqual(len(updated_subtree), 0)
+            self.assertEqual(cut_end_ids, [])
 
     def test_getitem_retries_when_pruning_empties_patch(self):
         with tempfile.TemporaryDirectory() as tmp_dir:

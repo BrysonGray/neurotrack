@@ -205,7 +205,10 @@ class NeuronTrackingEnvironment:
         
         self.paths = [[p] for p in seeds.unbind(0)]
         self._set_branch_roots(list(seeds.unbind(0)))
-        self.cut_ends = []
+        cut_end_ids_data = patch_data.get('cut_end_ids', [])
+        if cut_end_ids_data is None:
+            cut_end_ids_data = []
+        self.cut_ends = [int(node_id) for node_id in cut_end_ids_data]
         if self.has_ground_truth:
             # Initialize visited edges
             self.visited = _init_visited(self.full_tree)
@@ -339,10 +342,11 @@ class NeuronTrackingEnvironment:
         # Set default termination points, target vectors, and section nodes.
         self.terminal_points = torch.empty((0, 3), dtype=torch.float32, device=self.unvisited_tree.device)
         self.target_vectors = self._zero_target_vectors(device=self.unvisited_tree.device)
-        self.target_stop_label = False
+        self.target_stop_label = True # default to stop if no section assigned
         self.section_nodes = None
         self.section_assigned = False
         current_position = self.paths[0][-1]
+        # update section uses nearby cut ends. If there are no nearby cut ends, it will be a no-op and section_nodes will remain None.
         self.section_nodes, self.terminal_points = update_current_section(
             current_position,
             self.section_nodes,
@@ -484,6 +488,24 @@ class NeuronTrackingEnvironment:
                 terminated = True
                 info['status'] = "choose_stop"
                 reward = distance_reward(torch.zeros_like(direction), self.target_vectors, terminated=True, gamma=self.gamma)
+                if self.target_stop_label:
+                    # If the stop was correct, and the target vector is not zero, then the stop was triggered by a nearby terminal.
+                    # Clean up the rest of the section by marking all the nodes up to the terminal point as visited and removing them from the unvisited tree.
+                    if self.section_nodes is not None and self.terminal_points is not None and self.terminal_points.shape[0] > 0:
+                        terminal_id = torch.argmin((self.terminal_points - current_position).pow(2).sum(dim=1)).item()
+                        terminal_point = self.terminal_points[terminal_id]
+                        updates = update_visited_edges(
+                            current_position,
+                            terminal_point,
+                            self.section_nodes,
+                            self.visited,
+                            self.unvisited_tree,
+                            self.id_to_idx,
+                            self.adj_dict,
+                            self.cut_ends,
+                            self.close_dist2)
+                        self.visited, self.unvisited_tree, self.adj_dict, self.cut_ends, self.id_to_idx = updates
+
                 info['terminate_episode'] = self._terminate_path()
                 observation = self.get_state(terminate=True)
                 return observation, reward, terminated, truncated, info
@@ -552,7 +574,7 @@ class NeuronTrackingEnvironment:
                             close_dist2)
                         self.visited, self.unvisited_tree, self.adj_dict, self.cut_ends, self.id_to_idx = updates
 
-                        # update_current_section is a no-op when cut_ends is empty
+                        # update_current_section is a no-op when cut_ends is empty or no nearby cut ends are found.
                         if self.cut_ends:
                             self.section_nodes, self.terminal_points = update_current_section(
                                     new_position,
@@ -572,22 +594,28 @@ class NeuronTrackingEnvironment:
                         if branch_roots_tensor.device != new_position.device:
                             branch_roots_tensor = branch_roots_tensor.to(new_position.device)
                         distances = ((branch_roots_tensor - new_position) ** 2).sum(dim=1)
-                        if not torch.any(distances < 49.0):  # no branches within 7 pixels (7^2 to avoid sqrt)
+                        if not torch.any(distances < 25.0):  # no branches within 5 pixels (5^2 to avoid sqrt)
                             self.paths.append([new_position])
                             self._append_branch_root(new_position)
 
-                    # Compute next target action
-                    self.target_vectors, self.target_stop_label, nearest_section_point_dist2 = _compute_target_action(
-                        new_position,
-                        self.unvisited_tree,
-                        self.target_step_len,
-                        adj_dict=self.adj_dict,
-                        id_to_idx=self.id_to_idx,
-                        terminal_points=self.terminal_points,
-                        valid_nodes=self.section_nodes,
-                        valid_dist2=self.close_dist2,
-                        stop_distance=self.stop_target_distance,
-                    )
+                    # Compute next target action. If no section is assigned, keep a zero target
+                    # rather than falling back to unconstrained global target search.
+                    if self.section_nodes is None:
+                        self.target_vectors = self._zero_target_vectors(device=new_position.device)
+                        self.target_stop_label = True
+                        nearest_section_point_dist2 = float("inf")
+                    else:
+                        self.target_vectors, self.target_stop_label, nearest_section_point_dist2 = _compute_target_action(
+                            new_position,
+                            self.unvisited_tree,
+                            self.target_step_len,
+                            adj_dict=self.adj_dict,
+                            id_to_idx=self.id_to_idx,
+                            terminal_points=self.terminal_points,
+                            valid_nodes=self.section_nodes,
+                            valid_dist2=self.close_dist2,
+                            stop_distance=self.stop_target_distance,
+                        )
                     info['next_target_vectors'] = self.target_vectors
                     info['next_target_stop_label'] = bool(self.target_stop_label)
 

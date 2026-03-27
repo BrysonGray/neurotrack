@@ -166,6 +166,43 @@ def draw_2d_panel(ax, environment, cropped=False, sections=None,
                 if not cropped or in_crop(vy, vx):
                     ax.scatter([vx], [vy], color='cyan', s=60, marker='*', alpha=0.8)
 
+    # Plot branch roots as yellow dots
+    branch_roots = getattr(env, 'branch_roots', None)
+    if branch_roots is not None and len(branch_roots) > 0:
+        branch_ys = [-float(br[i]) for br in branch_roots]
+        branch_xs = [float(br[j]) for br in branch_roots]
+        if not cropped:
+            ax.scatter(branch_xs, branch_ys, color='yellow', s=60, marker='o', edgecolors='black', linewidths=1.0)
+        else:
+            branch_xs_c = []
+            branch_ys_c = []
+            for by, bx in zip(branch_ys, branch_xs):
+                if in_crop(by, bx):
+                    branch_ys_c.append(by)
+                    branch_xs_c.append(bx)
+            if len(branch_xs_c) > 0:
+                ax.scatter(branch_xs_c, branch_ys_c, color='yellow', s=60, marker='o', edgecolors='black', linewidths=1.0)
+
+    # Plot cut ends as purple dots
+    cut_ends = getattr(env, 'cut_ends', None)
+    if cut_ends is not None and len(cut_ends) > 0:
+        cut_ys = []
+        cut_xs = []
+        id_to_idx = getattr(env, 'id_to_idx', {})
+        tree = getattr(env, 'unvisited_tree', None)
+        if tree is not None and getattr(tree, 'ndim', 0) >= 2 and tree.shape[0] > 0:
+            for cut_id in cut_ends:
+                idx = id_to_idx.get(int(cut_id))
+                if idx is not None and idx < tree.shape[0]:
+                    node = tree[idx]
+                    cy = -float(node[i + 2])
+                    cx = float(node[j + 2])
+                    if not cropped or in_crop(cy, cx):
+                        cut_ys.append(cy)
+                        cut_xs.append(cx)
+            if len(cut_xs) > 0:
+                ax.scatter(cut_xs, cut_ys, color='purple', s=40, marker='D', alpha=0.7)
+
     if cropped and y_min is not None:
         ax.set_xlim(x_min, x_max)
         ax.set_ylim(y_min, y_max)
@@ -283,7 +320,7 @@ def policy_step(env, actor, stochastic=False):
       - b: branch at current point
       - q: quit
     """
-    from IPython.display import clear_output, display as ipy_display
+    from IPython.display import display as ipy_display
     import matplotlib.pyplot as plt
 
     plt.ioff()
@@ -307,41 +344,9 @@ def policy_step(env, actor, stochastic=False):
     total_steps = 0
     total_policy_steps = 0
 
-    while True:
-        action_key = input('Press Enter for policy step, or [t stop, r reset, b branch, q quit]: ').strip().lower()
-        reward = None
-
-        if action_key == 'q':
-            break
-        elif action_key == 'r':
-            env.reset()
-            sections = get_unvisited_sections(env)
-            print('Environment reset.')
-            continue
-        elif action_key == 'b':
-            if len(env.paths) > 0 and len(env.paths[0]) > 0:
-                point = env.paths[0][-1]
-                env.paths.append([point])
-                env._append_branch_root(point)
-                env.img.draw_point(point, radius=(env.step_width / 2.35), channel=-1, mode='gaussian', binary=False)
-            sections = get_unvisited_sections(env)
-            print('Added branch at current point.')
-            continue
-
-        clear_output(wait=True)
-
-        if action_key == 't':
-            direction = torch.zeros((3,), dtype=torch.float32)
-            observation, reward, terminated, truncated, info = env.step(direction, verbose=True, stop=True)
-        else:
-            obs = env.get_state()
-            direction, choose_stop, stop_probability = _policy_action_step(actor=actor, obs=obs, stochastic=stochastic)
-            observation, reward, terminated, truncated, info = env.step(direction, verbose=True, stop=choose_stop)
-            if stop_probability is not None:
-                info['stop_probability'] = stop_probability
-            total_policy_steps += 1
-
-        total_steps += 1
+    def _render(observation, reward=None, info=None, direction=None):
+        # Replace prior frame and logs so the latest state remains visible.
+        display.clear_output(wait=True)
 
         for a in axes:
             a.clear()
@@ -362,32 +367,85 @@ def policy_step(env, actor, stochastic=False):
         ax1.set_title('Cropped patch + path')
         ax1.axis('off')
 
-        sections = get_unvisited_sections(env)
+        current_sections = get_unvisited_sections(env)
 
-        draw_2d_panel(ax2, env, cropped=False, sections=sections, dim=0,
+        draw_2d_panel(ax2, env, cropped=False, sections=current_sections, dim=0,
                       skeleton_color=skeleton_color, path_color=path_color, target_color=target_color)
-        draw_2d_panel(ax3, env, cropped=True, sections=sections, dim=0,
+        draw_2d_panel(ax3, env, cropped=True, sections=current_sections, dim=0,
                       skeleton_color=skeleton_color, path_color=path_color, target_color=target_color)
-        draw_2d_panel(ax4, env, cropped=True, sections=sections, dim=1,
+        draw_2d_panel(ax4, env, cropped=True, sections=current_sections, dim=1,
                       skeleton_color=skeleton_color, path_color=path_color, target_color=target_color)
-        draw_2d_panel(ax5, env, cropped=True, sections=sections, dim=2,
+        draw_2d_panel(ax5, env, cropped=True, sections=current_sections, dim=2,
                       skeleton_color=skeleton_color, path_color=path_color, target_color=target_color)
 
-        ipy_display(plt.gcf())
+        ipy_display(fig)
 
-        direction_norm = float(torch.linalg.norm(torch.as_tensor(direction, dtype=torch.float32)).item())
+        if direction is None:
+            direction_norm = 0.0
+            direction_list = None
+        else:
+            direction_tensor = torch.as_tensor(direction, dtype=torch.float32)
+            direction_norm = float(torch.linalg.norm(direction_tensor).item())
+            direction_list = direction_tensor.tolist()
+
         print(f'step: {total_steps} (policy steps: {total_policy_steps})')
-        print(f'direction: {torch.as_tensor(direction, dtype=torch.float32).tolist()}')
+        print(f'direction: {direction_list}')
         print(f'direction_norm: {direction_norm:.4f}')
         print(f'reward: {reward}')
-        print(f"status: {info.get('status')}")
-        print(f"terminated: {info.get('terminate_episode')}")
-        print(f"stop_probability: {info.get('stop_probability')}")
-        print(f"current_target_stop_label: {info.get('current_target_stop_label')}")
+        if info is None:
+            print('status: None')
+            print('terminated: None')
+            print('stop_probability: None')
+            print(f"current_target_stop_label: {getattr(env, 'target_stop_label', None)}")
+        else:
+            print(f"status: {info.get('status')}")
+            print(f"terminated: {info.get('terminate_episode')}")
+            print(f"stop_probability: {info.get('stop_probability')}")
+            print(f"current_target_stop_label: {info.get('current_target_stop_label')}")
+
+    # Initial render before any stepping so the user sees the starting state and stop label.
+    _render(env.get_state(), reward=None, info=None, direction=None)
+
+    while True:
+        action_key = input('Press Enter for policy step, or [t stop, r reset, b branch, q quit]: ').strip().lower()
+        reward = None
+
+        if action_key == 'q':
+            break
+        elif action_key == 'r':
+            observation = env.reset(return_state=True)
+            sections = get_unvisited_sections(env)
+            print('Environment reset.')
+            _render(observation, reward=None, info=None, direction=None)
+            continue
+        elif action_key == 'b':
+            if len(env.paths) > 0 and len(env.paths[0]) > 0:
+                point = env.paths[0][-1]
+                env.paths.append([point])
+                env._append_branch_root(point)
+                env.img.draw_point(point, radius=(env.step_width / 2.35), channel=-1, mode='gaussian', binary=False)
+            sections = get_unvisited_sections(env)
+            print('Added branch at current point.')
+            _render(env.get_state(), reward=None, info=None, direction=None)
+            continue
+
+        if action_key == 't':
+            direction = torch.zeros((3,), dtype=torch.float32)
+            observation, reward, terminated, truncated, info = env.step(direction, verbose=True, stop=True)
+        else:
+            obs = env.get_state()
+            direction, choose_stop, stop_probability = _policy_action_step(actor=actor, obs=obs, stochastic=stochastic)
+            observation, reward, terminated, truncated, info = env.step(direction, verbose=True, stop=choose_stop)
+            if stop_probability is not None:
+                info['stop_probability'] = stop_probability
+            total_policy_steps += 1
+
+        total_steps += 1
+        _render(observation, reward=reward, info=info, direction=direction)
 
         if info.get('terminate_episode'):
             print('All paths finished. Resetting environment.')
-            env.reset()
+            env.reset(return_state=True)
             sections = get_unvisited_sections(env)
 
     try:
@@ -420,7 +478,7 @@ def manual_step(env, step_size=4.0):
       - b: branch at current point
       - q: quit
     """
-    from IPython.display import clear_output, display as ipy_display
+    from IPython.display import display as ipy_display
     import matplotlib.pyplot as plt
 
     plt.ioff()
@@ -452,6 +510,61 @@ def manual_step(env, step_size=4.0):
     target_color = 'tab:red'
     sections = get_unvisited_sections(env)
 
+    total_steps = 0
+
+    def _render(observation, reward=None, info=None, action=None):
+        # Replace prior frame and logs so the latest state remains visible.
+        display.clear_output(wait=True)
+
+        for a in axes:
+            a.clear()
+
+        img = env.img.data[0].amax(dim=0)
+        path_im = env.img.data[-1].amax(dim=0)
+        ax0.imshow(img, cmap='gray')
+        ax0.imshow(path_im, cmap='gray', alpha=0.5)
+        ax0.set_title('Full image + path')
+        ax0.axis('off')
+
+        patch = observation[0]
+        z_index = getattr(env, 'radius', patch.shape[1] // 2)
+        z_index = int(max(0, min(int(z_index), patch.shape[1] - 1)))
+        slice_ = patch[:, z_index]
+        ax1.imshow(slice_[0], cmap='gray')
+        ax1.imshow(slice_[-1], cmap='gray', alpha=0.5)
+        ax1.set_title('Cropped patch + path')
+        ax1.axis('off')
+
+        current_sections = get_unvisited_sections(env)
+
+        draw_2d_panel(ax2, env, cropped=False, sections=current_sections, dim=0,
+                      skeleton_color=skeleton_color, path_color=path_color, target_color=target_color)
+        draw_2d_panel(ax3, env, cropped=True, sections=current_sections, dim=0,
+                      skeleton_color=skeleton_color, path_color=path_color, target_color=target_color)
+        draw_2d_panel(ax4, env, cropped=True, sections=current_sections, dim=1,
+                      skeleton_color=skeleton_color, path_color=path_color, target_color=target_color)
+        draw_2d_panel(ax5, env, cropped=True, sections=current_sections, dim=2,
+                      skeleton_color=skeleton_color, path_color=path_color, target_color=target_color)
+
+        ipy_display(fig)
+
+        print(f'step: {total_steps}')
+        print(f'action: {None if action is None else torch.as_tensor(action, dtype=torch.float32).tolist()}')
+        print(f'reward: {reward}')
+        if info is None:
+            print('status: None')
+            print('terminated: None')
+            print('stop_probability: None')
+            print(f"current_target_stop_label: {getattr(env, 'target_stop_label', None)}")
+        else:
+            print(f"status: {info.get('status')}")
+            print(f"terminated: {info.get('terminate_episode')}")
+            print(f"stop_probability: {info.get('stop_probability')}")
+            print(f"current_target_stop_label: {info.get('current_target_stop_label')}")
+
+    # Initial render before any stepping so the user sees the starting state and stop label.
+    _render(env.get_state(), reward=None, info=None, action=None)
+
     while True:
         action_key = input('Choose an action [w/a/s/d, p/l, x, t, z, g, r, b, q]: ').strip().lower()
         reward = None
@@ -459,13 +572,15 @@ def manual_step(env, step_size=4.0):
         if action_key == 'q':
             break
         elif action_key == 'r':
-            env.reset()
+            observation = env.reset(return_state=True)
             sections = get_unvisited_sections(env)
+            _render(observation, reward=None, info=None, action=None)
         elif action_key == 'b':
             point = env.paths[0][-1]
             env.paths.append([point])
             env._append_branch_root(point)
             env.img.draw_point(point, radius=(env.step_width / 2.35), channel=-1, mode='gaussian', binary=False)
+            _render(env.get_state(), reward=None, info=None, action=None)
 
         else:
             if action_key not in user_input_dict and action_key not in {'x', 't', 'g'}:
@@ -502,51 +617,14 @@ def manual_step(env, step_size=4.0):
                 choose_stop = False
                 use_explicit_stop = True
 
-            clear_output(wait=True)
             observation, reward, terminated, truncated, info = env.step(action, verbose=True, stop=choose_stop)
+            total_steps += 1
 
-            for a in axes:
-                a.clear()
-
-            img = env.img.data[0].amax(dim=0)
-            path_im = env.img.data[-1].amax(dim=0)
-            ax0.imshow(img, cmap='gray')
-            ax0.imshow(path_im, cmap='gray', alpha=0.5)
-            ax0.set_title('Full image + path')
-            ax0.axis('off')
-
-            patch = observation[0]
-            z_index = getattr(env, 'radius', patch.shape[1] // 2)
-            z_index = int(max(0, min(int(z_index), patch.shape[1] - 1)))
-            slice_ = patch[:, z_index]
-            ax1.imshow(slice_[0], cmap='gray')
-            ax1.imshow(slice_[-1], cmap='gray', alpha=0.5)
-            ax1.set_title('Cropped patch + path')
-            ax1.axis('off')
-
-            sections = get_unvisited_sections(env)
-
-            draw_2d_panel(ax2, env, cropped=False, sections=sections, dim=0,
-                          skeleton_color=skeleton_color, path_color=path_color, target_color=target_color)
-            draw_2d_panel(ax3, env, cropped=True, sections=sections, dim=0,
-                          skeleton_color=skeleton_color, path_color=path_color, target_color=target_color)
-            draw_2d_panel(ax4, env, cropped=True, sections=sections, dim=1,
-                          skeleton_color=skeleton_color, path_color=path_color, target_color=target_color)
-            draw_2d_panel(ax5, env, cropped=True, sections=sections, dim=2,
-                          skeleton_color=skeleton_color, path_color=path_color, target_color=target_color)
-
-            ipy_display(plt.gcf())
-
-            if reward is not None:
-                print(f'reward: {reward}')
-                print(f"status: {info.get('status')}")
-                print(f"terminated: {info.get('terminate_episode')}")
-                print(f"stop_probability: {info.get('stop_probability')}")
-                print(f"current_target_stop_label: {info.get('current_target_stop_label')}")
+            _render(observation, reward=reward, info=info, action=action)
 
             if info.get('terminate_episode'):
                 print('All paths finished. Resetting environment.')
-                env.reset()
+                env.reset(return_state=True)
                 sections = get_unvisited_sections(env)
 
     try:

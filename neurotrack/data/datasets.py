@@ -247,19 +247,20 @@ class NeuronPatchDataset(TorchDataset):
         seed_point_xyz: torch.Tensor,
         spatial_shape_zyx: torch.Size,
         add_prev_path: bool = True,
-    ) -> torch.Tensor:
-        """Build path channel from smallest-id subtree node to the seed node."""
+    ) -> Tuple[torch.Tensor, List, List[int]]:
+        """Build path channel and return updated subtree plus cut-end node ids."""
         spatial_shape = tuple(int(v) for v in spatial_shape_zyx)
         path_channel = torch.zeros(spatial_shape, dtype=torch.uint8)
+        cut_end_ids: List[int] = []
 
         if not subtree:
-            return path_channel, subtree
+            return path_channel, subtree, cut_end_ids
 
         id_to_node = {int(node[0]): node for node in subtree}
         seed_id = int(seed_node_id)
         seed_node = id_to_node.get(seed_id)
         if seed_node is None:
-            return path_channel, subtree
+            return path_channel, subtree, cut_end_ids
 
         # If seed is a root node or add_prev_path is False, draw a seed marker instead of a path.
         if int(seed_node[6]) == -1 or not add_prev_path:
@@ -276,7 +277,7 @@ class NeuronPatchDataset(TorchDataset):
                 target_node_id=seed_id,
             )
             if len(path_ids) < 2:
-                return path_channel, subtree
+                return path_channel, subtree, cut_end_ids
             path_id_set = set(path_ids)
 
             path_image = Image(torch.zeros((1,) + spatial_shape, dtype=torch.uint8))
@@ -302,6 +303,7 @@ class NeuronPatchDataset(TorchDataset):
                 for neighbor in neighbor_nodes:
                     if int(neighbor) not in path_id_set:
                         neighbors_to_update.add(int(neighbor))
+            cut_end_ids = sorted(neighbors_to_update)
             updated_subtree = []
             for node in subtree:
                 if int(node[0]) in path_id_set:
@@ -327,7 +329,7 @@ class NeuronPatchDataset(TorchDataset):
                     updated_subtree = []
                 subtree = updated_subtree
 
-        return path_image.data[0], subtree
+        return path_image.data[0], subtree, cut_end_ids
 
     @staticmethod
     def _append_path_channel(image: torch.Tensor, path_channel: Optional[torch.Tensor] = None) -> torch.Tensor:
@@ -661,7 +663,7 @@ class NeuronPatchDataset(TorchDataset):
             else:
                 image = cropped_img
 
-        path_channel, shifted_subtree = self._build_predicted_path_channel(
+        path_channel, shifted_subtree, cut_end_ids = self._build_predicted_path_channel(
             subtree=shifted_subtree,
             seed_node_id=seed_node_id,
             seed_point_xyz=seed_xyz,
@@ -679,6 +681,7 @@ class NeuronPatchDataset(TorchDataset):
             'neuron_mask': neuron_area_mask,
             'seed_point_xyz': seed_xyz,
             'seed_node_id': seed_node_id,
+            'cut_end_ids': cut_end_ids,
         }
     
     def __len__(self) -> int:

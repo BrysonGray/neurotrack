@@ -454,12 +454,24 @@ def _run_expert_episode(
     batch_size: int,
     loss_config: SupervisionLossConfig,
     aggregate_buffer: Optional[BehaviorCloningReplayBuffer] = None,
+    carryover_supervision_buffer: Optional[Tuple[List[torch.Tensor], List[torch.Tensor], List[bool]]] = None,
 ) -> dict[str, float | int]:
+    """Run one expert episode with optional carryover batch from previous episode.
+    
+    Partial batches at episode end are NOT flushed; instead they are returned
+    so they can carry over to the next episode, avoiding small unstable updates.
+    """
     obs = env.reset(return_state=True)
     prev_expert_action: Optional[torch.Tensor] = None
-    supervision_obs: List[torch.Tensor] = []
-    supervision_targets: List[torch.Tensor] = []
-    supervision_stop_targets: List[bool] = []
+    
+    # Initialize supervision buffers from carryover or fresh
+    if carryover_supervision_buffer is not None:
+        supervision_obs, supervision_targets, supervision_stop_targets = carryover_supervision_buffer
+    else:
+        supervision_obs: List[torch.Tensor] = []
+        supervision_targets: List[torch.Tensor] = []
+        supervision_stop_targets: List[bool] = []
+    
     episode_total_losses: List[float] = []
     episode_direction_losses: List[float] = []
     episode_stop_bce_losses: List[float] = []
@@ -516,17 +528,7 @@ def _run_expert_episode(
                 false_continue_count += 1
 
         if info["terminate_episode"]:
-            _flush_supervision_batch(
-                actor,
-                actor_optimizer,
-                supervision_obs,
-                supervision_targets,
-                supervision_stop_targets,
-                episode_total_losses,
-                episode_direction_losses,
-                episode_stop_bce_losses,
-                loss_config=loss_config,
-            )
+            # Don't flush the partial batch at episode end; return it for carryover to next episode
             break
 
         if terminated:
@@ -553,6 +555,7 @@ def _run_expert_episode(
             else 0.0
         ),
         "steps_done": int(steps_done),
+        "_carryover_supervision_buffer": (supervision_obs, supervision_targets, supervision_stop_targets),
     }
 
 
@@ -811,6 +814,7 @@ def train(
     last_save_bucket = -1
     use_progress_bar = sys.stdout.isatty()
     csv_file_path = logdir / f"{name}_{date_time}_log.csv"
+    carryover_supervision_buffer: Optional[Tuple[List[torch.Tensor], List[torch.Tensor], List[bool]]] = None
 
     for ep in tqdm(
         range(n_episodes),
@@ -829,7 +833,9 @@ def train(
             actor_optimizer=actor_optimizer,
             batch_size=batch_size,
             loss_config=loss_config,
+            carryover_supervision_buffer=carryover_supervision_buffer,
         )
+        carryover_supervision_buffer = episode_metrics.pop("_carryover_supervision_buffer")
         steps_done += int(episode_metrics["steps_done"])
         last_save_bucket = _maybe_save_checkpoint(
             actor=actor,
@@ -862,6 +868,25 @@ def train(
             steps_done=steps_done,
             complexity=float(env.dataset.alpha),
         )
+
+    # Flush any remaining partial batch at the very end of training
+    if carryover_supervision_buffer is not None:
+        supervision_obs, supervision_targets, supervision_stop_targets = carryover_supervision_buffer
+        if supervision_obs:
+            episode_dummy_losses: List[float] = []
+            episode_dummy_direction_losses: List[float] = []
+            episode_dummy_stop_bce_losses: List[float] = []
+            _flush_supervision_batch(
+                actor,
+                actor_optimizer,
+                supervision_obs,
+                supervision_targets,
+                supervision_stop_targets,
+                episode_dummy_losses,
+                episode_dummy_direction_losses,
+                episode_dummy_stop_bce_losses,
+                loss_config=loss_config,
+            )
 
     _save_checkpoint(
         actor=actor,
@@ -939,6 +964,7 @@ def train_dagger(
     csv_file_path = logdir / f"{name}_{date_time}_log.csv"
     aggregate_buffer = BehaviorCloningReplayBuffer(capacity=aggregate_memory_budget)
     memory_budget_meta = int(aggregate_memory_budget)
+    carryover_supervision_buffer: Optional[Tuple[List[torch.Tensor], List[torch.Tensor], List[bool]]] = None
 
     warmstart_iter = tqdm(
         range(warmstart_episodes),
@@ -960,7 +986,9 @@ def train_dagger(
             batch_size=batch_size,
             loss_config=loss_config,
             aggregate_buffer=aggregate_buffer,
+            carryover_supervision_buffer=carryover_supervision_buffer,
         )
+        carryover_supervision_buffer = episode_metrics.pop("_carryover_supervision_buffer")
         steps_done += int(episode_metrics["steps_done"])
         episodes_done += 1
         last_save_bucket = _maybe_save_checkpoint(
@@ -1101,6 +1129,25 @@ def train_dagger(
             beta=float(beta),
         )
 
+    # Flush any remaining partial batch from warmstart at the very end
+    if carryover_supervision_buffer is not None:
+        supervision_obs, supervision_targets, supervision_stop_targets = carryover_supervision_buffer
+        if supervision_obs:
+            episode_dummy_losses: List[float] = []
+            episode_dummy_direction_losses: List[float] = []
+            episode_dummy_stop_bce_losses: List[float] = []
+            _flush_supervision_batch(
+                actor,
+                actor_optimizer,
+                supervision_obs,
+                supervision_targets,
+                supervision_stop_targets,
+                episode_dummy_losses,
+                episode_dummy_direction_losses,
+                episode_dummy_stop_bce_losses,
+                loss_config=loss_config,
+            )
+
     final_beta = _compute_dagger_beta(dagger_rounds - 1, dagger_rounds=dagger_rounds, beta_start=beta_start, beta_end=beta_end)
     _save_checkpoint(
         actor=actor,
@@ -1189,6 +1236,7 @@ def train_dagger_online(
     aggregate_buffer = BehaviorCloningReplayBuffer(capacity=aggregate_memory_budget, include_z_flip=True)
     memory_budget_meta = int(aggregate_memory_budget)
     n_dagger_episodes = int(n_episodes - warmstart_episodes)
+    carryover_supervision_buffer: Optional[Tuple[List[torch.Tensor], List[torch.Tensor], List[bool]]] = None
 
     warmstart_iter = tqdm(
         range(warmstart_episodes),
@@ -1210,7 +1258,9 @@ def train_dagger_online(
             batch_size=batch_size,
             loss_config=loss_config,
             aggregate_buffer=aggregate_buffer,
+            carryover_supervision_buffer=carryover_supervision_buffer,
         )
+        carryover_supervision_buffer = episode_metrics.pop("_carryover_supervision_buffer")
         steps_done += int(episode_metrics["steps_done"])
         episodes_done += 1
         last_save_bucket = _maybe_save_checkpoint(
@@ -1256,6 +1306,26 @@ def train_dagger_online(
             complexity=float(env.dataset.alpha),
             beta=1.0,
         )
+
+    # Flush any remaining partial batch from warmstart before main dagger loop
+    if carryover_supervision_buffer is not None:
+        supervision_obs, supervision_targets, supervision_stop_targets = carryover_supervision_buffer
+        if supervision_obs:
+            episode_dummy_losses: List[float] = []
+            episode_dummy_direction_losses: List[float] = []
+            episode_dummy_stop_bce_losses: List[float] = []
+            _flush_supervision_batch(
+                actor,
+                actor_optimizer,
+                supervision_obs,
+                supervision_targets,
+                supervision_stop_targets,
+                episode_dummy_losses,
+                episode_dummy_direction_losses,
+                episode_dummy_stop_bce_losses,
+                loss_config=loss_config,
+            )
+        carryover_supervision_buffer = None
 
     dagger_iter = tqdm(
         range(n_dagger_episodes),

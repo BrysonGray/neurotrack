@@ -429,28 +429,54 @@ def _get_nearest_point(point: Union[torch.Tensor, np.ndarray], swc_list: Union[t
         return None, (None, None)
 
     nearest_node = int(nearest_node)
-    neighbors = [int(n) for n in adj_dict.get(nearest_node, []) if int(n) in id_to_idx]
 
-    # Positions
-    nearest_node_pos = swc_t[id_to_idx[nearest_node], 2:5]
-    neighbor_idx = torch.tensor(
-        [id_to_idx[n] for n in neighbors],
-        dtype=torch.long,
-        device=swc_t.device,
-    )
-    neighbor_positions = swc_t[neighbor_idx, 2:5]
+    # Fast local edge search:
+    # include edges touching nearest_node and its neighbors (one-hop expansion),
+    # then pick the closest segment among those candidates.
+    # This avoids a full-graph scan while fixing misses where the true nearest
+    # segment is adjacent to a neighbor of nearest_node.
+    if valid_nodes is None:
+        valid_node_set = None
+    else:
+        valid_node_set = {int(v) for v in valid_nodes if int(v) in id_to_idx}
+        if nearest_node not in valid_node_set:
+            return None, (None, None)
 
-    distances = []
-    closest_points = []
-    for neighbor_pos in neighbor_positions:
-        dist, closest_point = _distance_points_to_segment(pt, nearest_node_pos, neighbor_pos)
-        distances.append(dist[0])
-        closest_points.append(closest_point[0])
+    seed_nodes = {nearest_node}
+    seed_nodes.update(int(n) for n in adj_dict.get(nearest_node, []) if int(n) in id_to_idx)
+    if valid_node_set is not None:
+        seed_nodes = {n for n in seed_nodes if n in valid_node_set}
 
-    # Select best
-    d_stack = torch.stack(distances) if isinstance(distances[0], torch.Tensor) else torch.tensor(distances, dtype=torch.float32, device=swc_t.device)
-    min_idx = torch.argmin(d_stack).item()
-    return closest_points[min_idx], (nearest_node, neighbors[min_idx])
+    candidate_edges = set()
+    for u in seed_nodes:
+        for v in adj_dict.get(u, []):
+            v = int(v)
+            if v not in id_to_idx:
+                continue
+            if valid_node_set is not None and v not in valid_node_set:
+                continue
+            if u == v:
+                continue
+            edge = (u, v) if u < v else (v, u)
+            candidate_edges.add(edge)
+
+    if not candidate_edges:
+        return None, (None, None)
+
+    best_dist = None
+    best_point = None
+    best_edge = (None, None)
+    for u, v in candidate_edges:
+        p_u = swc_t[id_to_idx[u], 2:5]
+        p_v = swc_t[id_to_idx[v], 2:5]
+        dist, closest_point = _distance_points_to_segment(pt, p_u, p_v)
+        d = dist[0]
+        if best_dist is None or d < best_dist:
+            best_dist = d
+            best_point = closest_point[0]
+            best_edge = (u, v)
+
+    return best_point, best_edge
 
 
 # def _get_termination_nodes(current_node: int, adj_dict: Dict[int, list], visited=None, include_start=False) -> list:
@@ -762,12 +788,38 @@ def _compute_target_action(
     if stop_distance < 0:
         raise ValueError("stop_distance must be non-negative.")
 
+    if adj_dict is None and swc_t.ndim >= 2 and swc_t.shape[0] >= 2:
+        adj_dict = load.adjacency_dict(swc_t)
+
+    component_nodes = None
+    if valid_nodes is not None and adj_dict is not None and swc_t.ndim >= 2 and swc_t.shape[0] > 0:
+        component_start = _get_nearest_node(pt, swc_t, id_to_idx=id_to_idx, valid_nodes=valid_nodes)
+        if component_start is not None:
+            component_nodes = _component_nodes(component_start, adj_dict, valid_nodes=valid_nodes)
+
     terminals_t = None
     terminals_exist = False
     nearest_valid_terminal = None
     sq_dist_to_nearest_terminal = float("inf")
     if terminal_points is not None:
         terminals_t = ensure_tensor(terminal_points, dtype=torch.float32, device=swc_t.device).view(-1, 3)
+        if terminals_t.numel() > 0 and component_nodes:
+            keep_indices = []
+            for i in range(terminals_t.shape[0]):
+                tp = terminals_t[i]
+                nearest_terminal_node = _get_nearest_node(tp, swc_t, id_to_idx=id_to_idx)
+                if nearest_terminal_node is None:
+                    continue
+                nearest_terminal_node = int(nearest_terminal_node)
+                if nearest_terminal_node not in component_nodes:
+                    continue
+                node_coord = swc_t[id_to_idx[nearest_terminal_node], 2:5]
+                if torch.sum((tp - node_coord) ** 2).item() <= 1e-6:
+                    keep_indices.append(i)
+            if keep_indices:
+                terminals_t = terminals_t[keep_indices]
+            else:
+                terminals_t = torch.empty((0, 3), dtype=torch.float32, device=swc_t.device)
         terminals_exist = terminals_t.numel() > 0
 
     stop_target = False
@@ -787,9 +839,6 @@ def _compute_target_action(
             targets = torch.empty((0, 3), dtype=torch.float32, device=swc_t.device)
             stop_target = True  # if there are no points in the neuron and no nearby terminals, signal to stop
     else:
-        if adj_dict is None:
-            adj_dict = load.adjacency_dict(swc_t)
-
         # Prefer a nearby terminal when it is reachable within one target step.
         if nearest_valid_terminal is not None and sq_dist_to_nearest_terminal <= step_size ** 2:
             target_points = nearest_valid_terminal.unsqueeze(0)
@@ -1175,6 +1224,92 @@ def _find_path_between_nodes(start_node: int, end_node: int, adj_dict: Dict[int,
             if neighbor not in visited:
                 queue.append((neighbor, path + [neighbor]))
     return []
+
+
+def _component_nodes(start_node: int, adj_dict: Dict[int, list], valid_nodes: set = None) -> set:
+    """Return connected component nodes from start_node, optionally constrained to valid_nodes."""
+    start = int(start_node)
+    if valid_nodes is None:
+        valid = None
+    else:
+        valid = {int(v) for v in valid_nodes}
+        if start not in valid:
+            return set()
+
+    seen = set()
+    queue = deque([start])
+    while queue:
+        node = int(queue.popleft())
+        if node in seen:
+            continue
+        if valid is not None and node not in valid:
+            continue
+        seen.add(node)
+        for nb in adj_dict.get(node, []):
+            nb_i = int(nb)
+            if nb_i not in seen and (valid is None or nb_i in valid):
+                queue.append(nb_i)
+    return seen
+
+
+def _project_point_to_component(
+    point: Union[torch.Tensor, np.ndarray],
+    swc_list: Union[torch.Tensor, np.ndarray],
+    id_to_idx: Dict[int, int],
+    adj_dict: Dict[int, list],
+    component_nodes: set,
+) -> Tuple[torch.Tensor, Tuple[int, int]]:
+    """Project point to nearest segment among edges fully inside component_nodes."""
+    swc_t = ensure_tensor(swc_list, dtype=torch.float32)
+    if swc_t.numel() == 0 or not component_nodes:
+        return None, (None, None)
+
+    pt = ensure_tensor(point, dtype=torch.float32, device=swc_t.device)
+    nodes = {int(n) for n in component_nodes if int(n) in id_to_idx}
+    if not nodes:
+        return None, (None, None)
+
+    candidate_edges = set()
+    for u in nodes:
+        for v in adj_dict.get(u, []):
+            v_i = int(v)
+            if v_i not in nodes:
+                continue
+            if u == v_i:
+                continue
+            edge = (u, v_i) if u < v_i else (v_i, u)
+            candidate_edges.add(edge)
+
+    if not candidate_edges:
+        return None, (None, None)
+
+    best_dist = None
+    best_point = None
+    best_edge = (None, None)
+    for u, v in candidate_edges:
+        p_u = swc_t[id_to_idx[u], 2:5]
+        p_v = swc_t[id_to_idx[v], 2:5]
+        dist, closest_point = _distance_points_to_segment(pt, p_u, p_v)
+        d = dist[0]
+        if best_dist is None or d < best_dist:
+            best_dist = d
+            best_point = closest_point[0]
+            best_edge = (u, v)
+
+    return best_point, best_edge
+
+
+def _visited_changed(before: Dict[Tuple[int, int], float], after: Dict[Tuple[int, int], float]) -> bool:
+    """Return True when visited dictionary content changed."""
+    if len(before) != len(after):
+        return True
+    for edge, cov in after.items():
+        if before.get(edge) != cov:
+            return True
+    for edge in before.keys():
+        if edge not in after:
+            return True
+    return False
 
 
 def _find_path_between_points(start_point: np.ndarray, end_point: np.ndarray, swc_list: Union[np.ndarray, list], id_to_idx: Dict[int, int]) -> np.ndarray:
@@ -1716,6 +1851,7 @@ def update_visited_edges(
     else:
         start_pos = prev_position
 
+    visited_before = dict(visited)
     visited, neuron_end_point = _add_to_visited(
         start_pos,
         new_position,
@@ -1726,6 +1862,38 @@ def update_visited_edges(
         valid_nodes=section_nodes,
         valid_dist2=valid_dist2,
     )
+
+    # Fallback: if cut-end anchored start produced no progress, re-anchor at prev_position
+    # projected onto the connected component containing the end projection.
+    if cut_ends and section_nodes is not None and not _visited_changed(visited_before, visited):
+        _end_point, end_edge = _get_nearest_point(
+            new_position,
+            unvisited_tree,
+            id_to_idx=id_to_idx,
+            valid_nodes=section_nodes,
+            adj_dict=adj_dict,
+        )
+        if end_edge[0] is not None:
+            comp_nodes = _component_nodes(int(end_edge[0]), adj_dict, valid_nodes=section_nodes)
+            fallback_start, _fallback_edge = _project_point_to_component(
+                prev_position,
+                unvisited_tree,
+                id_to_idx,
+                adj_dict,
+                comp_nodes,
+            )
+            if fallback_start is not None:
+                visited, neuron_end_point = _add_to_visited(
+                    fallback_start,
+                    new_position,
+                    unvisited_tree,
+                    visited,
+                    adj_dict=adj_dict,
+                    id_to_idx=id_to_idx,
+                    valid_nodes=section_nodes,
+                    valid_dist2=valid_dist2,
+                )
+
     if neuron_end_point is not None:
         unvisited_tree, visited, adj_dict, changed_nodes = remove_visited(unvisited_tree, visited, adj_dict, id_to_idx=id_to_idx)
     

@@ -100,6 +100,7 @@ def main():
     rng_seed = params["rng_seed"] if "rng_seed" in params else 1
     start_complexity = params["start_complexity"] if "start_complexity" in params else 0.0
     start_idx = params["start_idx"] if "start_idx" in params else 0
+    crop_patches = params["crop_patches"] if "crop_patches" in params else True
     print(f"Starting training with start_idx: {start_idx}")
     patch_radius = 17
     in_channels = 2
@@ -113,7 +114,7 @@ def main():
         alpha=start_complexity,
         step_width=step_width,
         rng=rng,
-        crop_patches=True,
+        crop_patches=crop_patches,
         inference_mode=False,
         seeds_path=seeds_path,
         root_sampling_probability=root_sampling_probability,

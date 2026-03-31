@@ -84,6 +84,7 @@ def _run_single_experiment(params: Dict, config_path: Path) -> None:
     root_sampling_probability = _get_param(params, "root_sampling_probability")
     soma_sample_radius = float(_get_param(params, "soma_sample_radius", default=0.0))
     random_offset = float(_get_param(params, "random_offset", default=0.0))
+    crop_patches = bool(_get_param(params, "crop_patches", default=True))
 
     # DAgger offline training parameters
     dagger_rounds = int(_get_param(params, "dagger_rounds", default=0))
@@ -121,7 +122,7 @@ def _run_single_experiment(params: Dict, config_path: Path) -> None:
         alpha=start_complexity,
         step_width=step_width,
         rng=rng,
-        crop_patches=True,
+        crop_patches=crop_patches,
         inference_mode=False,
         seeds_path=seeds_path,
         root_sampling_probability=root_sampling_probability,

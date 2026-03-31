@@ -95,7 +95,7 @@ def draw_2d_panel(ax, environment, cropped=False, sections=None,
             filt = [in_crop(y, x) for y, x in zip(ys, xs)]
             for k in range(1, len(xs)):
                 if filt[k - 1] or filt[k]:
-                    ax.plot([xs[k - 1], xs[k]], [ys[k - 1], ys[k]], color=path_color, linewidth=3.0)
+                    ax.plot([xs[k - 1], xs[k]], [ys[k - 1], ys[k]], color=path_color, linewidth=1.5)
 
     try:
         if len(env.paths) > 0 and len(env.paths[0]) > 0:
@@ -109,7 +109,7 @@ def draw_2d_panel(ax, environment, cropped=False, sections=None,
                 tys = [-float(p[i]) for p in target_points]
                 txs = [float(p[j]) for p in target_points]
                 if not cropped:
-                    ax.scatter(txs, tys, color=target_color, marker='x', s=50)
+                    ax.scatter(txs, tys, color=target_color, marker='x', s=70)
                 else:
                     txs_c = []
                     tys_c = []
@@ -118,7 +118,7 @@ def draw_2d_panel(ax, environment, cropped=False, sections=None,
                             tys_c.append(ty)
                             txs_c.append(tx)
                     if len(txs_c) > 0:
-                        ax.scatter(txs_c, tys_c, color=target_color, marker='x',s=50)
+                        ax.scatter(txs_c, tys_c, color=target_color, marker='x',s=70)
     except Exception as e:
         print(f"Warning: target point computation failed: {e}")
 
@@ -126,7 +126,7 @@ def draw_2d_panel(ax, environment, cropped=False, sections=None,
         term_ys = [-pt[i].item() for pt in env.terminal_points]
         term_xs = [pt[j].item() for pt in env.terminal_points]
         if not cropped:
-            ax.scatter(term_xs, term_ys, color='purple', s=50, marker='o', facecolors='none', linewidths=1.5)
+            ax.scatter(term_xs, term_ys, color='purple', s=80, marker='o', facecolors='none', linewidths=1.0)
         else:
             term_xs_c = []
             term_ys_c = []
@@ -135,7 +135,7 @@ def draw_2d_panel(ax, environment, cropped=False, sections=None,
                     term_ys_c.append(ty)
                     term_xs_c.append(tx)
             if len(term_xs_c) > 0:
-                ax.scatter(term_xs_c, term_ys_c, color='purple', s=50, marker='o', facecolors='none', linewidths=1.5)
+                ax.scatter(term_xs_c, term_ys_c, color='purple', s=80, marker='o', facecolors='none', linewidths=1.0)
     
 
     tree = getattr(env, 'unvisited_tree', None)
@@ -164,7 +164,7 @@ def draw_2d_panel(ax, environment, cropped=False, sections=None,
                 vy = -float(nearest_point[i])
                 vx = float(nearest_point[j])
                 if not cropped or in_crop(vy, vx):
-                    ax.scatter([vx], [vy], color='cyan', s=60, marker='*', alpha=0.8)
+                    ax.scatter([vx], [vy], color='cyan', s=90, marker='P', alpha=0.7)
 
     # Plot branch roots as yellow dots
     branch_roots = getattr(env, 'branch_roots', None)
@@ -231,12 +231,21 @@ def run_expert_episode(env):
         stop_label = bool(getattr(environment, 'target_stop_label', False))
         return torch.as_tensor(target_vectors, dtype=torch.float32).view(-1, 3), stop_label
 
-    obs = env.reset(return_state=True)
+    obs = env.reset(move_to_next=False, return_state=True)
     prev_expert_action = None
     total_reward = 0.0
     steps_done = 0
+    max_steps_limit = 50000  # Safety limit to prevent infinite loops
 
     for _step_idx in count():
+        if steps_done >= max_steps_limit:
+            print(f"\nWARNING: Reached max step limit ({max_steps_limit}). Breaking to prevent infinite loop.")
+            print(f"  Final state: {steps_done} steps, {len(env.finished_paths)} paths finished")
+            print(f"  section_nodes: {env.section_nodes is not None}")
+            print(f"  target_stop_label: {env.target_stop_label}")
+            print(f"  target_vectors: {env.target_vectors}")
+            break
+
         current_target_vectors, current_target_stop = _current_target_action_from_env(env)
         expert_action = select_expert_action(current_target_vectors, previous_action=prev_expert_action)
         expert_choose_stop = bool(current_target_stop)
@@ -473,6 +482,7 @@ def manual_step(env, step_size=4.0):
         - t: explicit stop (calls env.step(..., stop=True))
         - z: zero direction without stop (debug no-op)
         - x: use expert direction + expert stop label
+                - e: run expert action burst for N steps, then pause for input
                 - g: enter stop logit; decoded with policy_utils before env.step
       - r: reset environment
       - b: branch at current point
@@ -511,6 +521,12 @@ def manual_step(env, step_size=4.0):
     sections = get_unvisited_sections(env)
 
     total_steps = 0
+
+    def _get_expert_action_and_stop():
+        prev_action = env.paths[0][-1] - env.paths[0][-2] if len(env.paths[0]) > 1 else None
+        expert_action = select_expert_action(target_vectors=getattr(env, 'target_vectors', None), previous_action=prev_action)
+        expert_stop = bool(getattr(env, 'target_stop_label', False))
+        return expert_action, expert_stop
 
     def _render(observation, reward=None, info=None, action=None):
         # Replace prior frame and logs so the latest state remains visible.
@@ -566,7 +582,7 @@ def manual_step(env, step_size=4.0):
     _render(env.get_state(), reward=None, info=None, action=None)
 
     while True:
-        action_key = input('Choose an action [w/a/s/d, p/l, x, t, z, g, r, b, q]: ').strip().lower()
+        action_key = input('Choose an action [w/a/s/d, p/l, x, e, t, z, g, r, b, q]: ').strip().lower()
         reward = None
 
         if action_key == 'q':
@@ -583,15 +599,47 @@ def manual_step(env, step_size=4.0):
             _render(env.get_state(), reward=None, info=None, action=None)
 
         else:
-            if action_key not in user_input_dict and action_key not in {'x', 't', 'g'}:
-                print(f"Unrecognized action '{action_key}'. Valid: w/a/s/d, p/l, x, t, z, g, r, b, q")
+            if action_key not in user_input_dict and action_key not in {'x', 'e', 't', 'g'}:
+                print(f"Unrecognized action '{action_key}'. Valid: w/a/s/d, p/l, x, e, t, z, g, r, b, q")
                 continue
 
             if action_key == 'x': # select expert action
-                prev_action = env.paths[0][-1] - env.paths[0][-2] if len(env.paths[0]) > 1 else None
-                action = select_expert_action(target_vectors=getattr(env, 'target_vectors', None), previous_action=prev_action)
-                choose_stop = bool(getattr(env, 'target_stop_label', False))
+                action, choose_stop = _get_expert_action_and_stop()
                 use_explicit_stop = True
+            elif action_key == 'e':
+                try:
+                    burst_steps = int(input('Number of expert steps to run [default=1]: ').strip() or '1')
+                except ValueError:
+                    burst_steps = 1
+                    print('Invalid step count; defaulting to 1')
+                if burst_steps <= 0:
+                    print('Step count must be >= 1')
+                    continue
+
+                last_observation = env.get_state()
+                last_reward = None
+                last_info = None
+                last_action = None
+                episode_terminated = False
+
+                for _ in range(burst_steps):
+                    action, choose_stop = _get_expert_action_and_stop()
+                    last_observation, last_reward, terminated, truncated, last_info = env.step(action, verbose=True, stop=choose_stop)
+                    total_steps += 1
+                    last_action = action
+
+                    if last_info.get('terminate_episode'):
+                        print('All paths finished during expert burst. Resetting environment.')
+                        env.reset(return_state=True)
+                        sections = get_unvisited_sections(env)
+                        episode_terminated = True
+                        break
+
+                if episode_terminated:
+                    _render(env.get_state(), reward=None, info=None, action=None)
+                else:
+                    _render(last_observation, reward=last_reward, info=last_info, action=last_action)
+                continue
             elif action_key == 't':
                 action = torch.zeros((3,), dtype=torch.float32, device=device)
                 choose_stop = True

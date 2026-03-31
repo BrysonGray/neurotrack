@@ -215,7 +215,7 @@ def _optimize_batch(
     target_batches: Sequence[torch.Tensor],
     stop_targets: Sequence[bool],
     loss_config: SupervisionLossConfig,
-) -> Tuple[float, float, float]:
+) -> Tuple[float, float, float, int, int, int, int]:
     """Run one optimizer step on a buffered supervision batch."""
     obs_tensor = torch.cat([obs.detach().cpu() for obs in obs_batch], dim=0)
     target_tensor, target_mask = pad_target_candidate_batch(target_batches)
@@ -240,7 +240,7 @@ def _optimize_prepared_batch(
     target_mask: torch.Tensor,
     stop_targets: torch.Tensor,
     loss_config: SupervisionLossConfig,
-) -> Tuple[float, float, float]:
+) -> Tuple[float, float, float, int, int, int, int]:
     """Run one optimizer step from an already-collated batch."""
     model_device = next(actor.parameters()).device
 
@@ -257,6 +257,16 @@ def _optimize_prepared_batch(
         raise ValueError(
             f"stop_targets batch {tuple(stop_targets.shape)} does not match model batch {tuple(pred_output.shape)}"
         )
+
+    _, _, pred_choose_stop = decode_direct_vector_output(
+        pred_output.detach(),
+        stop_action_threshold=0.5,
+    )
+    pred_choose_stop = torch.as_tensor(pred_choose_stop, dtype=torch.bool, device=model_device).view(-1)
+    policy_choose_stop_count = int(pred_choose_stop.sum().item())
+    policy_continue_count = int((~pred_choose_stop).sum().item())
+    false_policy_choose_stop_count = int((pred_choose_stop & (~stop_targets)).sum().item())
+    false_policy_continue_count = int(((~pred_choose_stop) & stop_targets).sum().item())
 
     direction_loss_per_sample = multi_target_direction_loss(
         pred_directions,
@@ -298,7 +308,15 @@ def _optimize_prepared_batch(
     actor_optimizer.zero_grad()
     loss.backward()
     actor_optimizer.step()
-    return float(loss.item()), float(direction_loss.item()), float(stop_loss.item())
+    return (
+        float(loss.item()),
+        float(direction_loss.item()),
+        float(stop_loss.item()),
+        policy_choose_stop_count,
+        false_policy_choose_stop_count,
+        policy_continue_count,
+        false_policy_continue_count,
+    )
 
 
 def _optimize_from_bc_replay_buffer(
@@ -308,7 +326,7 @@ def _optimize_from_bc_replay_buffer(
     batch_size: int,
     transform: bool,
     loss_config: SupervisionLossConfig,
-) -> Optional[Tuple[float, float, float]]:
+) -> Optional[Tuple[float, float, float, int, int, int, int]]:
     if len(replay_buffer) == 0:
         return None
 
@@ -362,10 +380,18 @@ def _flush_supervision_batch(
     direction_losses: List[float],
     stop_bce_losses: List[float],
     loss_config: SupervisionLossConfig,
-) -> None:
+) -> Tuple[int, int, int, int]:
     if not obs_store:
-        return
-    total_loss, direction_loss, stop_bce_loss = _optimize_batch(
+        return 0, 0, 0, 0
+    (
+        total_loss,
+        direction_loss,
+        stop_bce_loss,
+        policy_choose_stop_count,
+        false_policy_choose_stop_count,
+        policy_continue_count,
+        false_policy_continue_count,
+    ) = _optimize_batch(
         actor,
         actor_optimizer,
         obs_store,
@@ -379,6 +405,12 @@ def _flush_supervision_batch(
     obs_store.clear()
     target_store.clear()
     stop_store.clear()
+    return (
+        policy_choose_stop_count,
+        false_policy_choose_stop_count,
+        policy_continue_count,
+        false_policy_continue_count,
+    )
 
 
 def _predict_policy_action(actor: torch.nn.Module, obs: torch.Tensor) -> torch.Tensor:
@@ -390,20 +422,6 @@ def _predict_policy_action(actor: torch.nn.Module, obs: torch.Tensor) -> torch.T
     if pred_output.ndim != 2 or pred_output.shape[1] != 4:
         raise ValueError(f"Expected actor output shape (B, 4), got {tuple(pred_output.shape)}")
     return pred_output[0].detach().cpu()
-
-
-def _sample_rollin_source(
-    beta: float,
-    rng: np.random.Generator,
-) -> str:
-    beta = float(beta)
-    if beta >= 1.0:
-        return "expert"
-    if beta <= 0.0:
-        return "policy"
-    if float(rng.random()) < beta:
-        return "expert"
-    return "policy"
 
 
 def _run_supervision_epoch(
@@ -431,7 +449,7 @@ def _run_supervision_epoch(
             loss_config=loss_config,
         )
         if maybe_loss is not None:
-            total_loss, direction_loss, stop_bce_loss = maybe_loss
+            total_loss, direction_loss, stop_bce_loss, *_counts = maybe_loss
             total_losses.append(float(total_loss))
             direction_losses.append(float(direction_loss))
             stop_bce_losses.append(float(stop_bce_loss))
@@ -478,13 +496,14 @@ def _run_expert_episode(
     episode_rewards: List[float] = []
     episode_step_norms: List[float] = []
     steps_done = 0
-    choose_stop_with_target_count = 0
-    false_choose_stop_count = 0
-    continue_with_target_count = 0
-    false_continue_count = 0
+    policy_choose_stop_count = 0
+    false_policy_choose_stop_count = 0
+    policy_continue_count = 0
+    false_policy_continue_count = 0
 
     for _step_idx in count():
         current_target_vectors, current_target_stop = _current_target_action_from_env(env)
+
         _append_supervision_example(
             obs,
             current_target_vectors,
@@ -497,7 +516,12 @@ def _run_expert_episode(
             aggregate_buffer.push(obs, current_target_vectors, stop_label=current_target_stop)
 
         if len(supervision_obs) >= batch_size:
-            _flush_supervision_batch(
+            (
+                flush_policy_choose_stop_count,
+                flush_false_policy_choose_stop_count,
+                flush_policy_continue_count,
+                flush_false_policy_continue_count,
+            ) = _flush_supervision_batch(
                 actor,
                 actor_optimizer,
                 supervision_obs,
@@ -508,6 +532,10 @@ def _run_expert_episode(
                 episode_stop_bce_losses,
                 loss_config=loss_config,
             )
+            policy_choose_stop_count += flush_policy_choose_stop_count
+            false_policy_choose_stop_count += flush_false_policy_choose_stop_count
+            policy_continue_count += flush_policy_continue_count
+            false_policy_continue_count += flush_false_policy_continue_count
 
         expert_action = select_expert_action(current_target_vectors, previous_action=prev_expert_action)
         expert_choose_stop = bool(current_target_stop)
@@ -516,16 +544,6 @@ def _run_expert_episode(
         next_obs, reward, terminated, _truncated, info = env.step(expert_action, stop=expert_choose_stop)
         steps_done += 1
         episode_rewards.append(float(torch.as_tensor(reward, dtype=torch.float32).item()))
-
-        status = info.get("status")
-        if status == "choose_stop":
-            choose_stop_with_target_count += 1
-            if not bool(info.get("current_target_stop_label", False)):
-                false_choose_stop_count += 1
-        elif status == "continue":
-            continue_with_target_count += 1
-            if bool(info.get("current_target_stop_label", False)):
-                false_continue_count += 1
 
         if info["terminate_episode"]:
             # Don't flush the partial batch at episode end; return it for carryover to next episode
@@ -545,13 +563,13 @@ def _run_expert_episode(
         "episode_avg_stop_bce_loss": float(np.mean(episode_stop_bce_losses)) if episode_stop_bce_losses else 0.0,
         "episode_avg_expert_step_norm": float(np.mean(episode_step_norms)) if episode_step_norms else 0.0,
         "false_stop_rate": (
-            float(false_choose_stop_count / choose_stop_with_target_count)
-            if choose_stop_with_target_count > 0
+            float(false_policy_choose_stop_count / policy_choose_stop_count)
+            if policy_choose_stop_count > 0
             else 0.0
         ),
         "false_continue_rate": (
-            float(false_continue_count / continue_with_target_count)
-            if continue_with_target_count > 0
+            float(false_policy_continue_count / policy_continue_count)
+            if policy_continue_count > 0
             else 0.0
         ),
         "steps_done": int(steps_done),
@@ -573,6 +591,10 @@ def _run_dagger_collection_episode(
     episode_step_norms: List[float] = []
     steps_done = 0
     policy_steps = 0
+    policy_choose_stop_count = 0
+    false_policy_choose_stop_count = 0
+    policy_continue_count = 0
+    false_policy_continue_count = 0
 
     for _step_idx in count():
         current_target_vectors, current_target_stop = _current_target_action_from_env(env)
@@ -581,16 +603,26 @@ def _run_dagger_collection_episode(
         expert_action = select_expert_action(current_target_vectors, previous_action=prev_rollin_action)
         episode_step_norms.append(float(torch.linalg.norm(expert_action).item()))
         expert_choose_stop = bool(current_target_stop)
-        if beta >= 1.0:
-            rollin_action = expert_action.detach().cpu()
-        elif float(rng.random()) < beta:
+        policy_output = _predict_policy_action(actor, obs).detach().cpu()
+        policy_action, _, policy_choose_stop = decode_direct_vector_output(
+            policy_output,
+            stop_action_threshold=float(getattr(env, "stop_action_threshold", 0.5)),
+        )
+        if bool(policy_choose_stop):
+            policy_choose_stop_count += 1
+            if not current_target_stop:
+                false_policy_choose_stop_count += 1
+        else:
+            policy_continue_count += 1
+            if current_target_stop:
+                false_policy_continue_count += 1
+
+        beta_value = float(beta)
+        use_expert_rollin = beta_value >= 1.0 or (beta_value > 0.0 and float(rng.random()) < beta_value)
+        if use_expert_rollin:
             rollin_action = expert_action.detach().cpu()
         else:
-            policy_output = _predict_policy_action(actor, obs).detach().cpu()
-            rollin_action, _, _ = decode_direct_vector_output(
-                policy_output,
-                stop_action_threshold=float(getattr(env, "stop_action_threshold", 0.5)),
-            )
+            rollin_action = policy_action
             policy_steps += 1
 
         next_obs, reward, terminated, _truncated, info = env.step(rollin_action, stop=expert_choose_stop) # use expert stop signal for path termination to ensure episodes aren't cut short due to policy mistakes during roll-in.
@@ -611,6 +643,16 @@ def _run_dagger_collection_episode(
         "episode_avg_reward": float(np.mean(episode_rewards)) if episode_rewards else 0.0,
         "episode_avg_expert_step_norm": float(np.mean(episode_step_norms)) if episode_step_norms else 0.0,
         "policy_rollin_fraction": float(policy_steps / steps_done) if steps_done > 0 else 0.0,
+        "false_stop_rate": (
+            float(false_policy_choose_stop_count / policy_choose_stop_count)
+            if policy_choose_stop_count > 0
+            else 0.0
+        ),
+        "false_continue_rate": (
+            float(false_policy_continue_count / policy_continue_count)
+            if policy_continue_count > 0
+            else 0.0
+        ),
         "steps_done": int(steps_done),
     }
 
@@ -1040,6 +1082,8 @@ def train_dagger(
         rollout_rewards: List[float] = []
         rollout_step_norms: List[float] = []
         rollout_policy_fractions: List[float] = []
+        rollout_false_stop_rates: List[float] = []
+        rollout_false_continue_rates: List[float] = []
         round_collection_steps = 0
         round_iter = tqdm(
             range(rollout_episodes_per_round),
@@ -1065,6 +1109,8 @@ def train_dagger(
             rollout_rewards.append(float(episode_metrics["episode_avg_reward"]))
             rollout_step_norms.append(float(episode_metrics["episode_avg_expert_step_norm"]))
             rollout_policy_fractions.append(float(episode_metrics["policy_rollin_fraction"]))
+            rollout_false_stop_rates.append(float(episode_metrics["false_stop_rate"]))
+            rollout_false_continue_rates.append(float(episode_metrics["false_continue_rate"]))
 
             # When the buffer is full and we have collected one full-capacity turnover
             # of new samples without any intermediate policy updates, more collection is
@@ -1121,8 +1167,8 @@ def train_dagger(
             avg_stop_bce_loss=float(np.mean(round_stop_bce_losses)) if round_stop_bce_losses else 0.0,
             avg_step_norm=float(np.mean(rollout_step_norms)) if rollout_step_norms else 0.0,
             policy_rollin_fraction=float(np.mean(rollout_policy_fractions)) if rollout_policy_fractions else 0.0,
-            false_stop_rate=0.0,
-            false_continue_rate=0.0,
+            false_stop_rate=float(np.mean(rollout_false_stop_rates)) if rollout_false_stop_rates else 0.0,
+            false_continue_rate=float(np.mean(rollout_false_continue_rates)) if rollout_false_continue_rates else 0.0,
             steps_done=steps_done,
             dataset_size=len(aggregate_buffer),
             complexity=float(env.dataset.alpha),
@@ -1358,24 +1404,36 @@ def train_dagger_online(
         episode_stop_bce_losses: List[float] = []
         policy_steps = 0
         episode_steps = 0
-        choose_stop_with_target_count = 0
-        false_choose_stop_count = 0
-        continue_with_target_count = 0
-        false_continue_count = 0
+        policy_choose_stop_count = 0
+        false_policy_choose_stop_count = 0
+        policy_continue_count = 0
+        false_policy_continue_count = 0
 
         for _step_idx in count():
             current_target_vectors, current_target_stop = _current_target_action_from_env(env)
             aggregate_buffer.push(obs, current_target_vectors, stop_label=current_target_stop)
 
-            action_source = _sample_rollin_source(beta=beta, rng=rng)
-            if action_source == "expert":
-                rollin_action = select_expert_action(current_target_vectors, previous_action=prev_rollin_action)
+            policy_output = _predict_policy_action(actor, obs)
+            policy_action, _, policy_choose_stop = decode_direct_vector_output(
+                policy_output,
+                stop_action_threshold=float(getattr(env, "stop_action_threshold", 0.5)),
+            )
+            if bool(policy_choose_stop):
+                policy_choose_stop_count += 1
+                if not current_target_stop:
+                    false_policy_choose_stop_count += 1
             else:
-                policy_output = _predict_policy_action(actor, obs)
-                rollin_action, _, _ = decode_direct_vector_output(
-                    policy_output,
-                    stop_action_threshold=float(getattr(env, "stop_action_threshold", 0.5)),
-                )
+                policy_continue_count += 1
+                if current_target_stop:
+                    false_policy_continue_count += 1
+
+            expert_action = select_expert_action(current_target_vectors, previous_action=prev_rollin_action)
+            beta_value = float(beta)
+            use_expert_rollin = beta_value >= 1.0 or (beta_value > 0.0 and float(rng.random()) < beta_value)
+            if use_expert_rollin:
+                rollin_action = expert_action
+            else:
+                rollin_action = policy_action
                 policy_steps += 1
             episode_step_norms.append(float(torch.linalg.norm(rollin_action).item()))
 
@@ -1383,16 +1441,6 @@ def train_dagger_online(
             steps_done += 1
             episode_steps += 1
             episode_rewards.append(float(torch.as_tensor(reward, dtype=torch.float32).item()))
-
-            status = info.get("status")
-            if status == "choose_stop":
-                choose_stop_with_target_count += 1
-                if not bool(info.get("current_target_stop_label", False)):
-                    false_choose_stop_count += 1
-            elif status == "continue":
-                continue_with_target_count += 1
-                if bool(info.get("current_target_stop_label", False)):
-                    false_continue_count += 1
 
             learning_started = len(aggregate_buffer) >= update_after_steps
             if learning_started and steps_done % update_every == 0:
@@ -1406,7 +1454,7 @@ def train_dagger_online(
                         loss_config=loss_config,
                     )
                     if maybe_loss is not None:
-                        total_loss, direction_loss, stop_bce_loss = maybe_loss
+                        total_loss, direction_loss, stop_bce_loss, *_counts = maybe_loss
                         episode_total_losses.append(float(total_loss))
                         episode_direction_losses.append(float(direction_loss))
                         episode_stop_bce_losses.append(float(stop_bce_loss))
@@ -1448,13 +1496,13 @@ def train_dagger_online(
 
         episodes_done += 1
         false_stop_rate = (
-            float(false_choose_stop_count / choose_stop_with_target_count)
-            if choose_stop_with_target_count > 0
+            float(false_policy_choose_stop_count / policy_choose_stop_count)
+            if policy_choose_stop_count > 0
             else 0.0
         )
         false_continue_rate = (
-            float(false_continue_count / continue_with_target_count)
-            if continue_with_target_count > 0
+            float(false_policy_continue_count / policy_continue_count)
+            if policy_continue_count > 0
             else 0.0
         )
         _write_dagger_log_row(

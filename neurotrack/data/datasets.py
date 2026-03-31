@@ -247,38 +247,79 @@ class NeuronPatchDataset(TorchDataset):
         seed_point_xyz: torch.Tensor,
         spatial_shape_zyx: torch.Size,
         add_prev_path: bool = True,
-    ) -> torch.Tensor:
-        """Build path channel from smallest-id subtree node to the seed node."""
+    ) -> Tuple[torch.Tensor, List, List[int]]:
+        """
+        Build path channel and return updated subtree plus cut-end node ids.
+        Always remove the path from the subtree, and optionally add a rendered path channel for that path.
+        """
         spatial_shape = tuple(int(v) for v in spatial_shape_zyx)
         path_channel = torch.zeros(spatial_shape, dtype=torch.uint8)
+        cut_end_ids: List[int] = []
 
         if not subtree:
-            return path_channel, subtree
+            return path_channel, subtree, cut_end_ids
 
         id_to_node = {int(node[0]): node for node in subtree}
         seed_id = int(seed_node_id)
         seed_node = id_to_node.get(seed_id)
         if seed_node is None:
-            return path_channel, subtree
+            return path_channel, subtree, cut_end_ids
+
+        # collect the ids along the path from the seed node to the start node
+        # (the node with the smallest id in the subtree, which is typically a root or near-root node)
+        start_node_id = min(id_to_node.keys())
+        adj_dict = load.adjacency_dict(subtree)
+        path_ids = self._find_path_ids(
+            adjacency=adj_dict,
+            start_node_id=start_node_id,
+            target_node_id=seed_id,
+        )
+        if len(path_ids) < 2:
+            return path_channel, subtree, cut_end_ids
+        path_id_set = set(path_ids)
+
+        # remove path_ids from subtree.
+        # set removed node neighbors that are not removed to have parent_id = -1
+        neighbors_to_update = set()
+        for node_id in path_ids:
+            neighbor_nodes = adj_dict.get(int(node_id), [])
+            for neighbor in neighbor_nodes:
+                if int(neighbor) not in path_id_set:
+                    neighbors_to_update.add(int(neighbor))
+        cut_end_ids = sorted(neighbors_to_update)
+        updated_subtree = []
+        for node in subtree:
+            if int(node[0]) in path_id_set:
+                continue
+            if int(node[0]) in neighbors_to_update:
+                updated_node = list(node)
+                updated_node[6] = -1
+                updated_subtree.append(updated_node)
+            else:
+                updated_subtree.append(node)
+
+        # Keep subtree edge-based: drop any isolated leftovers after path removal.
+        if updated_subtree:
+            updated_adj = load.adjacency_dict(updated_subtree)
+            connected_ids = {
+                int(node_id)
+                for node_id, neighbors in updated_adj.items()
+                if len(neighbors) > 0
+            }
+            if connected_ids:
+                updated_subtree = [node for node in updated_subtree if int(node[0]) in connected_ids]
+            else:
+                updated_subtree = []
+            subtree = updated_subtree
 
         # If seed is a root node or add_prev_path is False, draw a seed marker instead of a path.
         if int(seed_node[6]) == -1 or not add_prev_path:
             seed_point = torch.as_tensor((seed_node[4], seed_node[3], seed_node[2]), dtype=torch.float32)
             path_image = Image(torch.zeros((1,) + spatial_shape, dtype=torch.uint8))
-            path_image.draw_point(seed_point, radius=self.step_width, channel=0, mode="mask")
+            path_image.draw_point(seed_point, radius=self.step_width/2, channel=0, mode="mask")
             
         else:
-            start_node_id = min(id_to_node.keys())
-            adj_dict = load.adjacency_dict(subtree)
-            path_ids = self._find_path_ids(
-                adjacency=adj_dict,
-                start_node_id=start_node_id,
-                target_node_id=seed_id,
-            )
-            if len(path_ids) < 2:
-                return path_channel, subtree
-            path_id_set = set(path_ids)
-
+            # draw the path segments between the seed node and the start node
             path_image = Image(torch.zeros((1,) + spatial_shape, dtype=torch.uint8))
             for idx in range(len(path_ids) - 1):
                 node_a = id_to_node[path_ids[idx]]
@@ -294,40 +335,7 @@ class NeuronPatchDataset(TorchDataset):
                 segment = torch.stack((seed_point_zyx, point_b), dim=0)
                 path_image.draw_line_segment(segment, width=self.step_width, channel=0, mask=True)
 
-            # remove path_ids from subtree.
-            # set removed node neighbors that are not removed to have parent_id = -1
-            neighbors_to_update = set()
-            for node_id in path_ids:
-                neighbor_nodes = adj_dict.get(int(node_id), [])
-                for neighbor in neighbor_nodes:
-                    if int(neighbor) not in path_id_set:
-                        neighbors_to_update.add(int(neighbor))
-            updated_subtree = []
-            for node in subtree:
-                if int(node[0]) in path_id_set:
-                    continue
-                if int(node[0]) in neighbors_to_update:
-                    updated_node = list(node)
-                    updated_node[6] = -1
-                    updated_subtree.append(updated_node)
-                else:
-                    updated_subtree.append(node)
-
-            # Keep subtree edge-based: drop any isolated leftovers after path removal.
-            if updated_subtree:
-                updated_adj = load.adjacency_dict(updated_subtree)
-                connected_ids = {
-                    int(node_id)
-                    for node_id, neighbors in updated_adj.items()
-                    if len(neighbors) > 0
-                }
-                if connected_ids:
-                    updated_subtree = [node for node in updated_subtree if int(node[0]) in connected_ids]
-                else:
-                    updated_subtree = []
-                subtree = updated_subtree
-
-        return path_image.data[0], subtree
+        return path_image.data[0], subtree, cut_end_ids
 
     @staticmethod
     def _append_path_channel(image: torch.Tensor, path_channel: Optional[torch.Tensor] = None) -> torch.Tensor:
@@ -661,12 +669,12 @@ class NeuronPatchDataset(TorchDataset):
             else:
                 image = cropped_img
 
-        path_channel, shifted_subtree = self._build_predicted_path_channel(
+        path_channel, shifted_subtree, cut_end_ids = self._build_predicted_path_channel(
             subtree=shifted_subtree,
             seed_node_id=seed_node_id,
             seed_point_xyz=seed_xyz,
             spatial_shape_zyx=cropped_img.shape[-3:],
-            add_prev_path=True # always add the previous path.
+            add_prev_path=not sample_from_root
         )
         if len(shifted_subtree) == 0:
             raise _ResamplePatch("Extracted subtree is empty after path pruning.")
@@ -679,6 +687,7 @@ class NeuronPatchDataset(TorchDataset):
             'neuron_mask': neuron_area_mask,
             'seed_point_xyz': seed_xyz,
             'seed_node_id': seed_node_id,
+            'cut_end_ids': cut_end_ids,
         }
     
     def __len__(self) -> int:

@@ -84,6 +84,7 @@ def _run_single_experiment(params: Dict, config_path: Path) -> None:
     root_sampling_probability = _get_param(params, "root_sampling_probability")
     soma_sample_radius = float(_get_param(params, "soma_sample_radius", default=0.0))
     random_offset = float(_get_param(params, "random_offset", default=0.0))
+    crop_patches = bool(_get_param(params, "crop_patches", default=True))
 
     # DAgger offline training parameters
     dagger_rounds = int(_get_param(params, "dagger_rounds", default=0))
@@ -100,11 +101,10 @@ def _run_single_experiment(params: Dict, config_path: Path) -> None:
     beta_start = float(_get_param(params, "beta_start", default=1.0))
     beta_end = float(_get_param(params, "beta_end", default=0.0))
     aggregate_memory_budget = int(_get_param(params, "aggregate_memory_budget", "dagger_memory_budget", default=10000))
-    stall_threshold = float(_get_param(params, "stall_threshold", default=1.0))
-
-    # Loss weighting parameters
     continue_target_norm_threshold_raw = _get_param(params, "continue_target_norm_threshold", default=None)
     continue_target_norm_threshold = None if continue_target_norm_threshold_raw is None else float(continue_target_norm_threshold_raw)
+
+    # Direction loss weighting parameter
     continue_weight = float(_get_param(params, "continue_weight", default=1.0))
     norm_floor = float(_get_param(params, "norm_floor", default=0.0))
     norm_floor_weight = float(_get_param(params, "norm_floor_weight", default=0.0))
@@ -118,7 +118,7 @@ def _run_single_experiment(params: Dict, config_path: Path) -> None:
         alpha=start_complexity,
         step_width=step_width,
         rng=rng,
-        crop_patches=True,
+        crop_patches=crop_patches,
         inference_mode=False,
         seeds_path=seeds_path,
         root_sampling_probability=root_sampling_probability,
@@ -131,7 +131,7 @@ def _run_single_experiment(params: Dict, config_path: Path) -> None:
         radius=17,
         target_step_len=target_step_len,
         step_width=step_width,
-        stall_threshold=stall_threshold,
+        stall_threshold=float(_get_param(params, "stall_threshold", default=1.0)),
         max_len=int(_get_param(params, "max_len", default=1000)),
         max_paths=int(_get_param(params, "max_paths", default=1000)),
         gamma=float(_get_param(params, "gamma", default=0.0)),

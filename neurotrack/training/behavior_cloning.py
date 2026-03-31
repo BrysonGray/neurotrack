@@ -15,7 +15,7 @@ import torch
 from tqdm import tqdm
 
 from neurotrack.training.memory import BehaviorCloningReplayBuffer
-from neurotrack.training.sac import prepare_observation_for_model
+from neurotrack.training.policy_utils import prepare_observation_for_model
 
 DEVICE = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 dtype = torch.float32

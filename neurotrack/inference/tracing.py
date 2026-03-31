@@ -7,7 +7,10 @@ import torch
 from itertools import count
 from typing import Optional
 
-from neurotrack.training.sac import sample_from_output, prepare_observation_for_model
+from neurotrack.training.policy_utils import (
+    prepare_observation_for_model,
+    sample_from_output,
+)
 from neurotrack.training.env_inspector import show_state
 
 DEVICE = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -20,7 +23,7 @@ def _select_action_from_actor_output(
 ):
     """Convert actor outputs into an action tensor for tracing."""
     if policy_output_mode == "direct_vector":
-        action = actor_out[0]
+        action = actor_out[0, :3].detach().cpu()
         return action, None
 
     direction_dist = sample_from_output(actor_out)

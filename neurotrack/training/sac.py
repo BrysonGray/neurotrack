@@ -21,7 +21,7 @@ import torch
 from tqdm import tqdm
 
 from neurotrack.training.memory import ReplayBuffer, PrioritizedReplayBuffer
-from neurotrack.training.env_inspector import show_state
+from neurotrack.training.policy_utils import prepare_observation_for_model, sample_from_output
 from neurotrack.training.gif import trace_gif
 from neurotrack.visualization.ortho_viewer import show_inference_overlay_and_wait
 from neurotrack.environments.tracking_reward import distance_reward
@@ -31,47 +31,6 @@ DEVICE = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 dtype = torch.float32
 date_time = datetime.now().strftime("'%Y-%m-%d_%H-%M-%S'")
     
-
-
-def sample_from_output(out):    
-    """
-    A function to differentiably sample from the output tensor.
-    
-    Parameters
-    ----------
-    out : torch.Tensor
-        The input tensor containing the mean and log variance components.
-        The first three columns represent the mean, and the remaining columns
-        represent the log variance.
-    random : bool, optional
-        If True, samples randomly from the distribution. Default is False.
-        
-    Returns
-    -------
-    torch.distributions.MultivariateNormal
-        A multivariate normal distribution parameterized by the processed mean
-        and log variance.
-    """
-
-    mean = out[:,:3] # component 0, 1 and 2
-    logvar = out[:,3:] # logvar component 3
-
-    meannorm = torch.linalg.norm(mean, dim=-1, keepdim=True)
-    meannorm_ = torch.tanh(meannorm)*10 # maximum of 10
-    mean = mean * meannorm_/(meannorm + torch.finfo(out.dtype).eps)
-    logvar = torch.tanh(logvar)*3 - 1 # logvar between -4 and 2
-    direction_dist = torch.distributions.MultivariateNormal(mean[:,:3], torch.exp(logvar)[:,None]*torch.eye(3, device=out.device)[None])
-
-    return direction_dist
-
-
-def prepare_observation_for_model(obs, device=None, model_dtype=torch.float32):
-    """Convert uint8 observations to normalized float tensors at model input boundaries."""
-    if device is None:
-        device = obs.device
-    if obs.dtype == torch.uint8:
-        return obs.to(device=device, dtype=model_dtype) * (1.0 / 255.0)
-    return obs.to(device=device, dtype=model_dtype)
 
 
 def _concat_obs_with_action(obs, action):
@@ -498,6 +457,8 @@ def train(env,
                 try:
                     shell = get_ipython().__class__.__name__  # type: ignore
                     if shell:
+                        from neurotrack.training.env_inspector import show_state
+
                         show_state(env, fig, live=True, reward=reward_value)
                     if pause_after_step:
                         try:
@@ -615,6 +576,8 @@ def train(env,
                     try:
                         shell = get_ipython().__class__.__name__ # type: ignore
                         if shell:
+                            from neurotrack.training.env_inspector import show_state
+
                             show_state(env, fig)
                             print(f"num branches: {len(env.finished_paths)}", flush=True)
                             print(f"reward min/max: {np.min(reward_cache):.2f}/{np.max(reward_cache):.2f} moving avg: {moving_avg_reward:.2f}", flush=True)

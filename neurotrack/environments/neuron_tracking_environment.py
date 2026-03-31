@@ -16,7 +16,7 @@ from neurotrack.data import loading as load
 from neurotrack.data import tree
 from neurotrack.data.image import Image, to_uint8
 from neurotrack.environments.tracking_reward import (
-    _get_nearest_node, _init_visited, _compute_target_point,
+    _get_nearest_node, _init_visited, _compute_target_action,
     distance_reward,_get_connected_nodes, update_current_section,
     update_visited_edges)
 from torch.utils.data import DataLoader as TorchDataLoader
@@ -83,7 +83,7 @@ class NeuronTrackingEnvironment:
         self.branching = branching
         self.repeat_starts = repeat_starts
         self.inference_mode = inference_mode
-        self.close_dist2 = 14.0 ** 2  # distance threshold for cut end assignment and neuron end point assignment when removing visited edges
+        self.close_dist2 = 7.0 ** 2  # distance threshold for cut end assignment and neuron end point assignment when removing visited edges
         
         # Initialize other attributes that will be set when neuron data is loaded
         self.img = None
@@ -209,7 +209,10 @@ class NeuronTrackingEnvironment:
         
         self.paths = [[p] for p in seeds.unbind(0)]
         self._set_branch_roots(list(seeds.unbind(0)))
-        self.cut_ends = []
+        cut_end_ids_data = patch_data.get('cut_end_ids', [])
+        if cut_end_ids_data is None:
+            cut_end_ids_data = []
+        self.cut_ends = [int(node_id) for node_id in cut_end_ids_data]
         if self.has_ground_truth:
             # Initialize visited edges
             self.visited = _init_visited(self.full_tree)
@@ -255,8 +258,7 @@ class NeuronTrackingEnvironment:
             # Check for small step (stalling)
             delta = new_position - self.paths[0][-1]
             step_size2 = (delta * delta).sum()
-            stall_threshold2 = self.stall_threshold2
-            stall = step_size2 < stall_threshold2
+            stall = step_size2 < self.stall_threshold2
             if stall:
                 status = "choose_stop"
             elif len(self.paths[0]) > self.max_len: # Check if path is too long
@@ -282,7 +284,7 @@ class NeuronTrackingEnvironment:
         }
 
         current_position = self.paths[0][-1]
-        new_position = current_position + action
+        new_position = current_position + direction
         status = self._get_status(new_position)
         info['status'] = status
 
@@ -329,6 +331,7 @@ class NeuronTrackingEnvironment:
         self.section_nodes = None
         self.section_assigned = False
         current_position = self.paths[0][-1]
+        # update section uses nearby cut ends. If there are no nearby cut ends, it will be a no-op and section_nodes will remain None.
         self.section_nodes, self.terminal_points = update_current_section(
             current_position,
             self.section_nodes,
@@ -342,9 +345,17 @@ class NeuronTrackingEnvironment:
         )
         if self.section_nodes is not None:
             self.section_assigned = True
-            target_points = _compute_target_point(current_position, self.unvisited_tree, self.target_step_len, adj_dict=self.adj_dict,
-                                                id_to_idx=self.id_to_idx, terminal_points=None, valid_nodes=self.section_nodes, valid_dist2=self.close_dist2)
-            self.target_vectors = self._target_vectors_from_points(current_position, target_points)
+            target_points, _unused_stop_flag, _nearest_dist2 = _compute_target_action(
+                current_position,
+                self.unvisited_tree,
+                self.target_step_len,
+                adj_dict=self.adj_dict,
+                id_to_idx=self.id_to_idx,
+                terminal_points=None,
+                valid_nodes=self.section_nodes,
+                valid_dist2=self.close_dist2,
+            )
+            self.target_vectors = target_points
 
         if len(self.finished_paths) == 0: # If this is the first path, assign section based on nearest node to the starting point since there are no cut ends yet.
             nearest_node = _get_nearest_node(current_position, self.unvisited_tree, id_to_idx=self.id_to_idx)
@@ -363,9 +374,22 @@ class NeuronTrackingEnvironment:
                 if terminals:
                     self.terminal_points = torch.stack([self.unvisited_tree[self.id_to_idx[int(t)], 2:5] for t in terminals])
                 self.section_assigned = True
-                target_points = _compute_target_point(current_position, self.unvisited_tree, self.target_step_len, adj_dict=self.adj_dict,
-                                                    id_to_idx=self.id_to_idx, terminal_points=None, valid_nodes=self.section_nodes, valid_dist2=self.close_dist2)
-                self.target_vectors = self._target_vectors_from_points(current_position, target_points)
+                target_points, _unused_stop_flag, _nearest_dist2 = _compute_target_action(
+                    current_position,
+                    self.unvisited_tree,
+                    self.target_step_len,
+                    adj_dict=self.adj_dict,
+                    id_to_idx=self.id_to_idx,
+                    terminal_points=None,
+                    valid_nodes=self.section_nodes,
+                    valid_dist2=self.close_dist2,
+                )
+                self.target_vectors = target_points
+
+                # Always create a branch at the start for the first path if branching is enabled
+                if self.branching:
+                    self.paths.append([current_position])
+                    self._append_branch_root(current_position)
 
 
     def _terminate_path(self) -> bool:
@@ -386,6 +410,7 @@ class NeuronTrackingEnvironment:
         # Convert list of points to stacked tensor once when finalizing the path
         finished_path = torch.stack(self.paths.pop(0), dim=0)
         self.finished_paths.append(finished_path)
+
         # Check for max branches
         if len(self.finished_paths) > self.max_paths:
             terminate_episode = True
@@ -415,7 +440,10 @@ class NeuronTrackingEnvironment:
         Returns:
         --------
         tuple
-            (observation, reward, terminated, truncated, info) - the new state, reward, termination flag, truncation flag, and additional information
+            (observation, reward, terminated, truncated, info) - the new state, reward, termination flag,
+            truncation flag, and additional information.
+            (observation, reward, terminated, truncated, info) - the new state, reward, termination flag,
+            truncation flag, and additional information.
         """
         if self.img is None:
             raise ValueError("No neuron data loaded. Call reset() first.")
@@ -437,7 +465,14 @@ class NeuronTrackingEnvironment:
             info['current_target_vectors'] = self.target_vectors
             info['status'] = status
 
-            if status in ["out_of_image", "choose_stop"]: # then terminate path
+            if status in ["out_of_image", "choose_stop"]:
+                terminated = True
+                reward = distance_reward(torch.zeros_like(direction), self.target_vectors, terminated=True, gamma=self.gamma)
+                info['terminate_episode'] = self._terminate_path()
+                observation = self.get_state(terminate=True)
+                return observation, reward, terminated, truncated, info
+
+            if status in ["out_of_image"]: # then terminate path
                 terminated = True
                 # Terminate the branch, but the episode may continue.
                 # Reward is negative squared distance to nearest termination point times 1 / (1 - gamma).
@@ -478,8 +513,8 @@ class NeuronTrackingEnvironment:
                             self.adj_dict,
                             self.id_to_idx,
                             close_dist2,
-                            neuron_root_ids=self.neuron_root_ids,
-                        )
+                            neuron_root_ids=self.neuron_root_ids
+                            )
                         
                         self.section_assigned = True
                     
@@ -497,7 +532,7 @@ class NeuronTrackingEnvironment:
                             close_dist2)
                         self.visited, self.unvisited_tree, self.adj_dict, self.cut_ends, self.id_to_idx = updates
 
-                        # update_current_section is a no-op when cut_ends is empty
+                        # update_current_section is a no-op when cut_ends is empty or no nearby cut ends are found.
                         if self.cut_ends:
                             self.section_nodes, self.terminal_points = update_current_section(
                                     new_position,
@@ -517,49 +552,34 @@ class NeuronTrackingEnvironment:
                         if branch_roots_tensor.device != new_position.device:
                             branch_roots_tensor = branch_roots_tensor.to(new_position.device)
                         distances = ((branch_roots_tensor - new_position) ** 2).sum(dim=1)
-                        if not torch.any(distances < 49.0):  # no branches within 7 pixels (7^2 to avoid sqrt)
+                        if not torch.any(distances < 25.0):  # no branches within 5 pixels (5^2 to avoid sqrt)
                             self.paths.append([new_position])
                             self._append_branch_root(new_position)
 
-                    # Compute next target vector
-                    target_points = _compute_target_point(new_position, self.unvisited_tree, self.target_step_len, adj_dict=self.adj_dict,
-                                    id_to_idx=self.id_to_idx, terminal_points=self.terminal_points, valid_nodes=self.section_nodes, valid_dist2=self.close_dist2)
-                    self.target_vectors = self._target_vectors_from_points(new_position, target_points)
+                    # Compute next target points and vectors
+                    if self.section_nodes is None:
+                        self.target_vectors = self._zero_target_vectors(device=new_position.device)
+                        nearest_section_point_dist2 = float("inf")
+                    else:
+                        target_points, _unused_stop_flag, nearest_section_point_dist2 = _compute_target_action(
+                            new_position,
+                            self.unvisited_tree,
+                            self.target_step_len,
+                            adj_dict=self.adj_dict,
+                            id_to_idx=self.id_to_idx,
+                            terminal_points=None,
+                            valid_nodes=self.section_nodes,
+                            valid_dist2=self.close_dist2,
+                        )
+                        self.target_vectors = target_points
                     info['next_target_vectors'] = self.target_vectors
 
-                    # If the section is assigned but no section nodes are found in the window, this means the agent has walked away from the assigned section. In this case, truncate the path.
-                    # if self.section_assigned and self.section_nodes is not None:
-                    #     # Filter section_nodes to only include nodes still in id_to_idx (not visited/removed yet)
-                    #     valid_section_nodes = [node for node in self.section_nodes if int(node) in self.id_to_idx]
-                    #     if valid_section_nodes:
-                    #         section_indices = [self.id_to_idx[int(node)] for node in valid_section_nodes]
-                    #         section_points = self.unvisited_tree[section_indices, 2:5]
-                    #         nearest_section_node_dist2 = torch.sum((section_points - new_position.unsqueeze(0)) ** 2, dim=1).min()
-                    #         if nearest_section_node_dist2 > self.radius**2:
-                    #             truncated = True
-                    #             info['terminate_episode'] = self._terminate_path()
-                    #     else:
-                    #         # All section nodes have been visited; truncate the path
-                    #         truncated = True
-                    #         info['terminate_episode'] = self._terminate_path()
+                    # If the section is assigned but no section nodes are found within the distance cutoff, this means the agent has walked away from the assigned section. In this case, truncate the path.
+                    if self.section_assigned and self.section_nodes is not None:
+                        if nearest_section_point_dist2 > self.close_dist2:
+                            truncated = True
+                            info['terminate_episode'] = self._terminate_path()
 
-                    # # if no neuron nodes or termination points are within radius, then if the path has already been assigned
-                    # # a section but walked away from it, truncate the path. If the path has no section assigned, i.e. it started
-                    # # at a new path with no neuron within the agent window, then the target point is the current position.
-                    # target_out_of_window = len(target_points) == 0 or ((target_points - new_position)**2).sum(dim=1).min() > self.radius**2
-                    # if target_out_of_window: # target out of window
-                    #     if self.section_assigned: # if no target points found in window and section already assigned, truncate.
-                    #         # truncate path
-                    #         truncated = True
-                    #         info['terminate_episode'] = self._terminate_path()
-                    #     else: # if no target points found and no section assigned, set target to current position.
-                    #         self.target_vectors = self._zero_target_vectors(device=direction.device)
-                    #         info['next_target_vectors'] = self.target_vectors
-                    # else: # target points found in window
-                    #     if not self.section_assigned: # if target points found and no section assigned, assign section.
-                    #         self.section_assigned = True
-                    #     self.target_vectors = self._target_vectors_from_points(new_position, target_points)
-                    #     info['next_target_vectors'] = self.target_vectors
 
         return observation, reward, terminated, truncated, info
 

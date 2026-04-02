@@ -284,7 +284,7 @@ class NeuronTrackingEnvironment:
         }
 
         current_position = self.paths[0][-1]
-        new_position = current_position + direction
+        new_position = current_position + action
         status = self._get_status(new_position)
         info['status'] = status
 
@@ -370,6 +370,7 @@ class NeuronTrackingEnvironment:
                     swc_list=self.unvisited_tree,
                     id_to_idx=self.id_to_idx,
                     neuron_root_ids=self.neuron_root_ids,
+                    cut_ends=self.cut_ends,
                 )
                 if terminals:
                     self.terminal_points = torch.stack([self.unvisited_tree[self.id_to_idx[int(t)], 2:5] for t in terminals])

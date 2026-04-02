@@ -278,6 +278,7 @@ def _get_connected_nodes(
     swc_list=None,
     id_to_idx=None,
     neuron_root_ids=None,
+    cut_ends=None,
 ) -> list:
     """
     Get all the nodes on the same tree as the given node.
@@ -296,6 +297,8 @@ def _get_connected_nodes(
         Mapping from node ID to index in swc_list. Required if max_dist is provided. Defaults to None.
     neuron_root_ids : set, optional
         Cached neuron root node IDs (where parent is -1). If None, roots are derived from swc_list.
+    cut_ends : iterable, optional
+        Node IDs that are cut ends. Cut ends are excluded from terminal node labeling.
 
     Returns:
     --------
@@ -315,12 +318,18 @@ def _get_connected_nodes(
         root_nodes = {int(row[0]) for row in swc_list if row[6] == -1}
     else:
         root_nodes = {int(n) for n in neuron_root_ids}
+    cut_end_nodes = set() if cut_ends is None else {int(n) for n in cut_ends}
     while stack:
         n, dist = stack.pop()
         if n in visited:
             continue
         visited.add(n)
-        if len(adj_dict.get(n, [])) == 1 and n != node and n not in root_nodes:  # terminal node (but not the starting node or a root node)
+        if (
+            len(adj_dict.get(n, [])) == 1
+            and n != node
+            and n not in root_nodes
+            and n not in cut_end_nodes
+        ):  # terminal node (but not the starting node, root node, or cut end)
             terminals.append(n)
         
         # Check if we've exceeded max_dist. If so, don't explore neighbors
@@ -430,11 +439,12 @@ def _get_nearest_point(point: Union[torch.Tensor, np.ndarray], swc_list: Union[t
 
     nearest_node = int(nearest_node)
 
-    # Fast local edge search:
-    # include edges touching nearest_node and its neighbors (one-hop expansion),
-    # then pick the closest segment among those candidates.
-    # This avoids a full-graph scan while fixing misses where the true nearest
-    # segment is adjacent to a neighbor of nearest_node.
+    # For section-constrained calls, use an exact search over all edges in the
+    # provided valid-node set. This prevents local-neighborhood misses that can
+    # project onto an incorrect branch within the same section.
+    #
+    # For unrestricted calls, keep the fast local neighborhood search and only
+    # expand to a distance-window fallback when needed.
     if valid_nodes is None:
         valid_node_set = None
     else:
@@ -442,26 +452,68 @@ def _get_nearest_point(point: Union[torch.Tensor, np.ndarray], swc_list: Union[t
         if nearest_node not in valid_node_set:
             return None, (None, None)
 
-    seed_nodes = {nearest_node}
-    seed_nodes.update(int(n) for n in adj_dict.get(nearest_node, []) if int(n) in id_to_idx)
-    if valid_node_set is not None:
-        seed_nodes = {n for n in seed_nodes if n in valid_node_set}
-
     candidate_edges = set()
-    for u in seed_nodes:
-        for v in adj_dict.get(u, []):
-            v = int(v)
-            if v not in id_to_idx:
-                continue
-            if valid_node_set is not None and v not in valid_node_set:
-                continue
-            if u == v:
-                continue
-            edge = (u, v) if u < v else (v, u)
-            candidate_edges.add(edge)
+    if valid_node_set is not None:
+        search_nodes = valid_node_set
+        for u in search_nodes:
+            for v in adj_dict.get(u, []):
+                v_i = int(v)
+                if v_i not in search_nodes or u == v_i:
+                    continue
+                edge = (u, v_i) if u < v_i else (v_i, u)
+                candidate_edges.add(edge)
+    else:
+        seed_nodes = {nearest_node}
+        seed_nodes.update(int(n) for n in adj_dict.get(nearest_node, []) if int(n) in id_to_idx)
+        for u in seed_nodes:
+            for v in adj_dict.get(u, []):
+                v = int(v)
+                if v not in id_to_idx or u == v:
+                    continue
+                edge = (u, v) if u < v else (v, u)
+                candidate_edges.add(edge)
 
     if not candidate_edges:
-        return None, (None, None)
+        if valid_node_set is not None:
+            return None, (None, None)
+
+        # Unrestricted fallback: limit candidate nodes to a local window around
+        # the query point to avoid expensive global scans in large trees.
+        window_radius = 32.0
+        window_dist2 = window_radius * window_radius
+        node_ids = [int(n) for n in adj_dict.keys() if int(n) in id_to_idx]
+        if node_ids:
+            node_coords = torch.stack([swc_t[id_to_idx[n], 2:5] for n in node_ids], dim=0)
+            d2 = torch.sum((node_coords - pt.unsqueeze(0)) ** 2, dim=1)
+            window_nodes = {
+                node_ids[i]
+                for i in range(len(node_ids))
+                if float(d2[i].item()) <= window_dist2
+            }
+        else:
+            window_nodes = set()
+
+        for u in window_nodes:
+            for v in adj_dict.get(u, []):
+                v_i = int(v)
+                if v_i not in window_nodes or u == v_i:
+                    continue
+                edge = (u, v_i) if u < v_i else (v_i, u)
+                candidate_edges.add(edge)
+
+        # Last resort for robustness when the window contains no complete edge.
+        if not candidate_edges:
+            search_nodes = {int(n) for n in adj_dict.keys() if int(n) in id_to_idx}
+            for u in search_nodes:
+                for v in adj_dict.get(u, []):
+                    v_i = int(v)
+                    if v_i not in search_nodes or u == v_i:
+                        continue
+                    edge = (u, v_i) if u < v_i else (v_i, u)
+                    candidate_edges.add(edge)
+
+            if not candidate_edges:
+                return None, (None, None)
 
     best_dist = None
     best_point = None
@@ -636,6 +688,13 @@ def _get_points_at_distance(
     if adj_dict is None:
         adj_dict = load.adjacency_dict(swc_t)
 
+    if valid_nodes is None:
+        valid_node_set = None
+    else:
+        valid_node_set = {int(v) for v in valid_nodes if int(v) in id_to_idx}
+        if nearest_node not in valid_node_set:
+            return empty_points
+
     points = []
     sq_step_size = step_size ** 2
     boundary_pairs = []  # (node inside step size, node outside step size)
@@ -649,6 +708,8 @@ def _get_points_at_distance(
             continue
         if node not in id_to_idx:
             continue
+        if valid_node_set is not None and node not in valid_node_set:
+            continue
         visited.add(node)
 
         node_pos = swc_t[id_to_idx[node], 2:5]
@@ -660,6 +721,8 @@ def _get_points_at_distance(
 
         for neighbor in adj_dict.get(node, []):
             neighbor = int(neighbor)
+            if valid_node_set is not None and neighbor not in valid_node_set:
+                continue
             if neighbor not in visited:
                 queue.append((neighbor, node))
 
@@ -1312,6 +1375,97 @@ def _visited_changed(before: Dict[Tuple[int, int], float], after: Dict[Tuple[int
     return False
 
 
+def _coverage_to_interval(coverage, eps: float = 1e-6) -> Tuple[float, float]:
+    """Convert scalar/tuple edge coverage to a normalized [low, high] interval."""
+    if coverage is None:
+        return 0.0, 0.0
+
+    if isinstance(coverage, (tuple, list)) and len(coverage) == 2:
+        low = float(max(0.0, min(1.0, coverage[0])))
+        high = float(max(0.0, min(1.0, coverage[1])))
+        if high < low:
+            low, high = high, low
+        return low, high
+
+    cov = float(coverage)
+    if abs(cov) >= 1.0 - eps:
+        return 0.0, 1.0
+    if cov >= 0.0:
+        return 0.0, float(max(0.0, min(1.0, cov)))
+    return float(max(0.0, min(1.0, 1.0 + cov))), 1.0
+
+
+def _interval_to_coverage(low: float, high: float, eps: float = 1e-6):
+    """Convert normalized [low, high] interval back to legacy scalar/tuple coverage format."""
+    low = float(max(0.0, min(1.0, low)))
+    high = float(max(0.0, min(1.0, high)))
+    if high < low:
+        low, high = high, low
+
+    if high - low <= eps:
+        return 0.0
+    if high - low >= 1.0 - eps:
+        return 1.0
+    if low <= eps:
+        return float(high)
+    if high >= 1.0 - eps:
+        return float(low - 1.0)
+    return (float(low), float(high))
+
+
+def _merge_coverage(existing, new_value, eps: float = 1e-6):
+    """Monotonically merge coverage updates without over-expanding disjoint spans."""
+    if existing is None:
+        return new_value
+
+    def _is_one_sided_scalar(value) -> bool:
+        if isinstance(value, (tuple, list)):
+            return False
+        v = float(value)
+        return abs(v) < 1.0 - eps
+
+    def _interval_len(low: float, high: float) -> float:
+        return max(0.0, float(high) - float(low))
+
+    # Preserve directional accumulation when both updates are one-sided scalars.
+    if _is_one_sided_scalar(existing) and _is_one_sided_scalar(new_value):
+        old = float(existing)
+        new = float(new_value)
+        old_dir = 1 if old >= 0.0 else -1
+        new_dir = 1 if new >= 0.0 else -1
+
+        if old_dir == new_dir:
+            # Positive values grow upward to 1.0, negative values grow downward to -1.0.
+            return max(old, new) if old_dir > 0 else min(old, new)
+
+        # Opposite directions: only promote to full edge when the two covered
+        # spans actually touch/overlap along the edge parameterization.
+        old_low, old_high = _coverage_to_interval(old, eps=eps)
+        new_low, new_high = _coverage_to_interval(new, eps=eps)
+        if min(old_high, new_high) >= max(old_low, new_low) - eps:
+            return 1.0
+
+        # Disjoint opposite spans cannot be represented in legacy format; keep
+        # the larger covered span to avoid artificial full-edge pruning.
+        if _interval_len(new_low, new_high) > _interval_len(old_low, old_high):
+            return new_value
+        return existing
+
+    old_low, old_high = _coverage_to_interval(existing, eps=eps)
+    new_low, new_high = _coverage_to_interval(new_value, eps=eps)
+
+    # For interval/mixed coverage, only union overlapping/touching spans.
+    if min(old_high, new_high) >= max(old_low, new_low) - eps:
+        merged_low = min(old_low, new_low)
+        merged_high = max(old_high, new_high)
+        return _interval_to_coverage(merged_low, merged_high, eps=eps)
+
+    # Disjoint intervals: keep the larger one to avoid over-coverage.
+    if _interval_len(new_low, new_high) > _interval_len(old_low, old_high):
+        return new_value
+    return existing
+
+
 def _find_path_between_points(start_point: np.ndarray, end_point: np.ndarray, swc_list: Union[np.ndarray, list], id_to_idx: Dict[int, int]) -> np.ndarray:
     """
     Find a path between two points along the neuron structure.
@@ -1459,7 +1613,7 @@ def _add_to_visited(start_point: Union[torch.Tensor, np.ndarray],
         edge_len_sq = torch.dot(edge_vec, edge_vec)
 
         if float(edge_len_sq.item()) <= 1e-12:
-            visited[edge] = 1.0
+            visited[edge] = _merge_coverage(visited.get(edge), 1.0)
             return visited, neuron_end_point
 
         def _project_fraction(point_on_edge: torch.Tensor) -> float:
@@ -1480,13 +1634,14 @@ def _add_to_visited(start_point: Union[torch.Tensor, np.ndarray],
         # For true middle-segment traversal, store an interval (low, high)
         # so remove_visited can split into two cut boundaries.
         if low <= eps and high >= (1.0 - eps):
-            visited[edge] = 1.0
+            new_cov = 1.0
         elif low <= eps:
-            visited[edge] = float(high)
+            new_cov = float(high)
         elif high >= (1.0 - eps):
-            visited[edge] = float(low - 1.0)
+            new_cov = float(low - 1.0)
         else:
-            visited[edge] = (float(low), float(high))
+            new_cov = (float(low), float(high))
+        visited[edge] = _merge_coverage(visited.get(edge), new_cov)
 
     else:
         # find path between start and end nodes
@@ -1541,13 +1696,13 @@ def _add_to_visited(start_point: Union[torch.Tensor, np.ndarray],
                 if visited.get(edge_ord) is None:
                     edge_ord = (edge_ord[1], edge_ord[0])
                     t = -t  # fraction visited; negative means opposite direction
-                visited[edge_ord] = float(t)
+                visited[edge_ord] = _merge_coverage(visited.get(edge_ord), float(t))
 
             for i in range(len(node_path) - 1):
                 edge = (node_path[i], node_path[i + 1])
                 if visited.get(edge) is None:
                     edge = (node_path[i + 1], node_path[i])
-                visited[edge] = 1.0
+                visited[edge] = _merge_coverage(visited.get(edge), 1.0)
     
     return visited, neuron_end_point
 
@@ -1996,6 +2151,7 @@ def update_current_section(
                 swc_list=unvisited_tree,
                 id_to_idx=id_to_idx,
                 neuron_root_ids=neuron_root_ids,
+                cut_ends=cut_ends,
             )
             section_nodes.extend(connected_nodes)
             terminal_nodes.extend(terminals)

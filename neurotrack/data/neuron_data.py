@@ -618,7 +618,7 @@ class DataGenerator:
         sections, _ = load.parse_swc(subtree)
         
         # Generate simulated neuron image
-        img = self.renderer.draw_neuron(sections, shape, config)
+        img = self.renderer.draw_neuron(sections, config=config, shape=shape)
         return img.data
     
     def load_files(self, swc_path: str, img_path: Optional[str] = None) -> Tuple[List, Optional[torch.Tensor]]:

@@ -149,7 +149,8 @@ class NeuronRenderer:
         
         return img
     
-    def draw_neuron(self, sections: Dict, 
+    def draw_neuron(self,
+                   sections: Dict, 
                    config: DrawingConfig,
                    shape: Optional[Tuple[int, ...]] = None,
                    gif_config: Optional[GifConfig] = None) -> Image:

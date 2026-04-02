@@ -124,7 +124,7 @@ def draw_2d_panel(ax, environment, cropped=False, sections=None,
         term_ys = [-pt[i].item() for pt in env.terminal_points]
         term_xs = [pt[j].item() for pt in env.terminal_points]
         if not cropped:
-            ax.scatter(term_xs, term_ys, color='purple', s=80, marker='o', facecolors='none', linewidths=1.0)
+            ax.scatter(term_xs, term_ys, color='green', s=90, marker='o', facecolors='none', linewidths=1.0)
         else:
             term_xs_c = []
             term_ys_c = []
@@ -133,7 +133,7 @@ def draw_2d_panel(ax, environment, cropped=False, sections=None,
                     term_ys_c.append(ty)
                     term_xs_c.append(tx)
             if len(term_xs_c) > 0:
-                ax.scatter(term_xs_c, term_ys_c, color='purple', s=80, marker='o', facecolors='none', linewidths=1.0)
+                ax.scatter(term_xs_c, term_ys_c, color='green', s=90, marker='o', facecolors='none', linewidths=1.0)
     
 
     tree = getattr(env, 'unvisited_tree', None)
@@ -170,7 +170,7 @@ def draw_2d_panel(ax, environment, cropped=False, sections=None,
         branch_ys = [-float(br[i]) for br in branch_roots]
         branch_xs = [float(br[j]) for br in branch_roots]
         if not cropped:
-            ax.scatter(branch_xs, branch_ys, color='yellow', s=60, marker='o', edgecolors='black', linewidths=1.0)
+            ax.scatter(branch_xs, branch_ys, color='yellow', s=60, marker='o', facecolors='none', linewidths=1.0)
         else:
             branch_xs_c = []
             branch_ys_c = []
@@ -179,7 +179,7 @@ def draw_2d_panel(ax, environment, cropped=False, sections=None,
                     branch_ys_c.append(by)
                     branch_xs_c.append(bx)
             if len(branch_xs_c) > 0:
-                ax.scatter(branch_xs_c, branch_ys_c, color='yellow', s=60, marker='o', edgecolors='black', linewidths=1.0)
+                ax.scatter(branch_xs_c, branch_ys_c, color='yellow', s=60, marker='o', facecolors='none', linewidths=1.0)
 
     # Plot cut ends as purple dots
     cut_ends = getattr(env, 'cut_ends', None)
@@ -199,7 +199,7 @@ def draw_2d_panel(ax, environment, cropped=False, sections=None,
                         cut_ys.append(cy)
                         cut_xs.append(cx)
             if len(cut_xs) > 0:
-                ax.scatter(cut_xs, cut_ys, color='purple', s=40, marker='D', alpha=0.7)
+                ax.scatter(cut_xs, cut_ys, color='purple', s=40, marker='D', facecolors='none', linewidths=1.0)
 
     if cropped and y_min is not None:
         ax.set_xlim(x_min, x_max)

@@ -133,6 +133,81 @@ class TrackingRewardMidEdgeSplitTests(unittest.TestCase):
         self.assertGreaterEqual(len(cut_ends), 2)
         self.assertGreaterEqual(len(visited), 3)
 
+    def test_update_visited_edges_fallback_still_makes_progress(self):
+        # Construct a simple section with cut-end anchoring away from motion,
+        # then verify fallback logic still updates visited coverage.
+        unvisited_tree = torch.tensor(
+            [
+                [1, 3, 0.0, 0.0, 0.0, 1.0, -1],
+                [2, 3, 10.0, 0.0, 0.0, 1.0, 1],
+                [3, 3, 20.0, 0.0, 0.0, 1.0, 2],
+            ],
+            dtype=torch.float32,
+        )
+        id_to_idx = {1: 0, 2: 1, 3: 2}
+        adj_dict = {1: [2], 2: [1, 3], 3: [2]}
+        visited = _init_visited(unvisited_tree)
+
+        # Put cut_end near node 1 while movement occurs near node 3.
+        prev_position = torch.tensor([18.0, 0.0, 0.0], dtype=torch.float32)
+        new_position = torch.tensor([19.5, 0.0, 0.0], dtype=torch.float32)
+
+        visited_before = dict(visited)
+        visited, unvisited_tree, adj_dict, cut_ends, id_to_idx = update_visited_edges(
+            prev_position=prev_position,
+            new_position=new_position,
+            section_nodes={1, 2, 3},
+            visited=visited,
+            unvisited_tree=unvisited_tree,
+            id_to_idx=id_to_idx,
+            adj_dict=adj_dict,
+            cut_ends=[1],
+            valid_dist2=1e6,
+        )
+
+        # Ensure some progress happened versus original visited state.
+        self.assertNotEqual(len(visited_before), len(visited))
+        self.assertLess(unvisited_tree.shape[0], 3)
+        self.assertGreaterEqual(len(cut_ends), 1)
+
+    def test_update_visited_edges_last_resort_unrestricted_retry(self):
+        # section_nodes can become stale/disconnected and contain no valid edge,
+        # which blocks section-constrained projections. Last-resort retry should
+        # still make progress by allowing full-graph projection.
+        unvisited_tree = torch.tensor(
+            [
+                [1, 3, 0.0, 0.0, 0.0, 1.0, -1],
+                [2, 3, 10.0, 0.0, 0.0, 1.0, 1],
+                [3, 3, 20.0, 0.0, 0.0, 1.0, 2],
+            ],
+            dtype=torch.float32,
+        )
+        id_to_idx = {1: 0, 2: 1, 3: 2}
+        adj_dict = {1: [2], 2: [1, 3], 3: [2]}
+        visited = _init_visited(unvisited_tree)
+
+        prev_position = torch.tensor([18.0, 0.0, 0.0], dtype=torch.float32)
+        new_position = torch.tensor([19.0, 0.0, 0.0], dtype=torch.float32)
+
+        # Stale/disconnected section filter: no edge exists between nodes {1, 3}.
+        section_nodes = {1, 3}
+        visited_before = dict(visited)
+        visited, unvisited_tree, adj_dict, cut_ends, id_to_idx = update_visited_edges(
+            prev_position=prev_position,
+            new_position=new_position,
+            section_nodes=section_nodes,
+            visited=visited,
+            unvisited_tree=unvisited_tree,
+            id_to_idx=id_to_idx,
+            adj_dict=adj_dict,
+            cut_ends=[1],
+            valid_dist2=1e6,
+        )
+
+        self.assertNotEqual(visited_before, visited)
+        self.assertNotEqual(unvisited_tree.shape[0], 3)
+        self.assertGreaterEqual(len(cut_ends), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

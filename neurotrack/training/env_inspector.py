@@ -233,6 +233,9 @@ def run_expert_episode(env):
     prev_expert_action = None
     total_reward = 0.0
     steps_done = 0
+    stop_steps = 0
+    continue_steps = 0
+    continue_step_dists = []
     max_steps_limit = 50000  # Safety limit to prevent infinite loops
 
     for _step_idx in count():
@@ -250,6 +253,12 @@ def run_expert_episode(env):
         next_obs, reward, terminated, _truncated, info = env.step(expert_action)
         steps_done += 1
         total_reward += float(torch.as_tensor(reward, dtype=torch.float32).item())
+        status = info.get('status', 'unknown')
+        if status == 'choose_stop':
+            stop_steps += 1
+        else:
+            continue_steps += 1
+            continue_step_dists.append(float(torch.linalg.norm(expert_action).item()))
 
         if info.get('terminate_episode', False):
             break
@@ -265,13 +274,40 @@ def run_expert_episode(env):
     show_state(env, fig, live=False)
 
     num_paths = len(getattr(env, 'finished_paths', []))
+    long_paths = 0
+    no_start_paths = 0
+    for path in getattr(env, 'finished_paths', []):
+        path_len = len(path) if path is not None else 0
+        if path_len > 1:
+            long_paths += 1
+        elif path_len == 1:
+            no_start_paths += 1
+
+    if steps_done > 0:
+        stop_fraction = float(stop_steps) / float(steps_done)
+        continue_fraction = float(continue_steps) / float(steps_done)
+    else:
+        stop_fraction = 0.0
+        continue_fraction = 0.0
+
     print(f"steps_done: {steps_done}")
+    print(f"stop_steps: {stop_steps}")
+    print(f"continue_steps: {continue_steps}")
+    print(f"stop_fraction: {stop_fraction:.6f}")
+    print(f"continue_fraction: {continue_fraction:.6f}")
+    print(f"mean step length for continue steps: {float(torch.as_tensor(continue_step_dists).mean().item()):.6f}" if continue_step_dists else "mean step length for continue steps: N/A")
     print(f"finished_paths: {num_paths}")
+    print(f"long_paths: {long_paths}")
+    print(f"no_start_paths: {no_start_paths}")
     print(f"total_reward: {total_reward:.6f}")
 
     return {
         'steps_done': int(steps_done),
+        'stop_steps': int(stop_steps),
+        'continue_steps': int(continue_steps),
         'num_paths': num_paths,
+        'long_paths': int(long_paths),
+        'no_start_paths': int(no_start_paths),
         'total_reward': float(total_reward),
     }
 

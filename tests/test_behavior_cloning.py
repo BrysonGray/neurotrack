@@ -257,7 +257,7 @@ class BehaviorCloningPolicyTests(unittest.TestCase):
             norm_floor_weight=0.5,
         )
 
-        loss = _optimize_prepared_batch(
+        batch_stats = _optimize_prepared_batch(
             actor=actor,
             actor_optimizer=optimizer,
             obs_tensor=obs_tensor,
@@ -266,7 +266,12 @@ class BehaviorCloningPolicyTests(unittest.TestCase):
             loss_config=loss_config,
         )
 
-        self.assertAlmostEqual(loss, 4.015, places=3)
+        self.assertAlmostEqual(batch_stats.loss, 4.015, places=3)
+        self.assertAlmostEqual(batch_stats.step_mse, 3.61, places=3)
+        self.assertEqual(batch_stats.true_continue_count, 1)
+        self.assertEqual(batch_stats.false_choose_stop_count, 1)
+        self.assertEqual(batch_stats.true_stop_count, 0)
+        self.assertEqual(batch_stats.false_continue_count, 0)
 
     def test_trace_image_reports_false_stop_diagnostics(self):
         device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")

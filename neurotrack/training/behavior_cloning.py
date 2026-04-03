@@ -33,6 +33,18 @@ class SupervisionLossConfig:
     norm_floor_weight: float = 0.0
 
 
+@dataclass(frozen=True)
+class SupervisionBatchStats:
+    """Per-optimization batch metrics for loss and stop/continue diagnostics."""
+
+    loss: float
+    step_mse: float
+    true_continue_count: int
+    false_choose_stop_count: int
+    true_stop_count: int
+    false_continue_count: int
+
+
 def _build_supervision_loss_config(
     continue_target_norm_threshold: float,
     continue_weight: float,
@@ -72,6 +84,51 @@ def _compute_min_target_norm(
     min_target_norm = masked_norms.min(dim=1).values
     min_target_norm = torch.where(has_valid_target, min_target_norm, torch.zeros_like(min_target_norm))
     return min_target_norm, has_valid_target
+
+
+def _compute_policy_error_counts(
+    pred_actions: torch.Tensor,
+    min_target_norm: torch.Tensor,
+    has_valid_target: torch.Tensor,
+    continue_target_norm_threshold: float,
+) -> Tuple[int, int, int, int]:
+    """Compute stop/continue error counts from predicted action magnitudes."""
+    pred_norms = torch.linalg.norm(pred_actions, dim=1)
+    choose_stop = pred_norms < float(continue_target_norm_threshold)
+    true_continue_mask = has_valid_target & (min_target_norm > float(continue_target_norm_threshold))
+    true_stop_mask = has_valid_target & ~true_continue_mask
+
+    true_continue_count = int(true_continue_mask.sum().item())
+    false_choose_stop_count = int((true_continue_mask & choose_stop).sum().item())
+    true_stop_count = int(true_stop_mask.sum().item())
+    false_continue_count = int((true_stop_mask & ~choose_stop).sum().item())
+    return (
+        true_continue_count,
+        false_choose_stop_count,
+        true_stop_count,
+        false_continue_count,
+    )
+
+
+def _safe_rate(numerator: int, denominator: int) -> float:
+    if denominator <= 0:
+        return 0.0
+    return float(numerator / denominator)
+
+
+def _aggregate_supervision_stats(
+    batch_stats: Sequence[SupervisionBatchStats],
+) -> Tuple[int, int, int, int]:
+    true_continue_count = int(sum(stat.true_continue_count for stat in batch_stats))
+    false_choose_stop_count = int(sum(stat.false_choose_stop_count for stat in batch_stats))
+    true_stop_count = int(sum(stat.true_stop_count for stat in batch_stats))
+    false_continue_count = int(sum(stat.false_continue_count for stat in batch_stats))
+    return (
+        true_continue_count,
+        false_choose_stop_count,
+        true_stop_count,
+        false_continue_count,
+    )
 
 
 def _ensure_action_batch(actions: torch.Tensor | np.ndarray | Sequence[float]) -> torch.Tensor:
@@ -225,7 +282,7 @@ def _optimize_batch(
     obs_batch: Sequence[torch.Tensor],
     target_batches: Sequence[torch.Tensor],
     loss_config: SupervisionLossConfig,
-) -> float:
+) -> SupervisionBatchStats:
     """Run one optimizer step on a buffered supervision batch."""
     obs_tensor = torch.cat([obs.detach().cpu() for obs in obs_batch], dim=0)
     target_tensor, target_mask = pad_target_candidate_batch(target_batches)
@@ -247,7 +304,7 @@ def _optimize_prepared_batch(
     target_tensor: torch.Tensor,
     target_mask: torch.Tensor,
     loss_config: SupervisionLossConfig,
-) -> float:
+) -> SupervisionBatchStats:
     """Run one optimizer step from an already-collated batch."""
     model_device = next(actor.parameters()).device
 
@@ -274,6 +331,7 @@ def _optimize_prepared_batch(
         )
 
     direction_loss = (direction_loss_per_sample * sample_weights).sum() / sample_weights.sum().clamp_min(1.0)
+    step_mse = float(direction_loss_per_sample.mean().item())
 
     norm_floor_loss = torch.zeros((), dtype=direction_loss.dtype, device=direction_loss.device)
     if loss_config.norm_floor > 0.0 and loss_config.norm_floor_weight > 0.0 and torch.any(continue_mask):
@@ -282,10 +340,29 @@ def _optimize_prepared_batch(
         norm_floor_loss = (norm_gap[continue_mask] ** 2).mean()
 
     loss = direction_loss + (loss_config.norm_floor_weight * norm_floor_loss)
+    (
+        true_continue_count,
+        false_choose_stop_count,
+        true_stop_count,
+        false_continue_count,
+    ) = _compute_policy_error_counts(
+        pred_actions=pred_actions,
+        min_target_norm=min_target_norm,
+        has_valid_target=has_valid_target,
+        continue_target_norm_threshold=loss_config.continue_target_norm_threshold,
+    )
+
     actor_optimizer.zero_grad()
     loss.backward()
     actor_optimizer.step()
-    return float(loss.item())
+    return SupervisionBatchStats(
+        loss=float(loss.item()),
+        step_mse=step_mse,
+        true_continue_count=true_continue_count,
+        false_choose_stop_count=false_choose_stop_count,
+        true_stop_count=true_stop_count,
+        false_continue_count=false_continue_count,
+    )
 
 
 def _optimize_from_bc_replay_buffer(
@@ -295,7 +372,7 @@ def _optimize_from_bc_replay_buffer(
     batch_size: int,
     transform: bool,
     loss_config: SupervisionLossConfig,
-) -> Optional[float]:
+) -> Optional[SupervisionBatchStats]:
     if len(replay_buffer) == 0:
         return None
 
@@ -340,11 +417,14 @@ def _flush_supervision_batch(
     obs_store: List[torch.Tensor],
     target_store: List[torch.Tensor],
     losses: List[float],
+    batch_stats_store: List[SupervisionBatchStats],
     loss_config: SupervisionLossConfig,
 ) -> None:
     if not obs_store:
         return
-    losses.append(_optimize_batch(actor, actor_optimizer, obs_store, target_store, loss_config=loss_config))
+    batch_stats = _optimize_batch(actor, actor_optimizer, obs_store, target_store, loss_config=loss_config)
+    losses.append(float(batch_stats.loss))
+    batch_stats_store.append(batch_stats)
     obs_store.clear()
     target_store.clear()
 
@@ -379,12 +459,12 @@ def _run_supervision_epoch(
     batch_size: int,
     transform: bool,
     loss_config: SupervisionLossConfig,
-) -> List[float]:
+) -> List[SupervisionBatchStats]:
     if len(aggregate_buffer) == 0:
         return []
 
     n_batches = max(1, (len(aggregate_buffer) + batch_size - 1) // batch_size)
-    losses: List[float] = []
+    batch_stats: List[SupervisionBatchStats] = []
     for _batch_idx in range(n_batches):
         maybe_loss = _optimize_from_bc_replay_buffer(
             actor=actor,
@@ -395,8 +475,8 @@ def _run_supervision_epoch(
             loss_config=loss_config,
         )
         if maybe_loss is not None:
-            losses.append(float(maybe_loss))
-    return losses
+            batch_stats.append(maybe_loss)
+    return batch_stats
 
 
 def _reward_to_float(reward: torch.Tensor | float) -> float:
@@ -459,14 +539,10 @@ def _run_expert_episode(
     supervision_obs: List[torch.Tensor] = []
     supervision_targets: List[torch.Tensor] = []
     episode_losses: List[float] = []
+    episode_batch_stats: List[SupervisionBatchStats] = []
     episode_rewards: List[float] = []
     episode_step_norms: List[float] = []
     steps_done = 0
-    target_distance_threshold = float(loss_config.continue_target_norm_threshold)
-    correct_continue_count = 0
-    false_choose_stop_count = 0
-    correct_stop_count = 0
-    false_continue_count = 0
 
     for _step_idx in count():
         current_target_vectors = _current_target_vectors_from_env(env)
@@ -481,6 +557,7 @@ def _run_expert_episode(
                 supervision_obs,
                 supervision_targets,
                 episode_losses,
+                episode_batch_stats,
                 loss_config=loss_config,
             )
 
@@ -491,18 +568,6 @@ def _run_expert_episode(
         steps_done += 1
         episode_rewards.append(_reward_to_float(reward))
 
-        current_target_distance = _min_target_norm(info.get("current_target_vectors"))
-        if current_target_distance is not None:
-            status = info.get("status")
-            if current_target_distance > target_distance_threshold:
-                correct_continue_count += 1
-                if status == "choose_stop":
-                    false_choose_stop_count += 1
-            else:
-                correct_stop_count += 1
-                if status == "continue":
-                    false_continue_count += 1
-
         if info["terminate_episode"]:
             _flush_supervision_batch(
                 actor,
@@ -510,6 +575,7 @@ def _run_expert_episode(
                 supervision_obs,
                 supervision_targets,
                 episode_losses,
+                episode_batch_stats,
                 loss_config=loss_config,
             )
             break
@@ -521,20 +587,20 @@ def _run_expert_episode(
             obs = next_obs
             prev_expert_action = expert_action.detach().cpu()
 
+    (
+        true_continue_count,
+        false_choose_stop_count,
+        true_stop_count,
+        false_continue_count,
+    ) = _aggregate_supervision_stats(episode_batch_stats)
+
     return {
         "episode_avg_reward": float(np.mean(episode_rewards)) if episode_rewards else 0.0,
         "episode_avg_loss": float(np.mean(episode_losses)) if episode_losses else 0.0,
+        "episode_avg_step_mse": float(np.mean([stat.step_mse for stat in episode_batch_stats])) if episode_batch_stats else 0.0,
         "episode_avg_expert_step_norm": float(np.mean(episode_step_norms)) if episode_step_norms else 0.0,
-        "false_stop_rate": (
-            float(false_choose_stop_count / correct_continue_count)
-            if correct_continue_count > 0
-            else 0.0
-        ),
-        "false_continue_rate": (
-            float(false_continue_count / correct_stop_count)
-            if correct_stop_count > 0
-            else 0.0
-        ),
+        "false_stop_rate": _safe_rate(false_choose_stop_count, true_continue_count),
+        "false_continue_rate": _safe_rate(false_continue_count, true_stop_count),
         "steps_done": int(steps_done),
     }
 
@@ -545,7 +611,6 @@ def _run_dagger_collection_episode(
     aggregate_buffer: BehaviorCloningReplayBuffer,
     beta: float,
     rng: np.random.Generator,
-    continue_target_norm_threshold: float,
 ) -> dict[str, float | int]:
     obs = env.reset(return_state=True)
     prev_rollin_action: Optional[torch.Tensor] = None
@@ -553,44 +618,25 @@ def _run_dagger_collection_episode(
     episode_step_norms: List[float] = []
     steps_done = 0
     policy_steps = 0
-    correct_continue_count = 0
-    false_choose_stop_count = 0
-    correct_stop_count = 0
-    false_continue_count = 0
 
     for _step_idx in count():
         current_target_vectors = _current_target_vectors_from_env(env)
         aggregate_buffer.push(obs, current_target_vectors)
 
         expert_action = select_expert_action(current_target_vectors, previous_action=prev_rollin_action)
+        policy_action = _predict_policy_action(actor, obs).detach().cpu()
         episode_step_norms.append(float(torch.linalg.norm(expert_action).item()))
-        used_policy_action = False
         if beta >= 1.0:
             rollin_action = expert_action.detach().cpu()
         elif float(rng.random()) < beta:
             rollin_action = expert_action.detach().cpu()
         else:
-            rollin_action = _predict_policy_action(actor, obs).detach().cpu()
+            rollin_action = policy_action
             policy_steps += 1
-            used_policy_action = True
-
 
         next_obs, reward, terminated, _truncated, info = env.step(rollin_action)
         steps_done += 1
         episode_rewards.append(_reward_to_float(reward))
-
-        if used_policy_action:
-            current_target_distance = _min_target_norm(info.get("current_target_vectors"))
-            if current_target_distance is not None:
-                status = info.get("status")
-                if current_target_distance > float(continue_target_norm_threshold):
-                    correct_continue_count += 1
-                    if status == "choose_stop":
-                        false_choose_stop_count += 1
-                else:
-                    correct_stop_count += 1
-                    if status == "continue":
-                        false_continue_count += 1
 
         if info["terminate_episode"]:
             break
@@ -606,10 +652,6 @@ def _run_dagger_collection_episode(
         "episode_avg_reward": float(np.mean(episode_rewards)) if episode_rewards else 0.0,
         "episode_avg_expert_step_norm": float(np.mean(episode_step_norms)) if episode_step_norms else 0.0,
         "policy_rollin_fraction": float(policy_steps / steps_done) if steps_done > 0 else 0.0,
-        "correct_continue_count": int(correct_continue_count),
-        "false_choose_stop_count": int(false_choose_stop_count),
-        "correct_stop_count": int(correct_stop_count),
-        "false_continue_count": int(false_continue_count),
         "steps_done": int(steps_done),
     }
 
@@ -620,6 +662,7 @@ def _write_bc_log_row(
     image_file: str,
     avg_reward: float,
     avg_loss: float,
+    avg_step_mse: float,
     avg_step_norm: float,
     false_stop_rate: float,
     false_continue_rate: float,
@@ -635,6 +678,7 @@ def _write_bc_log_row(
                 "image_file",
                 "episode_avg_reward",
                 "episode_avg_loss",
+                "episode_avg_step_mse",
                 "episode_avg_expert_step_norm",
                 "false_stop_rate",
                 "false_continue_rate",
@@ -646,6 +690,7 @@ def _write_bc_log_row(
             image_file,
             avg_reward,
             avg_loss,
+            avg_step_mse,
             avg_step_norm,
             false_stop_rate,
             false_continue_rate,
@@ -662,6 +707,7 @@ def _write_dagger_log_row(
     image_file: str,
     avg_reward: float,
     avg_loss: float,
+    avg_step_mse: float,
     avg_step_norm: float,
     policy_rollin_fraction: float,
     false_stop_rate: float,
@@ -682,6 +728,7 @@ def _write_dagger_log_row(
                 "image_file",
                 "episode_avg_reward",
                 "episode_avg_loss",
+                "episode_avg_step_mse",
                 "episode_avg_expert_step_norm",
                 "policy_rollin_fraction",
                 "false_stop_rate",
@@ -698,6 +745,7 @@ def _write_dagger_log_row(
             image_file,
             avg_reward,
             avg_loss,
+            avg_step_mse,
             avg_step_norm,
             policy_rollin_fraction,
             false_stop_rate,
@@ -850,6 +898,7 @@ def train(
             image_file=env.current_neuron_info["neuron_name"],
             avg_reward=float(episode_metrics["episode_avg_reward"]),
             avg_loss=float(episode_metrics["episode_avg_loss"]),
+            avg_step_mse=float(episode_metrics["episode_avg_step_mse"]),
             avg_step_norm=float(episode_metrics["episode_avg_expert_step_norm"]),
             false_stop_rate=float(episode_metrics["false_stop_rate"]),
             false_continue_rate=float(episode_metrics["false_continue_rate"]),
@@ -992,6 +1041,7 @@ def train_dagger(
             image_file=env.current_neuron_info["neuron_name"],
             avg_reward=float(episode_metrics["episode_avg_reward"]),
             avg_loss=float(episode_metrics["episode_avg_loss"]),
+            avg_step_mse=float(episode_metrics["episode_avg_step_mse"]),
             avg_step_norm=float(episode_metrics["episode_avg_expert_step_norm"]),
             policy_rollin_fraction=0.0,
             false_stop_rate=float(episode_metrics["false_stop_rate"]),
@@ -1010,10 +1060,6 @@ def train_dagger(
         rollout_rewards: List[float] = []
         rollout_step_norms: List[float] = []
         rollout_policy_fractions: List[float] = []
-        round_correct_continue_count = 0
-        round_false_choose_stop_count = 0
-        round_correct_stop_count = 0
-        round_false_continue_count = 0
         round_collection_steps = 0
         round_iter = tqdm(
             range(rollout_episodes_per_round),
@@ -1032,7 +1078,6 @@ def train_dagger(
                     aggregate_buffer=aggregate_buffer,
                     beta=beta,
                     rng=rng,
-                    continue_target_norm_threshold=float(loss_config.continue_target_norm_threshold),
                 )
             except Exception as exc:
                 _log_episode_exception(
@@ -1048,10 +1093,6 @@ def train_dagger(
             rollout_rewards.append(float(episode_metrics["episode_avg_reward"]))
             rollout_step_norms.append(float(episode_metrics["episode_avg_expert_step_norm"]))
             rollout_policy_fractions.append(float(episode_metrics["policy_rollin_fraction"]))
-            round_correct_continue_count += int(episode_metrics["correct_continue_count"])
-            round_false_choose_stop_count += int(episode_metrics["false_choose_stop_count"])
-            round_correct_stop_count += int(episode_metrics["correct_stop_count"])
-            round_false_continue_count += int(episode_metrics["false_continue_count"])
 
             # When the buffer is full and we have collected one full-capacity turnover
             # of new samples without any intermediate policy updates, more collection is
@@ -1060,17 +1101,18 @@ def train_dagger(
                 break
 
         round_losses: List[float] = []
+        round_batch_stats: List[SupervisionBatchStats] = []
         for _epoch in range(dataset_epochs_per_round):
-            round_losses.extend(
-                _run_supervision_epoch(
-                    actor=actor,
-                    actor_optimizer=actor_optimizer,
-                    aggregate_buffer=aggregate_buffer,
-                    batch_size=batch_size,
-                    transform=True,
-                    loss_config=loss_config,
-                )
+            epoch_batch_stats = _run_supervision_epoch(
+                actor=actor,
+                actor_optimizer=actor_optimizer,
+                aggregate_buffer=aggregate_buffer,
+                batch_size=batch_size,
+                transform=True,
+                loss_config=loss_config,
             )
+            round_batch_stats.extend(epoch_batch_stats)
+            round_losses.extend(stat.loss for stat in epoch_batch_stats)
             last_save_bucket = _maybe_save_checkpoint(
                 actor=actor,
                 actor_optimizer=actor_optimizer,
@@ -1093,6 +1135,13 @@ def train_dagger(
                 },
             )
 
+        (
+            round_true_continue_count,
+            round_false_choose_stop_count,
+            round_true_stop_count,
+            round_false_continue_count,
+        ) = _aggregate_supervision_stats(round_batch_stats)
+
         _write_dagger_log_row(
             csv_file_path=csv_file_path,
             phase="dagger",
@@ -1101,18 +1150,11 @@ def train_dagger(
             image_file="__round_summary__",
             avg_reward=float(np.mean(rollout_rewards)) if rollout_rewards else 0.0,
             avg_loss=float(np.mean(round_losses)) if round_losses else 0.0,
+            avg_step_mse=float(np.mean([stat.step_mse for stat in round_batch_stats])) if round_batch_stats else 0.0,
             avg_step_norm=float(np.mean(rollout_step_norms)) if rollout_step_norms else 0.0,
             policy_rollin_fraction=float(np.mean(rollout_policy_fractions)) if rollout_policy_fractions else 0.0,
-            false_stop_rate=(
-                float(round_false_choose_stop_count / round_correct_continue_count)
-                if round_correct_continue_count > 0
-                else 0.0
-            ),
-            false_continue_rate=(
-                float(round_false_continue_count / round_correct_stop_count)
-                if round_correct_stop_count > 0
-                else 0.0
-            ),
+            false_stop_rate=_safe_rate(round_false_choose_stop_count, round_true_continue_count),
+            false_continue_rate=_safe_rate(round_false_continue_count, round_true_stop_count),
             steps_done=steps_done,
             dataset_size=len(aggregate_buffer),
             complexity=float(env.dataset.alpha),
@@ -1269,6 +1311,7 @@ def train_dagger_online(
             image_file=env.current_neuron_info["neuron_name"],
             avg_reward=float(episode_metrics["episode_avg_reward"]),
             avg_loss=float(episode_metrics["episode_avg_loss"]),
+            avg_step_mse=float(episode_metrics["episode_avg_step_mse"]),
             avg_step_norm=float(episode_metrics["episode_avg_expert_step_norm"]),
             policy_rollin_fraction=0.0,
             false_stop_rate=float(episode_metrics["false_stop_rate"]),
@@ -1307,6 +1350,7 @@ def train_dagger_online(
             episode_rewards: List[float] = []
             episode_step_norms: List[float] = []
             episode_losses: List[float] = []
+            episode_step_mse: List[float] = []
             policy_steps = 0
             episode_steps = 0
             correct_continue_count = 0
@@ -1355,7 +1399,8 @@ def train_dagger_online(
                             loss_config=loss_config,
                         )
                         if maybe_loss is not None:
-                            episode_losses.append(float(maybe_loss))
+                            episode_losses.append(float(maybe_loss.loss))
+                            episode_step_mse.append(float(maybe_loss.step_mse))
 
                     last_save_bucket = _maybe_save_checkpoint(
                         actor=actor,
@@ -1411,6 +1456,7 @@ def train_dagger_online(
                 image_file=env.current_neuron_info["neuron_name"],
                 avg_reward=float(np.mean(episode_rewards)) if episode_rewards else 0.0,
                 avg_loss=float(np.mean(episode_losses)) if episode_losses else 0.0,
+                avg_step_mse=float(np.mean(episode_step_mse)) if episode_step_mse else 0.0,
                 avg_step_norm=float(np.mean(episode_step_norms)) if episode_step_norms else 0.0,
                 policy_rollin_fraction=float(policy_steps / episode_steps) if episode_steps > 0 else 0.0,
                 false_stop_rate=false_stop_rate,

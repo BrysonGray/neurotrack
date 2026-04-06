@@ -28,7 +28,7 @@ def prepare_observation_for_model(
     device: torch.device | None = None,
     model_dtype: torch.dtype = torch.float32,
 ) -> torch.Tensor:
-    """Convert uint8 observations to normalized float tensors at model boundaries."""
+    """Convert uint8 observations to normalized float tensors."""
     if device is None:
         device = obs.device
     if obs.dtype == torch.uint8:

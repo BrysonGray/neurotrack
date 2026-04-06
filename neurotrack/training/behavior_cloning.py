@@ -13,6 +13,7 @@ from typing import Iterable, List, Optional, Sequence, Tuple
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 from tqdm import tqdm
 
 from neurotrack.training.memory import BehaviorCloningReplayBuffer
@@ -31,6 +32,14 @@ class SupervisionLossConfig:
     continue_weight: float = 1.0
     norm_floor: float = 0.0
     norm_floor_weight: float = 0.0
+    stop_violation_weight: float = 1.0
+    objective_mode: str = "legacy"
+    continue_direction_weight: float = 1.0
+    norm_cls_weight: float = 1.0
+    norm_cls_temperature: float = 0.25
+    norm_margin_weight: float = 1.0
+    stop_margin: float = 0.1
+    continue_margin: float = 0.1
 
 
 @dataclass(frozen=True)
@@ -50,11 +59,27 @@ def _build_supervision_loss_config(
     continue_weight: float,
     norm_floor: float,
     norm_floor_weight: float,
+    stop_violation_weight: float,
+    objective_mode: str = "legacy",
+    continue_direction_weight: float = 1.0,
+    norm_cls_weight: float = 1.0,
+    norm_cls_temperature: float = 0.25,
+    norm_margin_weight: float = 1.0,
+    stop_margin: float = 0.1,
+    continue_margin: float = 0.1,
 ) -> SupervisionLossConfig:
     threshold = float(continue_target_norm_threshold)
     continue_weight_f = float(continue_weight)
     norm_floor_f = float(norm_floor)
     norm_floor_weight_f = float(norm_floor_weight)
+    stop_violation_weight_f = float(stop_violation_weight)
+    objective_mode_s = str(objective_mode).strip().lower()
+    continue_direction_weight_f = float(continue_direction_weight)
+    norm_cls_weight_f = float(norm_cls_weight)
+    norm_cls_temperature_f = float(norm_cls_temperature)
+    norm_margin_weight_f = float(norm_margin_weight)
+    stop_margin_f = float(stop_margin)
+    continue_margin_f = float(continue_margin)
 
     if threshold < 0.0:
         raise ValueError("continue_target_norm_threshold must be non-negative")
@@ -64,12 +89,36 @@ def _build_supervision_loss_config(
         raise ValueError("norm_floor must be non-negative")
     if norm_floor_weight_f < 0.0:
         raise ValueError("norm_floor_weight must be non-negative")
+    if stop_violation_weight_f < 0.0:
+        raise ValueError("stop_violation_weight must be non-negative")
+    if objective_mode_s not in {"legacy", "norm_classifier_margin"}:
+        raise ValueError("objective_mode must be one of: {'legacy', 'norm_classifier_margin'}")
+    if continue_direction_weight_f < 0.0:
+        raise ValueError("continue_direction_weight must be non-negative")
+    if norm_cls_weight_f < 0.0:
+        raise ValueError("norm_cls_weight must be non-negative")
+    if norm_cls_temperature_f <= 0.0:
+        raise ValueError("norm_cls_temperature must be positive")
+    if norm_margin_weight_f < 0.0:
+        raise ValueError("norm_margin_weight must be non-negative")
+    if stop_margin_f < 0.0:
+        raise ValueError("stop_margin must be non-negative")
+    if continue_margin_f < 0.0:
+        raise ValueError("continue_margin must be non-negative")
 
     return SupervisionLossConfig(
         continue_target_norm_threshold=threshold,
         continue_weight=continue_weight_f,
         norm_floor=norm_floor_f,
         norm_floor_weight=norm_floor_weight_f,
+        stop_violation_weight=stop_violation_weight_f,
+        objective_mode=objective_mode_s,
+        continue_direction_weight=continue_direction_weight_f,
+        norm_cls_weight=norm_cls_weight_f,
+        norm_cls_temperature=norm_cls_temperature_f,
+        norm_margin_weight=norm_margin_weight_f,
+        stop_margin=stop_margin_f,
+        continue_margin=continue_margin_f,
     )
 
 
@@ -319,27 +368,123 @@ def _optimize_prepared_batch(
         valid_mask=target_mask,
         reduction="none",
     )
-    min_target_norm, has_valid_target = _compute_min_target_norm(target_tensor, target_mask)
-    continue_mask = has_valid_target & (min_target_norm > loss_config.continue_target_norm_threshold)
-
-    sample_weights = torch.ones_like(direction_loss_per_sample)
-    if loss_config.continue_weight != 1.0:
-        sample_weights = torch.where(
-            continue_mask,
-            torch.full_like(sample_weights, fill_value=loss_config.continue_weight),
-            sample_weights,
-        )
-
-    direction_loss = (direction_loss_per_sample * sample_weights).sum() / sample_weights.sum().clamp_min(1.0)
     step_mse = float(direction_loss_per_sample.mean().item())
+    min_target_norm, has_valid_target = _compute_min_target_norm(target_tensor, target_mask)
 
-    norm_floor_loss = torch.zeros((), dtype=direction_loss.dtype, device=direction_loss.device)
-    if loss_config.norm_floor > 0.0 and loss_config.norm_floor_weight > 0.0 and torch.any(continue_mask):
-        pred_norms = torch.linalg.norm(pred_actions, dim=1)
-        norm_gap = torch.relu(loss_config.norm_floor - pred_norms)
-        norm_floor_loss = (norm_gap[continue_mask] ** 2).mean()
+    continue_mask = has_valid_target & (min_target_norm > loss_config.continue_target_norm_threshold)
+    stop_mask = has_valid_target & ~continue_mask
+    pred_norms = torch.linalg.norm(pred_actions, dim=1)
 
-    loss = direction_loss + (loss_config.norm_floor_weight * norm_floor_loss)
+    if loss_config.objective_mode == "norm_classifier_margin":
+        zero = torch.zeros((), dtype=direction_loss_per_sample.dtype, device=direction_loss_per_sample.device)
+
+        continue_direction_loss = zero
+        if loss_config.continue_direction_weight > 0.0 and torch.any(continue_mask):
+            continue_direction_loss = direction_loss_per_sample[continue_mask].mean()
+
+        norm_cls_loss = zero
+        if loss_config.norm_cls_weight > 0.0:
+            logits = (
+                pred_norms - loss_config.continue_target_norm_threshold
+            ) / max(loss_config.norm_cls_temperature, torch.finfo(pred_norms.dtype).eps)
+            if torch.any(continue_mask) and torch.any(stop_mask):
+                cls_continue = F.binary_cross_entropy_with_logits(
+                    logits[continue_mask],
+                    torch.ones_like(logits[continue_mask]),
+                )
+                cls_stop = F.binary_cross_entropy_with_logits(
+                    logits[stop_mask],
+                    torch.zeros_like(logits[stop_mask]),
+                )
+                norm_cls_loss = (
+                    (loss_config.continue_weight * cls_continue) + cls_stop
+                ) / (loss_config.continue_weight + 1.0)
+            elif torch.any(continue_mask):
+                norm_cls_loss = F.binary_cross_entropy_with_logits(
+                    logits[continue_mask],
+                    torch.ones_like(logits[continue_mask]),
+                )
+            elif torch.any(stop_mask):
+                norm_cls_loss = F.binary_cross_entropy_with_logits(
+                    logits[stop_mask],
+                    torch.zeros_like(logits[stop_mask]),
+                )
+
+        norm_margin_loss = zero
+        if loss_config.norm_margin_weight > 0.0:
+            continue_margin_loss = zero
+            stop_margin_loss = zero
+
+            if torch.any(continue_mask):
+                continue_floor = (
+                    loss_config.continue_target_norm_threshold + loss_config.continue_margin
+                )
+                continue_shortfall = torch.relu(continue_floor - pred_norms[continue_mask])
+                continue_margin_loss = (continue_shortfall ** 2).mean()
+
+            if torch.any(stop_mask):
+                stop_ceiling = max(
+                    0.0,
+                    loss_config.continue_target_norm_threshold - loss_config.stop_margin,
+                )
+                stop_overshoot = torch.relu(pred_norms[stop_mask] - stop_ceiling)
+                stop_margin_loss = (stop_overshoot ** 2).mean()
+
+            if torch.any(continue_mask) and torch.any(stop_mask):
+                norm_margin_loss = (
+                    (loss_config.continue_weight * continue_margin_loss) + stop_margin_loss
+                ) / (loss_config.continue_weight + 1.0)
+            elif torch.any(continue_mask):
+                norm_margin_loss = continue_margin_loss
+            elif torch.any(stop_mask):
+                norm_margin_loss = stop_margin_loss
+
+        norm_floor_loss = zero
+        if loss_config.norm_floor > 0.0 and loss_config.norm_floor_weight > 0.0 and torch.any(continue_mask):
+            norm_gap = torch.relu(loss_config.norm_floor - pred_norms[continue_mask])
+            norm_floor_loss = (norm_gap ** 2).mean()
+
+        loss = (
+            (loss_config.continue_direction_weight * continue_direction_loss)
+            + (loss_config.norm_cls_weight * norm_cls_loss)
+            + (loss_config.norm_margin_weight * norm_margin_loss)
+            + (loss_config.norm_floor_weight * norm_floor_loss)
+        )
+    else:
+        # Legacy objective: class-balanced direction loss + norm floor + stop violation.
+        if torch.any(continue_mask) and torch.any(stop_mask):
+            continue_direction_loss = direction_loss_per_sample[continue_mask].mean()
+            stop_direction_loss = direction_loss_per_sample[stop_mask].mean()
+            direction_loss = (
+                (loss_config.continue_weight * continue_direction_loss) + stop_direction_loss
+            ) / (loss_config.continue_weight + 1.0)
+        elif torch.any(continue_mask):
+            direction_loss = direction_loss_per_sample[continue_mask].mean()
+        elif torch.any(stop_mask):
+            direction_loss = direction_loss_per_sample[stop_mask].mean()
+        else:
+            direction_loss = direction_loss_per_sample.mean()
+
+        norm_floor_loss = torch.zeros((), dtype=direction_loss.dtype, device=direction_loss.device)
+        norm_stop_loss = torch.zeros((), dtype=direction_loss.dtype, device=direction_loss.device)
+
+        if loss_config.norm_floor > 0.0 and loss_config.norm_floor_weight > 0.0:
+            if torch.any(continue_mask):
+                norm_gap = torch.relu(loss_config.norm_floor - pred_norms)
+                norm_floor_loss = (norm_gap[continue_mask] ** 2).mean()
+
+            if torch.any(stop_mask):
+                stop_violation = torch.relu(
+                    pred_norms[stop_mask] - loss_config.continue_target_norm_threshold
+                )
+                norm_stop_loss = (stop_violation ** 2).mean()
+
+        stop_regularization_weight = loss_config.norm_floor_weight * max(1.0, loss_config.stop_violation_weight)
+        loss = (
+            direction_loss
+            + (loss_config.norm_floor_weight * norm_floor_loss)
+            + (stop_regularization_weight * norm_stop_loss)
+        )
     (
         true_continue_count,
         false_choose_stop_count,
@@ -828,6 +973,14 @@ def train(
     continue_weight: float = 1.0,
     norm_floor: float = 0.0,
     norm_floor_weight: float = 0.0,
+    stop_violation_weight: float = 1.0,
+    objective_mode: str = "legacy",
+    continue_direction_weight: float = 1.0,
+    norm_cls_weight: float = 1.0,
+    norm_cls_temperature: float = 0.25,
+    norm_margin_weight: float = 1.0,
+    stop_margin: float = 0.1,
+    continue_margin: float = 0.1,
 ) -> None:
     """Train a deterministic actor with multi-target behavior cloning."""
     if batch_size < 1:
@@ -845,6 +998,14 @@ def train(
         continue_weight=continue_weight,
         norm_floor=norm_floor,
         norm_floor_weight=norm_floor_weight,
+        stop_violation_weight=stop_violation_weight,
+        objective_mode=objective_mode,
+        continue_direction_weight=continue_direction_weight,
+        norm_cls_weight=norm_cls_weight,
+        norm_cls_temperature=norm_cls_temperature,
+        norm_margin_weight=norm_margin_weight,
+        stop_margin=stop_margin,
+        continue_margin=continue_margin,
     )
 
     steps_done = 0
@@ -945,6 +1106,14 @@ def train_dagger(
     continue_weight: float = 1.0,
     norm_floor: float = 0.0,
     norm_floor_weight: float = 0.0,
+    stop_violation_weight: float = 1.0,
+    objective_mode: str = "legacy",
+    continue_direction_weight: float = 1.0,
+    norm_cls_weight: float = 1.0,
+    norm_cls_temperature: float = 0.25,
+    norm_margin_weight: float = 1.0,
+    stop_margin: float = 0.1,
+    continue_margin: float = 0.1,
 ) -> None:
     """Train a deterministic actor with DAgger using aggregated multi-target supervision."""
     if batch_size < 1:
@@ -975,6 +1144,14 @@ def train_dagger(
         continue_weight=continue_weight,
         norm_floor=norm_floor,
         norm_floor_weight=norm_floor_weight,
+        stop_violation_weight=stop_violation_weight,
+        objective_mode=objective_mode,
+        continue_direction_weight=continue_direction_weight,
+        norm_cls_weight=norm_cls_weight,
+        norm_cls_temperature=norm_cls_temperature,
+        norm_margin_weight=norm_margin_weight,
+        stop_margin=stop_margin,
+        continue_margin=continue_margin,
     )
 
     steps_done = 0
@@ -1205,6 +1382,14 @@ def train_dagger_online(
     continue_weight: float = 1.0,
     norm_floor: float = 0.0,
     norm_floor_weight: float = 0.0,
+    stop_violation_weight: float = 1.0,
+    objective_mode: str = "legacy",
+    continue_direction_weight: float = 1.0,
+    norm_cls_weight: float = 1.0,
+    norm_cls_temperature: float = 0.25,
+    norm_margin_weight: float = 1.0,
+    stop_margin: float = 0.1,
+    continue_margin: float = 0.1,
 ) -> None:
     """Train a deterministic actor with online DAgger and replay-buffer updates."""
     if batch_size < 1:
@@ -1241,6 +1426,14 @@ def train_dagger_online(
         continue_weight=continue_weight,
         norm_floor=norm_floor,
         norm_floor_weight=norm_floor_weight,
+        stop_violation_weight=stop_violation_weight,
+        objective_mode=objective_mode,
+        continue_direction_weight=continue_direction_weight,
+        norm_cls_weight=norm_cls_weight,
+        norm_cls_temperature=norm_cls_temperature,
+        norm_margin_weight=norm_margin_weight,
+        stop_margin=stop_margin,
+        continue_margin=continue_margin,
     )
 
     steps_done = 0

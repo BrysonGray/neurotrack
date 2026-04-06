@@ -98,6 +98,14 @@ class BCTrainConfig:
     continue_weight: float = 1.0
     norm_floor: float = 0.0
     norm_floor_weight: float = 0.0
+    stop_violation_weight: float = 1.0
+    objective_mode: str = "legacy"
+    continue_direction_weight: float = 1.0
+    norm_cls_weight: float = 1.0
+    norm_cls_temperature: float = 0.25
+    norm_margin_weight: float = 1.0
+    stop_margin: float = 0.1
+    continue_margin: float = 0.1
     stall_threshold: float = 1.0
     max_len: int = 1000
     max_paths: int = 1000
@@ -158,6 +166,14 @@ class BCTrainConfig:
             continue_weight=float(_get_param(params, "continue_weight", default=1.0)),
             norm_floor=float(_get_param(params, "norm_floor", default=0.0)),
             norm_floor_weight=float(_get_param(params, "norm_floor_weight", default=0.0)),
+            stop_violation_weight=float(_get_param(params, "stop_violation_weight", default=1.0)),
+            objective_mode=str(_get_param(params, "objective_mode", default="legacy")),
+            continue_direction_weight=float(_get_param(params, "continue_direction_weight", default=1.0)),
+            norm_cls_weight=float(_get_param(params, "norm_cls_weight", default=1.0)),
+            norm_cls_temperature=float(_get_param(params, "norm_cls_temperature", default=0.25)),
+            norm_margin_weight=float(_get_param(params, "norm_margin_weight", default=1.0)),
+            stop_margin=float(_get_param(params, "stop_margin", default=0.1)),
+            continue_margin=float(_get_param(params, "continue_margin", default=0.1)),
             stall_threshold=float(_get_param(params, "stall_threshold", default=1.0)),
             max_len=int(_get_param(params, "max_len", default=1000)),
             max_paths=int(_get_param(params, "max_paths", default=1000)),
@@ -197,6 +213,22 @@ class BCTrainConfig:
             raise ValueError("start_idx must be >= 0.")
         if self.update_every is not None and self.update_every <= 0:
             raise ValueError("update_every must be > 0 when provided.")
+        if self.stop_violation_weight < 0:
+            raise ValueError("stop_violation_weight must be >= 0.")
+        if self.objective_mode not in {"legacy", "norm_classifier_margin"}:
+            raise ValueError("objective_mode must be one of: {'legacy', 'norm_classifier_margin'}")
+        if self.continue_direction_weight < 0:
+            raise ValueError("continue_direction_weight must be >= 0.")
+        if self.norm_cls_weight < 0:
+            raise ValueError("norm_cls_weight must be >= 0.")
+        if self.norm_cls_temperature <= 0:
+            raise ValueError("norm_cls_temperature must be > 0.")
+        if self.norm_margin_weight < 0:
+            raise ValueError("norm_margin_weight must be >= 0.")
+        if self.stop_margin < 0:
+            raise ValueError("stop_margin must be >= 0.")
+        if self.continue_margin < 0:
+            raise ValueError("continue_margin must be >= 0.")
 
     def to_log_dict(self) -> Dict:
         return asdict(self)
@@ -281,6 +313,14 @@ def _run_single_experiment(params: Dict, config_path: Path) -> None:
             continue_weight=config.continue_weight,
             norm_floor=config.norm_floor,
             norm_floor_weight=config.norm_floor_weight,
+            stop_violation_weight=config.stop_violation_weight,
+            objective_mode=config.objective_mode,
+            continue_direction_weight=config.continue_direction_weight,
+            norm_cls_weight=config.norm_cls_weight,
+            norm_cls_temperature=config.norm_cls_temperature,
+            norm_margin_weight=config.norm_margin_weight,
+            stop_margin=config.stop_margin,
+            continue_margin=config.continue_margin,
         )
     elif config.update_every is not None:
         behavior_cloning.train_dagger_online(
@@ -305,6 +345,14 @@ def _run_single_experiment(params: Dict, config_path: Path) -> None:
             continue_weight=config.continue_weight,
             norm_floor=config.norm_floor,
             norm_floor_weight=config.norm_floor_weight,
+            stop_violation_weight=config.stop_violation_weight,
+            objective_mode=config.objective_mode,
+            continue_direction_weight=config.continue_direction_weight,
+            norm_cls_weight=config.norm_cls_weight,
+            norm_cls_temperature=config.norm_cls_temperature,
+            norm_margin_weight=config.norm_margin_weight,
+            stop_margin=config.stop_margin,
+            continue_margin=config.continue_margin,
         )
     else:
         behavior_cloning.train(
@@ -321,6 +369,14 @@ def _run_single_experiment(params: Dict, config_path: Path) -> None:
             continue_weight=config.continue_weight,
             norm_floor=config.norm_floor,
             norm_floor_weight=config.norm_floor_weight,
+            stop_violation_weight=config.stop_violation_weight,
+            objective_mode=config.objective_mode,
+            continue_direction_weight=config.continue_direction_weight,
+            norm_cls_weight=config.norm_cls_weight,
+            norm_cls_temperature=config.norm_cls_temperature,
+            norm_margin_weight=config.norm_margin_weight,
+            stop_margin=config.stop_margin,
+            continue_margin=config.continue_margin,
         )
 
 

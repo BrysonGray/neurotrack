@@ -289,7 +289,7 @@ class SeedPipelineValidationTests(unittest.TestCase):
             self.assertGreater(int(path_channel.sum().item()), 0)
             self.assertGreater(int(path_channel[seed[0], seed[1], seed[2]].item()), 0)
 
-    def test_predicted_path_channel_pruning_can_empty_subtree(self):
+    def test_predicted_path_channel_pruning_keeps_seed_cut_end(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)
             img_dir = root / "images"

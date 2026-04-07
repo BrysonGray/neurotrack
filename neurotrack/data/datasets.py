@@ -240,6 +240,18 @@ class NeuronPatchDataset(TorchDataset):
         path_ids.reverse()
         return path_ids
 
+    @staticmethod
+    def _effective_root_for_seed(seed_node_id: int, parent_by_id: Dict[int, int]) -> int:
+        """Return the highest ancestor of seed_node_id that still exists in parent_by_id."""
+        node_id = int(seed_node_id)
+        seen: set[int] = set()
+        while True:
+            parent_id = parent_by_id.get(node_id, -1)
+            if parent_id == -1 or parent_id not in parent_by_id or parent_id in seen:
+                return node_id
+            seen.add(node_id)
+            node_id = parent_id
+
     def _build_predicted_path_channel(
         self,
         subtree: List,
@@ -250,7 +262,7 @@ class NeuronPatchDataset(TorchDataset):
     ) -> Tuple[torch.Tensor, List, List[int]]:
         """
         Build path channel and return updated subtree plus cut-end node ids.
-        Always remove the path from the subtree, and optionally add a rendered path channel for that path.
+        Always remove the path (keeping the seed node) from the subtree, and optionally add a rendered path channel for that path.
         """
         spatial_shape = tuple(int(v) for v in spatial_shape_zyx)
         path_channel = torch.zeros(spatial_shape, dtype=torch.uint8)
@@ -265,9 +277,9 @@ class NeuronPatchDataset(TorchDataset):
         if seed_node is None:
             return path_channel, subtree, cut_end_ids
 
-        # collect the ids along the path from the seed node to the start node
-        # (the node with the smallest id in the subtree, which is typically a root or near-root node)
-        start_node_id = min(id_to_node.keys())
+        # collect the ids along the path from the seed node to the root node in this subtree
+        parent_by_id = {int(node[0]): int(node[6]) for node in subtree}
+        start_node_id = self._effective_root_for_seed(seed_id, parent_by_id)
         adj_dict = load.adjacency_dict(subtree)
         path_ids = self._find_path_ids(
             adjacency=adj_dict,
@@ -277,21 +289,24 @@ class NeuronPatchDataset(TorchDataset):
         if len(path_ids) < 2:
             return path_channel, subtree, cut_end_ids
         path_id_set = set(path_ids)
+        removed_id_set = path_id_set - {seed_id}
 
-        # remove path_ids from subtree.
-        # set removed node neighbors that are not removed to have parent_id = -1
+        # remove path ids except the seed node
+        # set removed-node neighbors that remain to have parent_id = -1
         neighbors_to_update = set()
-        for node_id in path_ids:
+        for node_id in removed_id_set:
             neighbor_nodes = adj_dict.get(int(node_id), [])
             for neighbor in neighbor_nodes:
-                if int(neighbor) not in path_id_set:
-                    neighbors_to_update.add(int(neighbor))
+                neighbor_id = int(neighbor)
+                if neighbor_id not in removed_id_set:
+                    neighbors_to_update.add(neighbor_id)
         cut_end_ids = sorted(neighbors_to_update)
         updated_subtree = []
         for node in subtree:
-            if int(node[0]) in path_id_set:
+            node_id = int(node[0])
+            if node_id in removed_id_set:
                 continue
-            if int(node[0]) in neighbors_to_update:
+            if node_id in neighbors_to_update:
                 updated_node = list(node)
                 updated_node[6] = -1
                 updated_subtree.append(updated_node)

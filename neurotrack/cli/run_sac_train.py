@@ -245,16 +245,16 @@ def main():
     )
     
     input_size = 2 * config.patch_radius + 1
-    actor = ConvNet(chin=config.in_channels, chout=4)
+    actor = ConvNet(chin=config.in_channels, chout=4, rng_seed=config.rng_seed)
     actor = actor.to(device=DEVICE,dtype=dtype)
 
-    Q1 = ConvNet(chin=config.in_channels + 3, chout=1)
+    Q1 = ConvNet(chin=config.in_channels + 3, chout=1, rng_seed=config.rng_seed)
     Q1 = Q1.to(device=DEVICE,dtype=dtype)
-    Q2 = ConvNet(chin=config.in_channels + 3, chout=1)
+    Q2 = ConvNet(chin=config.in_channels + 3, chout=1, rng_seed=config.rng_seed)
     Q2 = Q2.to(device=DEVICE,dtype=dtype)
-    Q1_target = ConvNet(chin=config.in_channels + 3, chout=1)
+    Q1_target = ConvNet(chin=config.in_channels + 3, chout=1, rng_seed=config.rng_seed)
     Q1_target = Q1_target.to(device=DEVICE,dtype=dtype)
-    Q2_target = ConvNet(chin=config.in_channels + 3, chout=1)
+    Q2_target = ConvNet(chin=config.in_channels + 3, chout=1, rng_seed=config.rng_seed)
     Q2_target = Q2_target.to(device=DEVICE,dtype=dtype)
 
     log_alpha = torch.log(torch.tensor(config.init_temperature).to(DEVICE))

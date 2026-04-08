@@ -5,12 +5,16 @@ class ConvNet(nn.Module):
     ''' Upgraded CNN class with 5 layers and increased capacity 
         Input: (B, C, 35, 35, 35)
     '''
-    def __init__(self, chin=4, ch0=32, chout=4, use_layer_norm=True, activation='relu'):
+    def __init__(self, chin=4, ch0=32, chout=4, norm="group", activation='relu', rng_seed=1):
         super().__init__()        
         k = 3
         p = 1
         
-        self.use_layer_norm = use_layer_norm
+        self.rng_seed = rng_seed
+
+        self.norm = norm
+        if norm not in {"group", "batch"}:
+            raise ValueError(f"Invalid normalization type: {norm}. Must be 'group' or 'batch'.")
         
         # Choose activation function
         if activation == 'relu':
@@ -58,7 +62,7 @@ class ConvNet(nn.Module):
         self._initialize_weights()
     
     def _make_norm(self, channels):
-        if self.use_layer_norm:
+        if self.norm == "group":
             return nn.GroupNorm(1, channels)
         else:
             return nn.BatchNorm3d(channels)
@@ -67,7 +71,7 @@ class ConvNet(nn.Module):
         """Initialize network weights using Xavier/He initialization."""
         for module in self.modules():
             if isinstance(module, (nn.Conv3d, nn.Linear)):
-                nn.init.kaiming_normal_(module.weight, mode='fan_out', nonlinearity='relu')
+                nn.init.kaiming_normal_(module.weight, mode='fan_out', nonlinearity='relu', generator=torch.manual_seed(self.rng_seed))
                 if module.bias is not None:
                     nn.init.constant_(module.bias, 0)
             elif isinstance(module, (nn.BatchNorm3d, nn.GroupNorm, nn.LayerNorm)):

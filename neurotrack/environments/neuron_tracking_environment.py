@@ -266,6 +266,9 @@ class NeuronTrackingEnvironment:
             # If new position is out of neuron mask, truncate.
             elif self.neuron_mask is not None and not self.neuron_mask[new_position[0].int(), new_position[1].int(), new_position[2].int()]:
                 status = "out_of_mask"
+            # check for oscillating behavior: if the new position is the same as the position two steps ago, this means the agent is oscillating back and forth. In this case, truncate the path to prevent infinite loops.
+            elif len(self.paths[0]) >= 2 and new_position.equal(self.paths[0][-2]):
+                status = "oscillating"
             else:
                 status = "continue"
 
@@ -288,7 +291,7 @@ class NeuronTrackingEnvironment:
         status = self._get_status(new_position)
         info['status'] = status
 
-        if status in ["out_of_image", "choose_stop"]:
+        if status in ["out_of_image", "choose_stop", "oscillating"]:
             terminated = True
             reward = torch.tensor(0.0, dtype=torch.float32)
             info['terminate_episode'] = self._terminate_path()
@@ -466,14 +469,7 @@ class NeuronTrackingEnvironment:
             info['current_target_vectors'] = self.target_vectors
             info['status'] = status
 
-            if status in ["out_of_image", "choose_stop"]:
-                terminated = True
-                reward = distance_reward(torch.zeros_like(direction), self.target_vectors, terminated=True, gamma=self.gamma)
-                info['terminate_episode'] = self._terminate_path()
-                observation = self.get_state(terminate=True)
-                return observation, reward, terminated, truncated, info
-
-            if status in ["out_of_image"]: # then terminate path
+            if status in ["out_of_image", "choose_stop", "oscillating"]: # then terminate path
                 terminated = True
                 # Terminate the branch, but the episode may continue.
                 # Reward is negative squared distance to nearest termination point times 1 / (1 - gamma).
@@ -481,6 +477,7 @@ class NeuronTrackingEnvironment:
                 # terminate path
                 info['terminate_episode'] = self._terminate_path()
                 observation = self.get_state(terminate=True)
+                return observation, reward, terminated, truncated, info
             
             else: # Take step
                 # Add new position to path

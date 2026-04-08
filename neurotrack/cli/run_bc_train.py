@@ -269,7 +269,7 @@ def _run_single_experiment(params: Dict, config_path: Path) -> None:
         inference_mode=False,
     )
 
-    actor = ConvNet(chin=2, chout=3).to(device=DEVICE, dtype=dtype)
+    actor = ConvNet(chin=2, chout=3, rng_seed=config.rng_seed).to(device=DEVICE, dtype=dtype)
     actor.policy_output_mode = "direct_vector"
     actor_optimizer = AdamW(actor.parameters(), lr=config.lr)
 

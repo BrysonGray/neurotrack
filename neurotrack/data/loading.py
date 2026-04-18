@@ -171,6 +171,9 @@ def map_tiff_to_swc(image_root, swc_root, use_fixed=False, verbose=False,
         # if still no matches, try matching the stem
         if len(matching_swcs) == 0:
             matching_swcs = [swc for swc in swc_files if tiff_stem == str(swc.stem)]
+        
+        if len(matching_swcs) == 0 and use_fixed:
+            matching_swcs = [swc for swc in swc_files if tiff_stem == str(swc.name).split(fixed_suffix)[0]]
 
         if len(matching_swcs) == 0:
             if verbose:

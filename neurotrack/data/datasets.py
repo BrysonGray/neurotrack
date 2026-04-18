@@ -92,13 +92,10 @@ class NeuronPatchDataset(TorchDataset):
         self.swc_files = []
         if swc_dir is not None:
             swc_dir = Path(swc_dir)
-            self.swc_files = [file for file in swc_dir.rglob("*.swc") if file.is_file()]
+            self.swc_files = sorted(file for file in swc_dir.rglob("*.swc") if file.is_file())
         img_dir = Path(img_dir)
         self.img_dir = img_dir
-        if inference_mode:
-            self.img_files_unordered = sorted([f for f in img_dir.rglob("*.tif") if f.is_file()])
-        else:
-            self.img_files_unordered = [f for f in img_dir.rglob("*.tif") if f.is_file()]
+        self.img_files_unordered = sorted(f for f in img_dir.rglob("*.tif") if f.is_file())
         self.img_files = []
 
         if len(self.img_files_unordered) == 0:

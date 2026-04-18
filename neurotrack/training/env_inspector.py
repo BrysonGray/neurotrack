@@ -10,6 +10,7 @@ from neurotrack.training.policy_utils import (
     prepare_observation_for_model,
     sample_from_output,
 )
+from neurotrack.training import behavior_cloning as bc
 
 def get_unvisited_sections(env):
     """Safely parse the current unvisited tree into drawable sections."""
@@ -235,6 +236,8 @@ def run_expert_episode(env):
     steps_done = 0
     stop_steps = 0
     continue_steps = 0
+    all_step_dists = []
+    stop_step_dists = []
     continue_step_dists = []
     max_steps_limit = 50000  # Safety limit to prevent infinite loops
 
@@ -253,12 +256,15 @@ def run_expert_episode(env):
         next_obs, reward, terminated, _truncated, info = env.step(expert_action)
         steps_done += 1
         total_reward += float(torch.as_tensor(reward, dtype=torch.float32).item())
+        step_len = float(torch.linalg.norm(expert_action).item())
+        all_step_dists.append(step_len)
         status = info.get('status', 'unknown')
         if status == 'choose_stop':
             stop_steps += 1
+            stop_step_dists.append(step_len)
         else:
             continue_steps += 1
-            continue_step_dists.append(float(torch.linalg.norm(expert_action).item()))
+            continue_step_dists.append(step_len)
 
         if info.get('terminate_episode', False):
             break
@@ -295,6 +301,8 @@ def run_expert_episode(env):
     print(f"continue_steps: {continue_steps}")
     print(f"stop_fraction: {stop_fraction:.6f}")
     print(f"continue_fraction: {continue_fraction:.6f}")
+    print(f"mean step length for all steps: {float(torch.as_tensor(all_step_dists).mean().item()):.6f}" if all_step_dists else "mean step length for all steps: N/A")
+    print(f"mean step length for stop steps: {float(torch.as_tensor(stop_step_dists).mean().item()):.6f}" if stop_step_dists else "mean step length for stop steps: N/A")
     print(f"mean step length for continue steps: {float(torch.as_tensor(continue_step_dists).mean().item()):.6f}" if continue_step_dists else "mean step length for continue steps: N/A")
     print(f"finished_paths: {num_paths}")
     print(f"long_paths: {long_paths}")
@@ -305,6 +313,9 @@ def run_expert_episode(env):
         'steps_done': int(steps_done),
         'stop_steps': int(stop_steps),
         'continue_steps': int(continue_steps),
+        'mean_step_length_all': float(torch.as_tensor(all_step_dists).mean().item()) if all_step_dists else None,
+        'mean_step_length_stop': float(torch.as_tensor(stop_step_dists).mean().item()) if stop_step_dists else None,
+        'mean_step_length_continue': float(torch.as_tensor(continue_step_dists).mean().item()) if continue_step_dists else None,
         'num_paths': num_paths,
         'long_paths': int(long_paths),
         'no_start_paths': int(no_start_paths),
@@ -345,18 +356,21 @@ def _policy_action_step(actor, obs, stochastic=False):
     return action.detach().cpu(), False, None
 
 
-def policy_step(env, actor, stochastic=False):
+def run_policy(env, actor, stochastic=False):
     """
     Step through environment dynamics one policy action at a time.
 
     Controls:
       - Enter: take one policy step
-    - t: issue a zero-vector step (treated as stop by stall threshold)
+        - e: run policy action burst for N steps, then pause for input
+        - f: run policy actions until the episode terminates
+        - t: issue a zero-vector step (treated as stop by stall threshold)
       - r: reset environment
       - b: branch at current point
       - q: quit
     """
     from IPython.display import display as ipy_display
+    from IPython.display import HTML
     import matplotlib.pyplot as plt
 
     plt.ioff()
@@ -379,11 +393,69 @@ def policy_step(env, actor, stochastic=False):
 
     total_steps = 0
     total_policy_steps = 0
+    frame_handle = None
+    stats_handle = None
+    last_stats_text = None
+    last_info_snapshot = None
 
-    def _render(observation, reward=None, info=None, direction=None):
-        # Replace prior frame and logs so the latest state remains visible.
-        display.clear_output(wait=True)
+    def _compute_step_metrics(direction):
+        direction_t = torch.as_tensor(direction, dtype=torch.float32)
+        target_vectors = env.target_vectors
+        target_norms = torch.linalg.norm(target_vectors, dim=1) if target_vectors is not None else None
+        true_stop = bool(
+            target_norms is not None
+            and target_norms.numel() > 0
+            and target_norms.min().item() < getattr(env, 'stall_threshold', 1.0)
+        )
+        pred_stop = bool(torch.linalg.norm(direction_t).item() < getattr(env, 'stall_threshold', 1.0))
 
+        if target_vectors is None or torch.as_tensor(target_vectors).numel() == 0:
+            loss_value = 0.0
+            step_mse_value = 0.0
+        else:
+            action_batch, target_tensor, target_mask = bc._prepare_target_candidates(
+                direction_t.unsqueeze(0),
+                target_vectors,
+            )
+            loss_config = bc._build_supervision_loss_config(
+                continue_target_norm_threshold=float(getattr(env, 'stall_threshold', 1.0)),
+                continue_weight=1.0,
+                norm_floor=0.0,
+                norm_floor_weight=0.0,
+                stop_violation_weight=1.0,
+            )
+            loss_tensor, context = bc._compute_supervision_loss(
+                pred_actions=action_batch,
+                target_tensor=target_tensor,
+                target_mask=target_mask,
+                loss_config=loss_config,
+            )
+            loss_value = float(loss_tensor.item())
+            step_mse_value = float(context.step_mse)
+        step_len_value = float(torch.linalg.norm(direction_t).item())
+
+        return {
+            'avg_loss': loss_value,
+            'step_mse': step_mse_value,
+            'false_stop_rate': float(pred_stop and not true_stop),
+            'false_continue_rate': float((not pred_stop) and true_stop),
+            'avg_step_length': step_len_value,
+        }
+
+    def _average_metrics(metrics_list):
+        if not metrics_list:
+            return None
+        n = float(len(metrics_list))
+        return {
+            'avg_loss': sum(m['avg_loss'] for m in metrics_list) / n,
+            'step_mse': sum(m['step_mse'] for m in metrics_list) / n,
+            'false_stop_rate': sum(m['false_stop_rate'] for m in metrics_list) / n,
+            'false_continue_rate': sum(m['false_continue_rate'] for m in metrics_list) / n,
+            'avg_step_length': sum(m['avg_step_length'] for m in metrics_list) / n,
+        }
+
+    def _render(observation, reward=None, info=None, direction=None, step_metrics=None):
+        nonlocal last_stats_text, last_info_snapshot
         for a in axes:
             a.clear()
 
@@ -414,7 +486,12 @@ def policy_step(env, actor, stochastic=False):
         draw_2d_panel(ax5, env, cropped=True, sections=current_sections, dim=2,
                       skeleton_color=skeleton_color, path_color=path_color, target_color=target_color)
 
-        ipy_display(fig)
+        nonlocal frame_handle, stats_handle
+        if frame_handle is None:
+            frame_handle = ipy_display(fig, display_id=True)
+            stats_handle = ipy_display(HTML('<pre></pre>'), display_id=True)
+        else:
+            frame_handle.update(fig)
 
         if direction is None:
             direction_norm = 0.0
@@ -424,24 +501,52 @@ def policy_step(env, actor, stochastic=False):
             direction_norm = float(torch.linalg.norm(direction_tensor).item())
             direction_list = direction_tensor.tolist()
 
-        print(f'step: {total_steps} (policy steps: {total_policy_steps})')
-        print(f'direction: {direction_list}')
-        print(f'direction_norm: {direction_norm:.4f}')
-        print(f'reward: {reward}')
-        if info is None:
-            print('status: None')
-            print('terminated: None')
-            print('diagnostics: threshold-stop mode')
+        lines = [
+            f'step: {total_steps} (policy steps: {total_policy_steps})',
+            f'direction: {direction_list}',
+            f'direction_norm: {direction_norm:.4f}',
+            f'reward: {reward}',
+        ]
+        if step_metrics is None:
+            lines.extend([
+                'avg_loss: None',
+                'avg_step_mse: None',
+                'false_stop_rate: None',
+                'false_continue_rate: None',
+                'avg_step_length: None',
+            ])
         else:
-            print(f"status: {info.get('status')}")
-            print(f"terminated: {info.get('terminate_episode')}")
-            print('diagnostics: threshold-stop mode')
+            lines.extend([
+                f"avg_loss: {step_metrics['avg_loss']:.6f}",
+                f"avg_step_mse: {step_metrics['step_mse']:.6f}",
+                f"false_stop_rate: {step_metrics['false_stop_rate']:.6f}",
+                f"false_continue_rate: {step_metrics['false_continue_rate']:.6f}",
+                f"avg_step_length: {step_metrics['avg_step_length']:.6f}",
+            ])
+        if info is None:
+            lines.extend([
+                'status: None',
+                'terminated: None',
+                'diagnostics: threshold-stop mode',
+            ])
+        else:
+            lines.extend([
+                f"status: {info.get('status')}",
+                f"terminated: {info.get('terminate_episode')}",
+                'diagnostics: threshold-stop mode',
+            ])
+
+        if stats_handle is not None:
+            rendered_text = '\n'.join(lines)
+            stats_handle.update(HTML('<pre>' + rendered_text + '</pre>'))
+            last_stats_text = rendered_text
+            last_info_snapshot = info
 
     # Initial render before any stepping so the user sees the starting state and stop label.
     _render(env.get_state(), reward=None, info=None, direction=None)
 
     while True:
-        action_key = input('Press Enter for policy step, or [t stop, r reset, b branch, q quit]: ').strip().lower()
+        action_key = input('Press Enter for policy step, or [e burst, f full episode, t stop, r reset, b branch, q quit]: ').strip().lower()
         reward = None
 
         if action_key == 'q':
@@ -462,23 +567,124 @@ def policy_step(env, actor, stochastic=False):
             print('Added branch at current point.')
             _render(env.get_state(), reward=None, info=None, direction=None)
             continue
+        elif action_key == 'e':
+            try:
+                burst_steps = int(input('Number of policy steps to run [default=1]: ').strip() or '1')
+            except ValueError:
+                burst_steps = 1
+                print('Invalid step count; defaulting to 1')
+
+            if burst_steps <= 0:
+                print('Step count must be >= 1')
+                continue
+
+            last_observation = env.get_state()
+            last_reward = None
+            last_info = None
+            last_direction = None
+            episode_terminated = False
+
+            burst_metrics = []
+            for _ in range(burst_steps):
+                obs = env.get_state()
+                direction, _choose_stop, _unused_metric = _policy_action_step(actor=actor, obs=obs, stochastic=stochastic)
+                burst_metrics.append(_compute_step_metrics(direction))
+                last_observation, last_reward, terminated, truncated, last_info = env.step(direction, verbose=True)
+                total_steps += 1
+                total_policy_steps += 1
+                last_direction = direction
+
+                if last_info.get('terminate_episode'):
+                    print('All paths finished during policy burst. Final state is shown; press r to reset.')
+                    episode_terminated = True
+                    break
+
+            if episode_terminated:
+                _render(
+                    last_observation,
+                    reward=last_reward,
+                    info=last_info,
+                    direction=last_direction,
+                    step_metrics=_average_metrics(burst_metrics),
+                )
+                if last_stats_text is not None:
+                    print('Final episode stats:')
+                    print(last_stats_text)
+            else:
+                _render(
+                    last_observation,
+                    reward=last_reward,
+                    info=last_info,
+                    direction=last_direction,
+                    step_metrics=_average_metrics(burst_metrics),
+                )
+            continue
+        elif action_key == 'f':
+            last_observation = env.get_state()
+            last_reward = None
+            last_info = None
+            last_direction = None
+            episode_terminated = False
+            max_episode_steps = 50000
+
+            episode_metrics = []
+            for _ in range(max_episode_steps):
+                obs = env.get_state()
+                direction, _choose_stop, _unused_metric = _policy_action_step(actor=actor, obs=obs, stochastic=stochastic)
+                episode_metrics.append(_compute_step_metrics(direction))
+                last_observation, last_reward, terminated, truncated, last_info = env.step(direction, verbose=True)
+                total_steps += 1
+                total_policy_steps += 1
+                last_direction = direction
+
+                if last_info.get('terminate_episode'):
+                    episode_terminated = True
+                    break
+
+            averaged_metrics = _average_metrics(episode_metrics)
+            if episode_terminated:
+                print('All paths finished during full policy episode run. Final state is shown; press r to reset.')
+                _render(
+                    last_observation,
+                    reward=last_reward,
+                    info=last_info,
+                    direction=last_direction,
+                    step_metrics=averaged_metrics,
+                )
+                if last_stats_text is not None:
+                    print('Final episode stats:')
+                    print(last_stats_text)
+            else:
+                print(f'WARNING: Reached max full-episode step limit ({max_episode_steps}).')
+                _render(
+                    last_observation,
+                    reward=last_reward,
+                    info=last_info,
+                    direction=last_direction,
+                    step_metrics=averaged_metrics,
+                )
+            continue
 
         if action_key == 't':
             direction = torch.zeros((3,), dtype=torch.float32)
+            step_metrics = _compute_step_metrics(direction)
             observation, reward, terminated, truncated, info = env.step(direction, verbose=True)
         else:
             obs = env.get_state()
             direction, _choose_stop, _unused_metric = _policy_action_step(actor=actor, obs=obs, stochastic=stochastic)
+            step_metrics = _compute_step_metrics(direction)
+
             observation, reward, terminated, truncated, info = env.step(direction, verbose=True)
             total_policy_steps += 1
 
         total_steps += 1
-        _render(observation, reward=reward, info=info, direction=direction)
+        _render(observation, reward=reward, info=info, direction=direction, step_metrics=step_metrics)
 
         if info.get('terminate_episode'):
-            print('All paths finished. Resetting environment.')
-            env.reset(return_state=True)
-            sections = get_unvisited_sections(env)
+            print('All paths finished. Final state is shown; press r to reset.')
+            if last_stats_text is not None:
+                print('Final episode stats:')
+                print(last_stats_text)
 
     try:
         sections = get_unvisited_sections(env)
@@ -493,6 +699,10 @@ def policy_step(env, actor, stochastic=False):
         ipy_display(plt.gcf())
     except Exception:
         pass
+
+
+# Backward-compatible alias for existing imports/call sites.
+policy_step = run_policy
 
 
 def manual_step(env, step_size=4.0):
@@ -512,6 +722,7 @@ def manual_step(env, step_size=4.0):
       - q: quit
     """
     from IPython.display import display as ipy_display
+    from IPython.display import HTML
     import matplotlib.pyplot as plt
 
     plt.ioff()
@@ -544,6 +755,10 @@ def manual_step(env, step_size=4.0):
     sections = get_unvisited_sections(env)
 
     total_steps = 0
+    frame_handle = None
+    stats_handle = None
+    last_stats_text = None
+    last_info_snapshot = None
 
     def _get_expert_action_and_stop():
         from neurotrack.training.behavior_cloning import select_expert_action
@@ -553,9 +768,7 @@ def manual_step(env, step_size=4.0):
         return expert_action, False
 
     def _render(observation, reward=None, info=None, action=None):
-        # Replace prior frame and logs so the latest state remains visible.
-        display.clear_output(wait=True)
-
+        nonlocal last_stats_text, last_info_snapshot
         for a in axes:
             a.clear()
 
@@ -586,19 +799,36 @@ def manual_step(env, step_size=4.0):
         draw_2d_panel(ax5, env, cropped=True, sections=current_sections, dim=2,
                       skeleton_color=skeleton_color, path_color=path_color, target_color=target_color)
 
-        ipy_display(fig)
-
-        print(f'step: {total_steps}')
-        print(f'action: {None if action is None else torch.as_tensor(action, dtype=torch.float32).tolist()}')
-        print(f'reward: {reward}')
-        if info is None:
-            print('status: None')
-            print('terminated: None')
-            print('diagnostics: threshold-stop mode')
+        nonlocal frame_handle, stats_handle
+        if frame_handle is None:
+            frame_handle = ipy_display(fig, display_id=True)
+            stats_handle = ipy_display(HTML('<pre></pre>'), display_id=True)
         else:
-            print(f"status: {info.get('status')}")
-            print(f"terminated: {info.get('terminate_episode')}")
-            print('diagnostics: threshold-stop mode')
+            frame_handle.update(fig)
+
+        lines = [
+            f'step: {total_steps}',
+            f'action: {None if action is None else torch.as_tensor(action, dtype=torch.float32).tolist()}',
+            f'reward: {reward}',
+        ]
+        if info is None:
+            lines.extend([
+                'status: None',
+                'terminated: None',
+                'diagnostics: threshold-stop mode',
+            ])
+        else:
+            lines.extend([
+                f"status: {info.get('status')}",
+                f"terminated: {info.get('terminate_episode')}",
+                'diagnostics: threshold-stop mode',
+            ])
+
+        if stats_handle is not None:
+            rendered_text = '\n'.join(lines)
+            stats_handle.update(HTML('<pre>' + rendered_text + '</pre>'))
+            last_stats_text = rendered_text
+            last_info_snapshot = info
 
     # Initial render before any stepping so the user sees the starting state and stop label.
     _render(env.get_state(), reward=None, info=None, action=None)
@@ -651,14 +881,15 @@ def manual_step(env, step_size=4.0):
                     last_action = action
 
                     if last_info.get('terminate_episode'):
-                        print('All paths finished during expert burst. Resetting environment.')
-                        env.reset(return_state=True)
-                        sections = get_unvisited_sections(env)
+                        print('All paths finished during expert burst. Final state is shown; press r to reset.')
                         episode_terminated = True
                         break
 
                 if episode_terminated:
-                    _render(env.get_state(), reward=None, info=None, action=None)
+                    _render(last_observation, reward=last_reward, info=last_info, action=last_action)
+                    if last_stats_text is not None:
+                        print('Final episode stats:')
+                        print(last_stats_text)
                 else:
                     _render(last_observation, reward=last_reward, info=last_info, action=last_action)
                 continue
@@ -691,9 +922,10 @@ def manual_step(env, step_size=4.0):
             _render(observation, reward=reward, info=info, action=action)
 
             if info.get('terminate_episode'):
-                print('All paths finished. Resetting environment.')
-                env.reset(return_state=True)
-                sections = get_unvisited_sections(env)
+                print('All paths finished. Final state is shown; press r to reset.')
+                if last_stats_text is not None:
+                    print('Final episode stats:')
+                    print(last_stats_text)
 
     try:
         sections = get_unvisited_sections(env)
@@ -763,7 +995,7 @@ def show_state(env, fig, live=False, ep_return=None, reward=None, policy_loss=No
 
     # Overlay seed points as red dots (projected using y=seed[1], x=seed[2])
     h, w = img_proj.shape[0], img_proj.shape[1]
-    if hasattr(env, 'seeds') and env.seeds:
+    if hasattr(env, 'seeds') and len(env.seeds) > 0:
         xs, ys = [], []
         for s in env.seeds:
             try:

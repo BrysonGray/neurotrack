@@ -5,8 +5,13 @@ from dataclasses import asdict, dataclass
 from datetime import datetime
 import json
 import os
+import random
 from pathlib import Path
 from typing import Dict, List, Optional
+import warnings
+
+# Must be set before any CUDA context initialization for deterministic cuBLAS behavior.
+os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
 
 import numpy as np
 import torch
@@ -20,6 +25,41 @@ from neurotrack.training import behavior_cloning
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 dtype = torch.float32
 date_time = datetime.now().strftime("'%Y-%m-%d_%H-%M-%S'")
+
+
+def _configure_reproducibility(seed: int, allow_tf32: bool = True) -> None:
+    """Configure process-wide deterministic behavior for reproducible training."""
+    seed = int(seed)
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+
+    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.deterministic = True
+    if hasattr(torch.backends, "cuda") and hasattr(torch.backends.cuda, "matmul"):
+        torch.backends.cuda.matmul.allow_tf32 = allow_tf32
+    if hasattr(torch.backends, "cudnn"):
+        torch.backends.cudnn.allow_tf32 = allow_tf32
+
+    # Keep deterministic mode enabled, but fall back to warnings for ops that
+    # do not currently have deterministic CUDA implementations.
+    warnings.filterwarnings(
+        "ignore",
+        message=r".*adaptive_avg_pool3d_backward_cuda does not have a deterministic implementation.*",
+        category=UserWarning,
+    )
+
+    try:
+        torch.use_deterministic_algorithms(True, warn_only=True)
+    except Exception as exc:
+        raise RuntimeError(
+            "Failed to enable deterministic PyTorch algorithms. "
+            "Ensure your CUDA/PyTorch stack supports deterministic execution."
+        ) from exc
 
 
 def _get_param(params: dict, *names: str, default=None):
@@ -99,7 +139,7 @@ class BCTrainConfig:
     norm_floor: float = 0.0
     norm_floor_weight: float = 0.0
     stop_violation_weight: float = 1.0
-    objective_mode: str = "legacy"
+    objective_mode: str = "norm_floor"
     continue_direction_weight: float = 1.0
     norm_cls_weight: float = 1.0
     norm_cls_temperature: float = 0.25
@@ -167,7 +207,7 @@ class BCTrainConfig:
             norm_floor=float(_get_param(params, "norm_floor", default=0.0)),
             norm_floor_weight=float(_get_param(params, "norm_floor_weight", default=0.0)),
             stop_violation_weight=float(_get_param(params, "stop_violation_weight", default=1.0)),
-            objective_mode=str(_get_param(params, "objective_mode", default="legacy")),
+            objective_mode=str(_get_param(params, "objective_mode", default="norm_floor")),
             continue_direction_weight=float(_get_param(params, "continue_direction_weight", default=1.0)),
             norm_cls_weight=float(_get_param(params, "norm_cls_weight", default=1.0)),
             norm_cls_temperature=float(_get_param(params, "norm_cls_temperature", default=0.25)),
@@ -215,8 +255,10 @@ class BCTrainConfig:
             raise ValueError("update_every must be > 0 when provided.")
         if self.stop_violation_weight < 0:
             raise ValueError("stop_violation_weight must be >= 0.")
-        if self.objective_mode not in {"legacy", "norm_classifier_margin"}:
-            raise ValueError("objective_mode must be one of: {'legacy', 'norm_classifier_margin'}")
+        if self.objective_mode not in {"norm_floor", "norm_classifier_margin", "direction_sse"}:
+            raise ValueError(
+                "objective_mode must be one of: {'norm_floor', 'norm_classifier_margin', 'direction_sse'}"
+            )
         if self.continue_direction_weight < 0:
             raise ValueError("continue_direction_weight must be >= 0.")
         if self.norm_cls_weight < 0:
@@ -236,6 +278,7 @@ class BCTrainConfig:
 
 def _run_single_experiment(params: Dict, config_path: Path) -> None:
     config = BCTrainConfig.from_params(params)
+    _configure_reproducibility(config.rng_seed, allow_tf32=False) # Disable TF32 for better determinism. Enable for faster training if exact reproducibility is not required.
 
     rng = np.random.default_rng(config.rng_seed)
     dataset = NeuronPatchDataset(

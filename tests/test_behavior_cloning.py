@@ -255,6 +255,7 @@ class BehaviorCloningPolicyTests(unittest.TestCase):
             continue_weight=1.0,
             norm_floor=1.0,
             norm_floor_weight=0.5,
+            stop_violation_weight=1.0,
         )
 
         batch_stats = _optimize_prepared_batch(
@@ -272,6 +273,46 @@ class BehaviorCloningPolicyTests(unittest.TestCase):
         self.assertEqual(batch_stats.false_choose_stop_count, 1)
         self.assertEqual(batch_stats.true_stop_count, 0)
         self.assertEqual(batch_stats.false_continue_count, 0)
+
+    def test_optimize_prepared_batch_margin_stop_only_allows_zero_loss_batch(self):
+        actor = _ConstantActor([0.2, 0.0, 0.0])
+        initial_bias = actor.bias.detach().clone()
+        optimizer = torch.optim.SGD(actor.parameters(), lr=1.0)
+        obs_tensor = torch.zeros((1, 2, 35, 35, 35), dtype=torch.uint8)
+        # Stop-only target with margin objective and zero auxiliary weights yields zero scalar loss.
+        target_tensor = torch.tensor([[[0.0, 0.0, 0.0]]], dtype=torch.float32)
+        target_mask = torch.tensor([[True]], dtype=torch.bool)
+        loss_config = _build_supervision_loss_config(
+            continue_target_norm_threshold=0.5,
+            continue_weight=1.0,
+            norm_floor=0.0,
+            norm_floor_weight=0.0,
+            stop_violation_weight=1.0,
+            objective_mode="norm_classifier_margin",
+            continue_direction_weight=1.0,
+            norm_cls_weight=0.0,
+            norm_cls_temperature=0.2,
+            norm_margin_weight=0.0,
+            stop_margin=0.1,
+            continue_margin=0.0,
+        )
+
+        batch_stats = _optimize_prepared_batch(
+            actor=actor,
+            actor_optimizer=optimizer,
+            obs_tensor=obs_tensor,
+            target_tensor=target_tensor,
+            target_mask=target_mask,
+            loss_config=loss_config,
+        )
+
+        self.assertAlmostEqual(batch_stats.loss, 0.0, places=6)
+        self.assertAlmostEqual(batch_stats.step_mse, 0.04, places=6)
+        self.assertEqual(batch_stats.true_continue_count, 0)
+        self.assertEqual(batch_stats.false_choose_stop_count, 0)
+        self.assertEqual(batch_stats.true_stop_count, 1)
+        self.assertEqual(batch_stats.false_continue_count, 0)
+        torch.testing.assert_close(actor.bias.detach(), initial_bias)
 
     def test_trace_image_reports_false_stop_diagnostics(self):
         device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")

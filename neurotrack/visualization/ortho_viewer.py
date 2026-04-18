@@ -12,9 +12,11 @@ Author: Bryson Gray
 
 import importlib
 import os
+from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
 import matplotlib.pyplot as plt
+from matplotlib.collections import LineCollection
 from matplotlib.patches import Rectangle
 import numpy as np
 import torch
@@ -35,6 +37,18 @@ def _extract_first_channel_numpy(image_data: np.ndarray) -> np.ndarray:
     return image_np
 
 
+def _normalize_swc_rows(swc_rows: Optional[object]) -> np.ndarray:
+    """Return SWC rows as float array with shape (N, 7) or empty array."""
+    if swc_rows is None:
+        return np.empty((0, 7), dtype=np.float32)
+    arr = np.asarray(swc_rows, dtype=np.float32)
+    if arr.size == 0:
+        return np.empty((0, 7), dtype=np.float32)
+    if arr.ndim != 2 or arr.shape[1] < 7:
+        return np.empty((0, 7), dtype=np.float32)
+    return arr[:, :7].copy()
+
+
 class _OrthoViewDialog:
     """Qt dialog with synchronized XY/XZ/YZ orthoviews and controls."""
 
@@ -43,6 +57,7 @@ class _OrthoViewDialog:
         image_data: np.ndarray,
         mode: str,
         finished_paths=None,
+        tree_swc_rows: Optional[object] = None,
         neuron_name: str = "",
         initial_seeds: Optional[np.ndarray] = None,
         show_prev_button: bool = False,
@@ -111,6 +126,11 @@ class _OrthoViewDialog:
         on_select_eval_output_dir: Optional[Callable[[], Optional[str]]] = None,
         on_clear_eval_output_dir: Optional[Callable[[], Optional[str]]] = None,
         on_eval_params_changed: Optional[Callable[[Dict[str, object]], None]] = None,
+        filtered_swc_output_dir: Optional[str] = None,
+        on_select_filtered_swc_output_dir: Optional[Callable[[], Optional[str]]] = None,
+        on_clear_filtered_swc_output_dir: Optional[Callable[[], Optional[str]]] = None,
+        on_save_filtered_swc: Optional[Callable[[str, List[List[float]]], Optional[str]]] = None,
+        on_filtered_swc_changed: Optional[Callable[[str, List[List[float]]], None]] = None,
     ):
         (
             QApplication,
@@ -220,6 +240,30 @@ class _OrthoViewDialog:
         self._on_select_eval_output_dir = on_select_eval_output_dir
         self._on_clear_eval_output_dir = on_clear_eval_output_dir
         self._on_eval_params_changed = on_eval_params_changed
+        self._filtered_swc_output_dir = filtered_swc_output_dir
+        self._on_select_filtered_swc_output_dir = on_select_filtered_swc_output_dir
+        self._on_clear_filtered_swc_output_dir = on_clear_filtered_swc_output_dir
+        self._on_save_filtered_swc = on_save_filtered_swc
+        self._on_filtered_swc_changed = on_filtered_swc_changed
+        self._current_image_key = str(neuron_name or "")
+
+        self._tree_swc_committed = _normalize_swc_rows(tree_swc_rows)
+        self._tree_swc_preview_source = np.empty((0, 7), dtype=np.float32)
+        self._tree_swc_preview_filtered = np.empty((0, 7), dtype=np.float32)
+        self._tree_preview_seed_points: List[Tuple[float, float, float]] = []
+        self._tree_preview_removed_ids: set[int] = set()
+        self._has_crop_preview = False
+        self._crop_box: Optional[Tuple[int, int, int, int, int, int]] = None
+        self._crop_axes_initialized: set[str] = set()
+        self._active_tool = "zoom"
+        self._tree_overlay_cache_source_id: Optional[int] = None
+        self._tree_overlay_cache: Dict[str, np.ndarray] = {
+            "child_idx": np.empty((0,), dtype=np.int64),
+            "parent_idx": np.empty((0,), dtype=np.int64),
+            "child_xyz": np.empty((0, 3), dtype=np.float32),
+            "parent_xyz": np.empty((0, 3), dtype=np.float32),
+        }
+
         self._trace_status_token = None
         self._trace_overlay_token = None
         self._trace_controls_running_state: Optional[bool] = None
@@ -228,6 +272,7 @@ class _OrthoViewDialog:
         self._pending_trace_param_overrides: Optional[Dict[str, object]] = None
         self._trace_params_debounce_timer = None
         self.trace_overlay_visible = True
+        self.gt_overlay_visible = False
         self.trace_revision_mode_enabled = False
         self.trace_revision_selected_node_xyz: Optional[np.ndarray] = None
         self.trace_revision_selected_point_xyz: Optional[np.ndarray] = None
@@ -277,6 +322,7 @@ class _OrthoViewDialog:
         self.btn_save_trace = QPushButton("Save Trace")
         self.btn_save_all_traces = QPushButton("Save All Traces")
         self.btn_toggle_trace_overlay = QPushButton("Toggle Trace Overlay")
+        self.btn_toggle_gt_overlay = QPushButton("Toggle GT Overlay")
         self.btn_trace_revision_mode = QPushButton("Trace Revision Mode")
         self.btn_trace_revision_mode.setCheckable(True)
         self.btn_trace_revision_preview = QPushButton("Preview")
@@ -390,6 +436,24 @@ class _OrthoViewDialog:
             self.btn_set_eval_scales_path = QPushButton("Set Scales JSON")
             self.btn_clear_eval_scales_path = QPushButton("Unset Scales JSON")
 
+            # Crop/filter widgets (left panel)
+            self._tool_button_group = _qt_w.QButtonGroup(self.dialog)
+            self.radio_tool_zoom = _qt_w.QRadioButton("Zoom")
+            self.radio_tool_crop = _qt_w.QRadioButton("Crop")
+            self.radio_tool_zoom.setChecked(True)
+            self._tool_button_group.addButton(self.radio_tool_zoom)
+            self._tool_button_group.addButton(self.radio_tool_crop)
+            self.btn_approve_crop = QPushButton("Approve Crop")
+            self._component_min_length_spin = _qt_w.QSpinBox()
+            self._component_min_length_spin.setRange(1, 1000000)
+            self._component_min_length_spin.setValue(50)
+            self.btn_apply_component_filter = QPushButton("Filter By Length")
+            self.btn_set_filtered_swc_output = QPushButton("Set Filtered SWC Output")
+            self.btn_clear_filtered_swc_output = QPushButton("Unset Filtered SWC Output")
+            self.filtered_swc_output_value_label = QLabel("")
+            self.filtered_swc_output_value_label.setWordWrap(True)
+            self.btn_save_filtered_swc = QPushButton("Save Filtered SWC")
+
         # -----------------------------------------------------------------
         # LEFT SIDEBAR — view controls, sliders, seed & trace actions
         # -----------------------------------------------------------------
@@ -423,6 +487,23 @@ class _OrthoViewDialog:
         _zoom_row.layout().addWidget(self.btn_back)
         _zoom_row.layout().addWidget(self.btn_home)
         left_layout.addWidget(_zoom_row)
+
+        if mode == "seed":
+            left_layout.addWidget(self._sidebar_separator())
+            left_layout.addWidget(QLabel("Tool Selector:"))
+            _tool_row = self._row_widget()
+            _tool_row.layout().addWidget(self.radio_tool_zoom)
+            _tool_row.layout().addWidget(self.radio_tool_crop)
+            left_layout.addWidget(_tool_row)
+            left_layout.addWidget(self.btn_approve_crop)
+            left_layout.addWidget(QLabel("Component Min Length:"))
+            left_layout.addWidget(self._component_min_length_spin)
+            left_layout.addWidget(self.btn_apply_component_filter)
+            left_layout.addWidget(QLabel("Filtered SWC Output:"))
+            left_layout.addWidget(self.filtered_swc_output_value_label)
+            left_layout.addWidget(self.btn_set_filtered_swc_output)
+            left_layout.addWidget(self.btn_clear_filtered_swc_output)
+            left_layout.addWidget(self.btn_save_filtered_swc)
 
         # Sliders
         left_layout.addWidget(self._sidebar_separator())
@@ -462,6 +543,7 @@ class _OrthoViewDialog:
                 left_layout.addWidget(self.btn_save_trace)
                 left_layout.addWidget(self.btn_save_all_traces)
                 left_layout.addWidget(self.btn_toggle_trace_overlay)
+                left_layout.addWidget(self.btn_toggle_gt_overlay)
                 left_layout.addWidget(self.btn_trace_revision_mode)
                 left_layout.addWidget(self.btn_trace_revision_preview)
                 left_layout.addWidget(self.btn_trace_revision_launch)
@@ -685,7 +767,7 @@ class _OrthoViewDialog:
         footer_layout = QHBoxLayout(footer)
         footer_layout.setContentsMargins(6, 2, 6, 2)
         self.info_label = QLabel(
-            "Space=Add seed, Backspace=Undo, Scroll=Slice, Drag=Zoom Box"
+            "Space=Add seed, Backspace=Undo, Scroll=Slice, Drag=Tool Action (Zoom/Crop)"
             if mode == "seed"
             else "Scroll=Slice, Drag=Zoom Box, Enter=Finish"
         )
@@ -709,6 +791,13 @@ class _OrthoViewDialog:
             button_list.extend([self.btn_clear_seeds_output, self.btn_clear_trace_output, self.btn_clear_model_weights])
             button_list.extend([self.btn_set_image_dir, self.btn_set_seeds_input])
             button_list.extend([self.btn_clear_image_dir, self.btn_clear_seeds_input])
+            button_list.extend([
+                self.btn_approve_crop,
+                self.btn_apply_component_filter,
+                self.btn_set_filtered_swc_output,
+                self.btn_clear_filtered_swc_output,
+                self.btn_save_filtered_swc,
+            ])
             button_list.extend([self.btn_prev_image, self.btn_next_image])
             button_list.extend([self.btn_set_postprocess_output, self.btn_set_gt_swc, self.btn_set_scales_path])
             button_list.extend([self.btn_clear_postprocess_output, self.btn_clear_gt_swc, self.btn_clear_scales_path])
@@ -724,6 +813,7 @@ class _OrthoViewDialog:
                     self.btn_save_trace,
                     self.btn_save_all_traces,
                     self.btn_toggle_trace_overlay,
+                    self.btn_toggle_gt_overlay,
                     self.btn_trace_revision_mode,
                     self.btn_trace_revision_preview,
                     self.btn_trace_revision_launch,
@@ -757,6 +847,12 @@ class _OrthoViewDialog:
         if mode == "seed":
             self.btn_undo.clicked.connect(self._undo_seed)
             self.btn_clear.clicked.connect(self._clear_seeds)
+            self.radio_tool_zoom.toggled.connect(self._on_tool_toggled)
+            self.btn_approve_crop.clicked.connect(self._approve_crop_box)
+            self.btn_apply_component_filter.clicked.connect(self._apply_component_filter)
+            self.btn_set_filtered_swc_output.clicked.connect(self._select_filtered_swc_output_dir)
+            self.btn_clear_filtered_swc_output.clicked.connect(self._clear_filtered_swc_output_dir)
+            self.btn_save_filtered_swc.clicked.connect(self._save_filtered_swc)
             self.btn_set_seeds_output.clicked.connect(self._select_seeds_output_path)
             self.btn_clear_seeds_output.clicked.connect(self._clear_seeds_output_path)
             self.btn_set_trace_output.clicked.connect(self._select_trace_output_path)
@@ -799,6 +895,7 @@ class _OrthoViewDialog:
                 self.btn_save_trace.clicked.connect(self._save_trace)
                 self.btn_save_all_traces.clicked.connect(self._save_all_traces)
                 self.btn_toggle_trace_overlay.clicked.connect(self._toggle_trace_overlay)
+                self.btn_toggle_gt_overlay.clicked.connect(self._toggle_gt_overlay)
                 self.btn_trace_revision_mode.toggled.connect(self._toggle_trace_revision_mode)
                 self.btn_trace_revision_preview.clicked.connect(self._preview_trace_revision)
                 self.btn_trace_revision_launch.clicked.connect(self._launch_trace_revision)
@@ -931,6 +1028,277 @@ class _OrthoViewDialog:
         self.seeds.clear()
         self._redraw()
 
+    def _on_tool_toggled(self, checked: bool):
+        self._active_tool = "zoom" if checked else "crop"
+
+    def _invalidate_tree_overlay_cache(self) -> None:
+        self._tree_overlay_cache_source_id = None
+        self._tree_overlay_cache = {
+            "child_idx": np.empty((0,), dtype=np.int64),
+            "parent_idx": np.empty((0,), dtype=np.int64),
+            "child_xyz": np.empty((0, 3), dtype=np.float32),
+            "parent_xyz": np.empty((0, 3), dtype=np.float32),
+        }
+
+    def _ensure_tree_overlay_cache(self, swc_source: np.ndarray) -> None:
+        source_id = id(swc_source)
+        if self._tree_overlay_cache_source_id == source_id:
+            return
+
+        if swc_source.size == 0:
+            self._invalidate_tree_overlay_cache()
+            self._tree_overlay_cache_source_id = source_id
+            return
+
+        node_ids = swc_source[:, 0].astype(np.int64, copy=False)
+        parent_ids = swc_source[:, 6].astype(np.int64, copy=False)
+
+        order = np.argsort(node_ids)
+        sorted_ids = node_ids[order]
+        parent_pos = np.searchsorted(sorted_ids, parent_ids)
+        within_bounds = (parent_ids != -1) & (parent_pos >= 0) & (parent_pos < sorted_ids.shape[0])
+        has_parent = np.zeros_like(within_bounds, dtype=bool)
+        if np.any(within_bounds):
+            pos = parent_pos[within_bounds]
+            has_parent[within_bounds] = sorted_ids[pos] == parent_ids[within_bounds]
+
+        child_idx = np.flatnonzero(has_parent)
+        if child_idx.size == 0:
+            self._invalidate_tree_overlay_cache()
+            self._tree_overlay_cache_source_id = source_id
+            return
+
+        parent_idx = order[parent_pos[child_idx]]
+        self._tree_overlay_cache = {
+            "child_idx": child_idx.astype(np.int64, copy=False),
+            "parent_idx": parent_idx.astype(np.int64, copy=False),
+            "child_xyz": swc_source[child_idx, 2:5].astype(np.float32, copy=False),
+            "parent_xyz": swc_source[parent_idx, 2:5].astype(np.float32, copy=False),
+        }
+        self._tree_overlay_cache_source_id = source_id
+
+    def _active_tree_for_filters(self) -> np.ndarray:
+        if self._has_crop_preview:
+            return self._tree_swc_preview_filtered.copy()
+        return self._tree_swc_committed.copy()
+
+    def _clip_crop_box(self, box: Tuple[int, int, int, int, int, int]) -> Tuple[int, int, int, int, int, int]:
+        x0, x1, y0, y1, z0, z1 = [int(v) for v in box]
+        x0, x1 = sorted((max(0, x0), min(self.shape[2], x1)))
+        y0, y1 = sorted((max(0, y0), min(self.shape[1], y1)))
+        z0, z1 = sorted((max(0, z0), min(self.shape[0], z1)))
+        if x0 == x1 or y0 == y1 or z0 == z1:
+            raise ValueError("Crop box must have non-zero size in x, y, and z.")
+        return (x0, x1, y0, y1, z0, z1)
+
+    @staticmethod
+    def _seed_points_from_swc(swc_rows: np.ndarray) -> List[Tuple[float, float, float]]:
+        if swc_rows.size == 0:
+            return []
+        roots = swc_rows[swc_rows[:, 6] == -1]
+        if roots.size == 0:
+            return []
+        return [tuple(map(float, row)) for row in roots[:, [4, 3, 2]].tolist()]
+
+    def _update_crop_box_from_view(self, view: str, x0f: float, x1f: float, y0f: float, y1f: float) -> None:
+        def _bounds(lo_f: float, hi_f: float) -> Tuple[int, int]:
+            lo = int(np.floor(min(lo_f, hi_f)))
+            hi = int(np.ceil(max(lo_f, hi_f)))
+            if hi <= lo:
+                hi = lo + 1
+            return lo, hi
+
+        if self._crop_box is None:
+            box = [0, self.shape[2], 0, self.shape[1], 0, self.shape[0]]
+        else:
+            box = list(self._crop_box)
+
+        if view == "xy":
+            x0, x1 = _bounds(x0f, x1f)
+            y0, y1 = _bounds(y0f, y1f)
+            box[0], box[1], box[2], box[3] = x0, x1, y0, y1
+            self._crop_axes_initialized.update({"x", "y"})
+            if "z" not in self._crop_axes_initialized:
+                box[4], box[5] = 0, self.shape[0]
+                self._crop_axes_initialized.add("z")
+        elif view == "xz":
+            x0, x1 = _bounds(x0f, x1f)
+            z0, z1 = _bounds(y0f, y1f)
+            box[0], box[1], box[4], box[5] = x0, x1, z0, z1
+            self._crop_axes_initialized.update({"x", "z"})
+            if "y" not in self._crop_axes_initialized:
+                box[2], box[3] = 0, self.shape[1]
+                self._crop_axes_initialized.add("y")
+        else:
+            y0, y1 = _bounds(x0f, x1f)
+            z0, z1 = _bounds(y0f, y1f)
+            box[2], box[3], box[4], box[5] = y0, y1, z0, z1
+            self._crop_axes_initialized.update({"y", "z"})
+            if "x" not in self._crop_axes_initialized:
+                box[0], box[1] = 0, self.shape[2]
+                self._crop_axes_initialized.add("x")
+
+        self._crop_box = self._clip_crop_box(tuple(box))
+
+    def _filter_swc_by_box(
+        self,
+        swc_rows: np.ndarray,
+        box: Tuple[int, int, int, int, int, int],
+    ) -> Tuple[set[int], np.ndarray, List[Tuple[float, float, float]]]:
+        if swc_rows.size == 0:
+            return set(), np.empty((0, 7), dtype=np.float32), []
+
+        x0, x1, y0, y1, z0, z1 = box
+        in_box = (
+            (swc_rows[:, 2] >= x0) & (swc_rows[:, 2] < x1)
+            & (swc_rows[:, 3] >= y0) & (swc_rows[:, 3] < y1)
+            & (swc_rows[:, 4] >= z0) & (swc_rows[:, 4] < z1)
+        )
+        removed_ids = set(swc_rows[in_box, 0].astype(int).tolist())
+        filtered = np.array([row.copy() for row in swc_rows if int(row[0]) not in removed_ids], dtype=np.float32)
+
+        if filtered.size == 0:
+            return removed_ids, np.empty((0, 7), dtype=np.float32), []
+
+        for row in filtered:
+            parent_id = int(row[6])
+            if parent_id in removed_ids:
+                row[6] = -1
+
+        seed_points = self._seed_points_from_swc(filtered)
+        return removed_ids, filtered, seed_points
+
+    def _apply_crop_preview(self):
+        if self._crop_box is None:
+            return
+        source = self._tree_swc_committed.copy()
+        removed_ids, filtered, seed_points = self._filter_swc_by_box(source, self._crop_box)
+        self._tree_swc_preview_source = source
+        self._tree_swc_preview_filtered = filtered
+        self._tree_preview_seed_points = seed_points
+        self._tree_preview_removed_ids = removed_ids
+        self._has_crop_preview = True
+        self._invalidate_tree_overlay_cache()
+        self._redraw()
+
+    def _approve_crop_box(self):
+        if not self._has_crop_preview:
+            return
+        self._tree_swc_committed = self._tree_swc_preview_filtered.copy()
+        self._tree_swc_preview_source = np.empty((0, 7), dtype=np.float32)
+        self._tree_swc_preview_filtered = np.empty((0, 7), dtype=np.float32)
+        self._tree_preview_removed_ids = set()
+        self._has_crop_preview = False
+        self._invalidate_tree_overlay_cache()
+
+        seed_points = self._tree_preview_seed_points
+        self.seeds = [
+            (
+                int(np.clip(round(z), 0, self.shape[0] - 1)),
+                int(np.clip(round(y), 0, self.shape[1] - 1)),
+                int(np.clip(round(x), 0, self.shape[2] - 1)),
+            )
+            for z, y, x in seed_points
+        ]
+
+        if self._on_filtered_swc_changed is not None:
+            self._on_filtered_swc_changed(self._current_image_key, self._tree_swc_committed.tolist())
+        self._redraw()
+
+    def _filter_components_by_length(self, swc_rows: np.ndarray, min_length: int) -> np.ndarray:
+        if swc_rows.size == 0:
+            return np.empty((0, 7), dtype=np.float32)
+
+        from scipy.sparse import csr_matrix
+        from scipy.sparse.csgraph import connected_components
+
+        id_to_idx = {int(row[0]): idx for idx, row in enumerate(swc_rows)}
+        edges = []
+        for row in swc_rows:
+            node_id = int(row[0])
+            parent_id = int(row[6])
+            if parent_id != -1 and parent_id in id_to_idx:
+                edges.append((id_to_idx[node_id], id_to_idx[parent_id]))
+
+        n_nodes = swc_rows.shape[0]
+        if edges:
+            edge_array = np.asarray(edges, dtype=np.int64)
+            adjacency = csr_matrix(
+                (np.ones((len(edge_array),), dtype=np.float32), (edge_array[:, 0], edge_array[:, 1])),
+                shape=(n_nodes, n_nodes),
+            )
+        else:
+            adjacency = csr_matrix((n_nodes, n_nodes), dtype=np.float32)
+        adjacency = adjacency + adjacency.T
+
+        _, labels = connected_components(csgraph=adjacency, directed=False)
+        component_sizes = np.bincount(labels)
+        valid_components = np.where(component_sizes >= int(min_length))[0]
+        keep_mask = np.isin(labels, valid_components)
+        filtered = swc_rows[keep_mask].copy()
+
+        if filtered.size == 0:
+            return np.empty((0, 7), dtype=np.float32)
+
+        remaining_ids = set(filtered[:, 0].astype(int).tolist())
+        for row in filtered:
+            parent_id = int(row[6])
+            if parent_id != -1 and parent_id not in remaining_ids:
+                row[6] = -1
+
+        return filtered
+
+    def _apply_component_filter(self):
+        source = self._active_tree_for_filters()
+        if source.size == 0:
+            return
+        min_length = int(self._component_min_length_spin.value())
+        filtered = self._filter_components_by_length(source, min_length=min_length)
+        self._tree_swc_committed = filtered
+        self._tree_swc_preview_source = np.empty((0, 7), dtype=np.float32)
+        self._tree_swc_preview_filtered = np.empty((0, 7), dtype=np.float32)
+        self._tree_preview_removed_ids = set()
+        self._tree_preview_seed_points = []
+        self._has_crop_preview = False
+        self._invalidate_tree_overlay_cache()
+
+        seed_points = self._seed_points_from_swc(filtered)
+        self.seeds = [
+            (
+                int(np.clip(round(z), 0, self.shape[0] - 1)),
+                int(np.clip(round(y), 0, self.shape[1] - 1)),
+                int(np.clip(round(x), 0, self.shape[2] - 1)),
+            )
+            for z, y, x in seed_points
+        ]
+
+        if self._on_filtered_swc_changed is not None:
+            self._on_filtered_swc_changed(self._current_image_key, self._tree_swc_committed.tolist())
+        self._redraw()
+
+    def _select_filtered_swc_output_dir(self):
+        if self._on_select_filtered_swc_output_dir is None:
+            return
+        selected = self._on_select_filtered_swc_output_dir()
+        if selected is not None:
+            self._filtered_swc_output_dir = selected
+            self._refresh_output_path_labels()
+
+    def _clear_filtered_swc_output_dir(self):
+        if self._on_clear_filtered_swc_output_dir is not None:
+            self._filtered_swc_output_dir = self._on_clear_filtered_swc_output_dir()
+        else:
+            self._filtered_swc_output_dir = None
+        self._refresh_output_path_labels()
+
+    def _save_filtered_swc(self):
+        if self._on_save_filtered_swc is None:
+            return
+        saved_dir = self._on_save_filtered_swc(self._current_image_key, self._tree_swc_committed.tolist())
+        if saved_dir is not None:
+            self._filtered_swc_output_dir = saved_dir
+            self._refresh_output_path_labels()
+
     def _finish(self):
         self.session_action = "finish"
         self.dialog.accept()
@@ -1006,6 +1374,16 @@ class _OrthoViewDialog:
 
         self._set_seeds_from_array(context.get("initial_seeds"))
         self._set_finished_paths(context.get("finished_paths"))
+        self._current_image_key = str(context.get("neuron_name", ""))
+        self._tree_swc_committed = _normalize_swc_rows(context.get("tree_swc_rows"))
+        self._tree_swc_preview_source = np.empty((0, 7), dtype=np.float32)
+        self._tree_swc_preview_filtered = np.empty((0, 7), dtype=np.float32)
+        self._tree_preview_seed_points = []
+        self._tree_preview_removed_ids = set()
+        self._has_crop_preview = False
+        self._crop_box = None
+        self._crop_axes_initialized = set()
+        self._invalidate_tree_overlay_cache()
 
         self._show_prev_button = bool(context.get("show_prev_button", False))
         self._show_next_button = bool(context.get("show_next_button", False))
@@ -1026,6 +1404,8 @@ class _OrthoViewDialog:
             self._gt_swc_path = context.get("gt_swc_path")  # type: ignore[assignment]
         if "scales_path" in context:
             self._scales_path = context.get("scales_path")  # type: ignore[assignment]
+        if "filtered_swc_output_dir" in context:
+            self._filtered_swc_output_dir = context.get("filtered_swc_output_dir")  # type: ignore[assignment]
         self._refresh_output_path_labels()
 
         neuron_name = context.get("neuron_name", "")
@@ -1090,6 +1470,10 @@ class _OrthoViewDialog:
 
     def _toggle_trace_overlay(self):
         self.trace_overlay_visible = not self.trace_overlay_visible
+        self._redraw()
+
+    def _toggle_gt_overlay(self):
+        self.gt_overlay_visible = not self.gt_overlay_visible
         self._redraw()
 
     def _has_trace_revision_callbacks(self) -> bool:
@@ -1310,6 +1694,7 @@ class _OrthoViewDialog:
         self.gt_swc_value_label.setText(self._format_output_path(self._gt_swc_path))
         self.scales_path_value_label.setText(self._format_output_path(self._scales_path))
         self.eval_scales_path_value_label.setText(self._format_output_path(self._scales_path))
+        self.filtered_swc_output_value_label.setText(self._format_output_path(self._filtered_swc_output_dir))
 
     def _select_seeds_output_path(self):
         if self._on_select_seeds_output_path is None:
@@ -1568,6 +1953,9 @@ class _OrthoViewDialog:
         self.btn_trace_all.setEnabled(not running)
         self.btn_save_trace.setEnabled(not running)
         self.btn_save_all_traces.setEnabled(not running)
+        self.btn_approve_crop.setEnabled(not running)
+        self.btn_apply_component_filter.setEnabled(not running)
+        self.btn_save_filtered_swc.setEnabled(not running)
         self.btn_prev_image.setEnabled((not running) and self._show_prev_button)
         self.btn_next_image.setEnabled((not running) and self._show_next_button)
         self.btn_cancel_trace.setEnabled(running)
@@ -1732,14 +2120,143 @@ class _OrthoViewDialog:
 
         self.canvas.draw_idle()
         if self.mode == "seed":
+            crop_state = "preview" if self._has_crop_preview else "none"
             self.info_label.setText(
-                f"Seeds: {len(self.seeds)} | Cursor (z,y,x)=({self.current_z}, {self.current_y}, {self.current_x})"
+                f"Tool: {self._active_tool} | Crop: {crop_state} | Seeds: {len(self.seeds)} | "
+                f"Cursor (z,y,x)=({self.current_z}, {self.current_y}, {self.current_x})"
             )
+
+    def _revision_marker_visible(self, point_xyz: np.ndarray, view: str) -> bool:
+        if self.projection_mode == "mip":
+            return True
+        if view == "xy":
+            return bool(np.isclose(point_xyz[2], self.current_z, atol=0.5))
+        if view == "xz":
+            return bool(np.isclose(point_xyz[1], self.current_y, atol=0.5))
+        return bool(np.isclose(point_xyz[0], self.current_x, atol=0.5))
+
+    @staticmethod
+    def _project_xyz_to_view(point_xyz: np.ndarray, view: str) -> Tuple[float, float]:
+        if view == "xy":
+            return float(point_xyz[0]), float(point_xyz[1])
+        if view == "xz":
+            return float(point_xyz[0]), float(point_xyz[2])
+        return float(point_xyz[1]), float(point_xyz[2])
+
+    def _draw_crop_box_overlay(self, ax, view: str):
+        artists = []
+        if self._crop_box is None:
+            return artists
+        x0, x1, y0, y1, z0, z1 = self._crop_box
+        if view == "xy":
+            xs = [x0, x1, x1, x0, x0]
+            ys = [y0, y0, y1, y1, y0]
+        elif view == "xz":
+            xs = [x0, x1, x1, x0, x0]
+            ys = [z0, z0, z1, z1, z0]
+        else:
+            xs = [y0, y1, y1, y0, y0]
+            ys = [z0, z0, z1, z1, z0]
+        artists.extend(ax.plot(xs, ys, color="cyan", linewidth=1.5))
+        return artists
+
+    def _draw_tree_overlay(self, ax, view: str):
+        artists = []
+        if self._has_crop_preview:
+            swc_source = self._tree_swc_preview_source
+        else:
+            swc_source = self._tree_swc_committed
+        if swc_source.size == 0:
+            return artists
+
+        self._ensure_tree_overlay_cache(swc_source)
+        child_idx = self._tree_overlay_cache["child_idx"]
+        parent_idx = self._tree_overlay_cache["parent_idx"]
+        child_xyz = self._tree_overlay_cache["child_xyz"]
+        parent_xyz = self._tree_overlay_cache["parent_xyz"]
+
+        if child_xyz.shape[0] > 0:
+            if self.projection_mode == "mip":
+                visible = np.ones((child_xyz.shape[0],), dtype=bool)
+            elif view == "xy":
+                visible = (np.abs(child_xyz[:, 2] - self.current_z) <= 0.5) & (np.abs(parent_xyz[:, 2] - self.current_z) <= 0.5)
+            elif view == "xz":
+                visible = (np.abs(child_xyz[:, 1] - self.current_y) <= 0.5) & (np.abs(parent_xyz[:, 1] - self.current_y) <= 0.5)
+            else:
+                visible = (np.abs(child_xyz[:, 0] - self.current_x) <= 0.5) & (np.abs(parent_xyz[:, 0] - self.current_x) <= 0.5)
+
+            if np.any(visible):
+                if view == "xy":
+                    start_points = child_xyz[:, [0, 1]]
+                    end_points = parent_xyz[:, [0, 1]]
+                elif view == "xz":
+                    start_points = child_xyz[:, [0, 2]]
+                    end_points = parent_xyz[:, [0, 2]]
+                else:
+                    start_points = child_xyz[:, [1, 2]]
+                    end_points = parent_xyz[:, [1, 2]]
+
+                segments = np.stack((start_points[visible], end_points[visible]), axis=1)
+
+                if self._has_crop_preview and self._crop_box is not None:
+                    x0, x1, y0, y1, z0, z1 = self._crop_box
+                    in_box = (
+                        (swc_source[:, 2] >= x0) & (swc_source[:, 2] < x1)
+                        & (swc_source[:, 3] >= y0) & (swc_source[:, 3] < y1)
+                        & (swc_source[:, 4] >= z0) & (swc_source[:, 4] < z1)
+                    )
+                    edge_in_box = in_box[child_idx] | in_box[parent_idx]
+                    edge_in_box_visible = edge_in_box[visible]
+
+                    if np.any(edge_in_box_visible):
+                        red_collection = LineCollection(
+                            segments[edge_in_box_visible],
+                            colors="red",
+                            linewidths=1.2,
+                            alpha=0.85,
+                        )
+                        artists.append(ax.add_collection(red_collection))
+                    if np.any(~edge_in_box_visible):
+                        green_collection = LineCollection(
+                            segments[~edge_in_box_visible],
+                            colors="lime",
+                            linewidths=1.2,
+                            alpha=0.85,
+                        )
+                        artists.append(ax.add_collection(green_collection))
+                else:
+                    collection = LineCollection(
+                        segments,
+                        colors="lime",
+                        linewidths=1.2,
+                        alpha=0.85,
+                    )
+                    artists.append(ax.add_collection(collection))
+
+        if self._has_crop_preview:
+            roots_source = self._tree_swc_preview_filtered
+        else:
+            roots_source = self._tree_swc_committed
+        if roots_source.size > 0:
+            roots = roots_source[roots_source[:, 6] == -1]
+            if roots.size > 0:
+                if view == "xy":
+                    artists.append(ax.scatter(roots[:, 2], roots[:, 3], c="red", s=16, alpha=0.9))
+                elif view == "xz":
+                    artists.append(ax.scatter(roots[:, 2], roots[:, 4], c="red", s=16, alpha=0.9))
+                else:
+                    artists.append(ax.scatter(roots[:, 3], roots[:, 4], c="red", s=16, alpha=0.9))
+        return artists
 
     def _draw_overlay(self, ax, view: str):
         artists = []
         if not self._has_image_dir():
             return artists
+
+        if self.gt_overlay_visible:
+            artists.extend(self._draw_tree_overlay(ax=ax, view=view))
+        artists.extend(self._draw_crop_box_overlay(ax=ax, view=view))
+
         if self.seeds:
             seeds_np = np.asarray(self.seeds, dtype=np.float32)
             if view == "xy":
@@ -1758,32 +2275,16 @@ class _OrthoViewDialog:
             for path in trace_paths:
                 artists.extend(self._plot_path_in_view(ax=ax, path=path, view=view, color=trace_color))
 
-        def _revision_marker_visible(point_xyz: np.ndarray) -> bool:
-            if self.projection_mode == "mip":
-                return True
-            if view == "xy":
-                return bool(np.isclose(point_xyz[2], self.current_z, atol=0.5))
-            if view == "xz":
-                return bool(np.isclose(point_xyz[1], self.current_y, atol=0.5))
-            return bool(np.isclose(point_xyz[0], self.current_x, atol=0.5))
-
-        def _project_revision_marker(point_xyz: np.ndarray) -> Tuple[float, float]:
-            if view == "xy":
-                return float(point_xyz[0]), float(point_xyz[1])
-            if view == "xz":
-                return float(point_xyz[0]), float(point_xyz[2])
-            return float(point_xyz[1]), float(point_xyz[2])
-
         if self.trace_revision_selected_point_xyz is not None:
             point = self.trace_revision_selected_point_xyz
-            if _revision_marker_visible(point):
-                px, py = _project_revision_marker(point)
+            if self._revision_marker_visible(point, view=view):
+                px, py = self._project_xyz_to_view(point, view=view)
                 artists.append(ax.scatter([px], [py], s=50, c="green", edgecolors="black"))
 
         if self.trace_revision_selected_node_xyz is not None:
             node = self.trace_revision_selected_node_xyz
-            if _revision_marker_visible(node):
-                px, py = _project_revision_marker(node)
+            if self._revision_marker_visible(node, view=view):
+                px, py = self._project_xyz_to_view(node, view=view)
                 artists.append(ax.scatter([px], [py], s=55, c="red", edgecolors="black"))
 
         if self.post_overlay_visible and self.post_paths:
@@ -1932,7 +2433,7 @@ class _OrthoViewDialog:
             0,
             0,
             linewidth=1.0,
-            edgecolor="yellow",
+            edgecolor="cyan" if self._active_tool == "crop" else "yellow",
             facecolor="none",
             linestyle="--",
         )
@@ -1993,13 +2494,22 @@ class _OrthoViewDialog:
         if dx <= drag_threshold and dy <= drag_threshold:
             if self.mode == "seed":
                 self._set_cursor_from_view_coords(view, end_x, end_y)
-                self._select_trace_revision_point()
+                if self._active_tool != "crop":
+                    self._select_trace_revision_point()
             else:
                 self.canvas.draw_idle()
             return
 
         x0, x1 = sorted([start_x, end_x])
         y0, y1 = sorted([start_y, end_y])
+
+        if self.mode == "seed" and self._active_tool == "crop":
+            try:
+                self._update_crop_box_from_view(view=view, x0f=x0, x1f=x1, y0f=y0, y1f=y1)
+                self._apply_crop_preview()
+            except ValueError:
+                self.canvas.draw_idle()
+            return
 
         self._push_current_zoom(view, event.inaxes)
         event.inaxes.set_xlim(x0, x1)
@@ -2265,6 +2775,11 @@ def interactive_seed_selection_session(
     on_select_eval_output_dir: Optional[Callable[[], Optional[str]]] = None,
     on_clear_eval_output_dir: Optional[Callable[[], Optional[str]]] = None,
     on_eval_params_changed: Optional[Callable[[Dict[str, object]], None]] = None,
+    filtered_swc_output_dir: Optional[str] = None,
+    on_select_filtered_swc_output_dir: Optional[Callable[[], Optional[str]]] = None,
+    on_clear_filtered_swc_output_dir: Optional[Callable[[], Optional[str]]] = None,
+    on_save_filtered_swc: Optional[Callable[[str, List[List[float]]], Optional[str]]] = None,
+    on_filtered_swc_changed: Optional[Callable[[str, List[List[float]]], None]] = None,
 ) -> torch.Tensor:
     """Open a persistent seed-session dialog and update content in-place while navigating images."""
     if _is_jupyter_notebook():
@@ -2281,6 +2796,7 @@ def interactive_seed_selection_session(
         image_data=np.asarray(image_data),
         mode="seed",
         finished_paths=initial_context.get("finished_paths"),
+        tree_swc_rows=initial_context.get("tree_swc_rows"),
         neuron_name=str(initial_context.get("neuron_name", "")),
         initial_seeds=initial_context.get("initial_seeds"),
         show_prev_button=bool(initial_context.get("show_prev_button", False)),
@@ -2349,6 +2865,11 @@ def interactive_seed_selection_session(
         on_select_eval_output_dir=on_select_eval_output_dir,
         on_clear_eval_output_dir=on_clear_eval_output_dir,
         on_eval_params_changed=on_eval_params_changed,
+        filtered_swc_output_dir=filtered_swc_output_dir,
+        on_select_filtered_swc_output_dir=on_select_filtered_swc_output_dir,
+        on_clear_filtered_swc_output_dir=on_clear_filtered_swc_output_dir,
+        on_save_filtered_swc=on_save_filtered_swc,
+        on_filtered_swc_changed=on_filtered_swc_changed,
     )
     _run_ortho_dialog(dialog)
 

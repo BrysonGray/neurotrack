@@ -214,6 +214,58 @@ class ReplayBufferTargetSetTests(unittest.TestCase):
 
 
 class EnvironmentMultiTargetStepTests(unittest.TestCase):
+    def test_init_path_handles_empty_unvisited_tree_for_seed_restart(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            img_dir = root / "images"
+            swc_dir = root / "swc"
+            img_dir.mkdir()
+            swc_dir.mkdir()
+
+            volume_shape = (40, 40, 40)
+            _write_volume(img_dir / "sample.tif", shape=volume_shape)
+            _write_swc(swc_dir / "sample.swc", _make_chain_rows(8), shape_zyx=volume_shape)
+
+            dataset = NeuronPatchDataset(
+                swc_dir=swc_dir,
+                img_dir=img_dir,
+                crop_size=16,
+                patches_per_image=1,
+                alpha=1.0,
+                step_width=4.0,
+                rng=np.random.default_rng(123),
+                crop_patches=True,
+                inference_mode=False,
+            )
+
+            env = NeuronTrackingEnvironment(
+                dataset=dataset,
+                radius=5,
+                target_step_len=1.0,
+                step_width=4.0,
+                max_len=20,
+                branching=False,
+                inference_mode=False,
+            )
+            env.reset(dataset_index=0)
+
+            restart_seed = env.paths[0][0].clone()
+            env.paths = [[restart_seed]]
+            env.unvisited_tree = torch.empty((0, 7), dtype=torch.float32)
+            env.id_to_idx = {}
+            env.section_nodes = None
+            env.section_assigned = False
+            env.cut_ends = []
+
+            env._init_path()
+
+            self.assertIsNone(env.section_nodes)
+            self.assertFalse(env.section_assigned)
+            torch.testing.assert_close(
+                env.target_vectors,
+                torch.zeros((1, 3), dtype=torch.float32, device=env.target_vectors.device),
+            )
+
     def test_environment_step_keeps_all_next_target_vectors(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)

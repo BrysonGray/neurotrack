@@ -35,7 +35,7 @@ class NeuronTrackingEnvironment:
     def __init__(self, dataset,
                  radius: int = 17, target_step_len: float = 4.0, step_width: float = 4.0,
                  stall_threshold: float = 1.0,
-                 max_len: int = 10000, max_paths: int = 1000, gamma=0.99, branching: bool = False,
+                 max_len: int = 10000, max_paths: int = 10000, gamma=0.99, branching: bool = False,
                  repeat_starts: bool = False, start_idx: int = 0,
                  inference_mode: bool = False):
         """
@@ -46,7 +46,7 @@ class NeuronTrackingEnvironment:
         dataset : NeuronPatchDataset or torch.utils.data.Dataset
             Dataset object for sampling neuron patches
         radius : int
-            Radius around the center to randomly place starting points
+            Radius of the cubic observation patch around the current position
         target_step_len : float
             Target step length for tracking
         step_width : float
@@ -88,7 +88,7 @@ class NeuronTrackingEnvironment:
         # Initialize other attributes that will be set when neuron data is loaded
         self.img = None
         self.neuron_mask = None
-        self.seeds = []
+        self.seeds = torch.empty((0, 3), dtype=torch.float32)
         self.paths = []
         self.branch_roots = torch.empty((0, 3), dtype=torch.float32)
         self.neuron_root_ids = set()
@@ -201,18 +201,22 @@ class NeuronTrackingEnvironment:
         if seed_points_data is None:
             raise ValueError("patch_data must include 'seed_points' with shape (N, 3) in (z, y, x) order.")
 
-        seeds = torch.as_tensor(seed_points_data, dtype=torch.float32)
-        if seeds.ndim == 1:
-            seeds = seeds.unsqueeze(0)
-        if seeds.ndim != 2 or seeds.shape[1] != 3:
+        self.seeds = torch.as_tensor(seed_points_data, dtype=torch.float32)
+        if self.seeds.ndim == 1:
+            self.seeds = self.seeds.unsqueeze(0)
+        if self.seeds.ndim != 2 or self.seeds.shape[1] != 3:
             raise ValueError("patch_data['seed_points'] must have shape (N, 3) in (z, y, x) order.")
         
-        self.paths = [[p] for p in seeds.unbind(0)]
-        self._set_branch_roots(list(seeds.unbind(0)))
+        self.paths = [[p] for p in self.seeds.unbind(0)]
+        self._set_branch_roots(list(self.seeds.unbind(0)))
         cut_end_ids_data = patch_data.get('cut_end_ids', [])
         if cut_end_ids_data is None:
             cut_end_ids_data = []
         self.cut_ends = [int(node_id) for node_id in cut_end_ids_data]
+        if len(self.neuron_root_ids) > 0:
+            for root_id in self.neuron_root_ids:
+                if root_id not in self.cut_ends:
+                    self.cut_ends.append(root_id)
         if self.has_ground_truth:
             # Initialize visited edges
             self.visited = _init_visited(self.full_tree)
@@ -360,40 +364,41 @@ class NeuronTrackingEnvironment:
             )
             self.target_vectors = target_points
 
-        if len(self.finished_paths) == 0: # If this is the first path, assign section based on nearest node to the starting point since there are no cut ends yet.
+        # if len(self.finished_paths) == 0: 
+        if torch.any(torch.all(self.paths[0][0].unsqueeze(0) == self.seeds, dim=1)): # If this is the first path, assign section based on nearest node to the starting point since there are no cut ends yet.
             nearest_node = _get_nearest_node(current_position, self.unvisited_tree, id_to_idx=self.id_to_idx)
-            nearest_node_coords = self.unvisited_tree[self.id_to_idx[nearest_node], 2:5]
-            dists2 = torch.sum((nearest_node_coords - current_position) ** 2)
-            if dists2 < self.close_dist2:  # only assign section if within close_dist pixels
-                # Initialize section nodes for new path
-                self.section_nodes, terminals = _get_connected_nodes(
-                    nearest_node,
-                    adj_dict=self.adj_dict,
-                    max_dist=12.0,
-                    swc_list=self.unvisited_tree,
-                    id_to_idx=self.id_to_idx,
-                    neuron_root_ids=self.neuron_root_ids,
-                    cut_ends=self.cut_ends,
-                )
-                if terminals:
-                    self.terminal_points = torch.stack([self.unvisited_tree[self.id_to_idx[int(t)], 2:5] for t in terminals])
-                self.section_assigned = True
-                target_points, _unused_stop_flag, _nearest_dist2 = _compute_target_action(
-                    current_position,
-                    self.unvisited_tree,
-                    self.target_step_len,
-                    adj_dict=self.adj_dict,
-                    id_to_idx=self.id_to_idx,
-                    terminal_points=None,
-                    valid_nodes=self.section_nodes,
-                    valid_dist2=self.close_dist2,
-                )
-                self.target_vectors = target_points
-
-                # Always create a branch at the start for the first path if branching is enabled
-                if self.branching:
-                    self.paths.append([current_position])
-                    self._append_branch_root(current_position)
+            nearest_node_idx = None if nearest_node is None else self.id_to_idx.get(int(nearest_node))
+            if nearest_node_idx is not None:
+                nearest_node_coords = self.unvisited_tree[nearest_node_idx, 2:5]
+                dists2 = torch.sum((nearest_node_coords - current_position) ** 2)
+                if dists2 < self.close_dist2:  # only assign section if within close_dist pixels
+                    # Initialize section nodes for new path
+                    self.section_nodes, terminals = _get_connected_nodes(
+                        nearest_node,
+                        adj_dict=self.adj_dict,
+                        max_dist=12.0,
+                        swc_list=self.unvisited_tree,
+                        id_to_idx=self.id_to_idx,
+                        neuron_root_ids=self.neuron_root_ids,
+                        cut_ends=self.cut_ends,
+                    )
+                    if terminals:
+                        terminal_indices = [self.id_to_idx.get(int(t)) for t in terminals]
+                        terminal_indices = [idx for idx in terminal_indices if idx is not None]
+                        if terminal_indices:
+                            self.terminal_points = self.unvisited_tree[terminal_indices, 2:5]
+                    self.section_assigned = True
+                    target_points, _unused_stop_flag, _nearest_dist2 = _compute_target_action(
+                        current_position,
+                        self.unvisited_tree,
+                        self.target_step_len,
+                        adj_dict=self.adj_dict,
+                        id_to_idx=self.id_to_idx,
+                        terminal_points=None,
+                        valid_nodes=self.section_nodes,
+                        valid_dist2=self.close_dist2,
+                    )
+                    self.target_vectors = target_points
 
 
     def _terminate_path(self) -> bool:
@@ -425,7 +430,11 @@ class NeuronTrackingEnvironment:
         elif len(self.paths) == 0:
             terminate_episode = True
         if not terminate_episode: # Move to next path
-            self._init_path()
+            if self.has_ground_truth:
+                self._init_path()
+            if self.branching and len(self.finished_paths) == 1: # Always create a branch at the start for the first path if branching is enabled
+                self.paths.append([self.finished_paths[0][0]])
+                self._append_branch_root(self.finished_paths[0][0])
 
         return terminate_episode
     

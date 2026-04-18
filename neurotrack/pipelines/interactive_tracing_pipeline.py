@@ -457,11 +457,15 @@ class _TraceSessionManager:
         # post-processing and evaluation state
         self.postprocess_results_by_key: Dict[str, Dict[str, object]] = {}
         self.eval_results_by_key: Dict[str, Dict[str, object]] = {}
+        self.filtered_swc_by_key: Dict[str, List[List[float]]] = {}
+        self._gt_swc_cache_by_key: Dict[str, List[List[float]]] = {}
         self._gt_swc_dir: Optional[Path] = None
+        self._gt_swc_files_by_stem: Optional[Dict[str, Path]] = None
         if self.trace_params.get("swc_dir"):
             self._gt_swc_dir = Path(str(self.trace_params["swc_dir"]))
         self._postprocess_output_dir: Optional[Path] = None
         self._eval_output_dir: Optional[Path] = None
+        self._filtered_swc_output_dir: Optional[Path] = None
 
         if self.trace_params.get("sac_weights"):
             self.set_model_weights_path(str(self.trace_params["sac_weights"]))
@@ -818,13 +822,104 @@ class _TraceSessionManager:
             self._set_state(f"GT SWC directory not found: {p}", increment_token=True)
             return None
         self._gt_swc_dir = p
+        self._gt_swc_cache_by_key = {}
+        self._gt_swc_files_by_stem = None
         self._set_state(f"GT SWC directory set: {p}", increment_token=True)
         return str(p)
 
     def clear_gt_swc_dir(self) -> Optional[str]:
         self._gt_swc_dir = None
+        self._gt_swc_cache_by_key = {}
+        self._gt_swc_files_by_stem = None
         self._set_state("GT SWC directory cleared.", increment_token=True)
         return None
+
+    def _get_gt_swc_files_by_stem(self) -> Dict[str, Path]:
+        if self._gt_swc_files_by_stem is None:
+            if self._gt_swc_dir is None:
+                self._gt_swc_files_by_stem = {}
+            else:
+                self._gt_swc_files_by_stem = {
+                    f.stem: f for f in sorted(self._gt_swc_dir.rglob("*.swc"))
+                }
+        return self._gt_swc_files_by_stem
+
+    def _resolve_gt_swc_file_for_image(self, image_key: str) -> Optional[Path]:
+        if self._gt_swc_dir is None:
+            return None
+        gt_files_by_stem = self._get_gt_swc_files_by_stem()
+        neuron_stem = Path(image_key).stem
+        gt_file: Optional[Path] = flexible_image_key_lookup(gt_files_by_stem, neuron_stem, default=None)
+        if gt_file is None:
+            for stem, candidate in gt_files_by_stem.items():
+                if neuron_stem in stem or stem in neuron_stem:
+                    gt_file = candidate
+                    break
+        return gt_file
+
+    def get_tree_swc_rows(self, image_key: str) -> List[List[float]]:
+        if image_key in self.filtered_swc_by_key:
+            return [list(row) for row in self.filtered_swc_by_key[image_key]]
+        if image_key in self._gt_swc_cache_by_key:
+            return [list(row) for row in self._gt_swc_cache_by_key[image_key]]
+        gt_file = self._resolve_gt_swc_file_for_image(image_key)
+        if gt_file is None:
+            return []
+        try:
+            rows = data_loading.swc(str(gt_file), verbose=False)
+        except Exception:
+            rows = []
+        normalized = [[float(v) for v in row[:7]] for row in rows if len(row) >= 7]
+        self._gt_swc_cache_by_key[image_key] = normalized
+        return [list(row) for row in normalized]
+
+    def set_filtered_swc_rows(self, image_key: str, swc_rows: List[List[float]]) -> None:
+        self.filtered_swc_by_key[image_key] = [
+            [float(v) for v in row[:7]] for row in swc_rows if len(row) >= 7
+        ]
+
+    def get_filtered_swc_output_dir(self) -> Optional[str]:
+        return None if self._filtered_swc_output_dir is None else str(self._filtered_swc_output_dir)
+
+    def set_filtered_swc_output_dir(self, path: str) -> Optional[str]:
+        if not path or not str(path).strip():
+            return None
+        p = Path(path)
+        p.mkdir(parents=True, exist_ok=True)
+        self._filtered_swc_output_dir = p
+        self._set_state(f"Filtered SWC output set to: {p}", increment_token=True)
+        return str(p)
+
+    def clear_filtered_swc_output_dir(self) -> Optional[str]:
+        self._filtered_swc_output_dir = None
+        self._set_state("Filtered SWC output cleared.", increment_token=True)
+        return None
+
+    def select_filtered_swc_output_dir(self, default_dir: Path) -> Optional[str]:
+        selected_dir = prompt_select_directory(default_path=str(default_dir))
+        if selected_dir is None:
+            return self.get_filtered_swc_output_dir()
+        return self.set_filtered_swc_output_dir(selected_dir)
+
+    def save_filtered_swc(self, image_key: str, swc_rows: List[List[float]], default_dir: Path) -> Optional[str]:
+        if self._filtered_swc_output_dir is None:
+            selected_dir = prompt_select_directory(default_path=str(default_dir))
+            if selected_dir is None:
+                return self.get_filtered_swc_output_dir()
+            self._filtered_swc_output_dir = Path(selected_dir)
+
+        out_dir = self._filtered_swc_output_dir
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        rel_path = Path(image_key)
+        rel_parent = rel_path.parent
+        stem = rel_path.stem
+        output_path = out_dir / rel_parent / f"{stem}_filtered.swc"
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        data_save.write_swc(swc_rows, str(output_path))
+        self.set_filtered_swc_rows(image_key=image_key, swc_rows=swc_rows)
+        self._set_state(f"Saved filtered SWC: {output_path}", increment_token=True)
+        return str(out_dir)
 
     def run_postprocess(self, image_key: str) -> Optional[Dict[str, object]]:
         """Post-process raw trace paths for *image_key* and store the result."""
@@ -1202,11 +1297,13 @@ class _SessionState:
             "show_prev_button": index > 0,
             "show_next_button": index < len(self.image_paths) - 1,
             "finished_paths": trace_manager.trace_results_by_key.get(relative_key, []),
+            "tree_swc_rows": trace_manager.get_tree_swc_rows(relative_key),
             "seeds_output_path": self.seeds_output_path,
             "trace_output_path": trace_manager.get_trace_output_dir(),
             "model_weights_path": trace_manager.get_model_weights_path(),
             "gt_swc_path": trace_manager.get_gt_swc_path(),
             "scales_path": trace_manager.get_scales_path(),
+            "filtered_swc_output_dir": trace_manager.get_filtered_swc_output_dir(),
             "image_dir": self.display_image_dir,
             "seeds_input_path": self.seeds_input_path,
         }
@@ -1491,6 +1588,22 @@ def run_interactive_tracing_session(
     def _clear_eval_output_dir() -> Optional[str]:
         return trace_manager.clear_eval_output_dir()
 
+    def _select_filtered_swc_output_dir() -> Optional[str]:
+        return trace_manager.select_filtered_swc_output_dir(default_dir=image_root / "filtered_swc")
+
+    def _clear_filtered_swc_output_dir() -> Optional[str]:
+        return trace_manager.clear_filtered_swc_output_dir()
+
+    def _save_filtered_swc(image_key: str, swc_rows: List[List[float]]) -> Optional[str]:
+        return trace_manager.save_filtered_swc(
+            image_key=image_key,
+            swc_rows=swc_rows,
+            default_dir=image_root / "filtered_swc",
+        )
+
+    def _on_filtered_swc_changed(image_key: str, swc_rows: List[List[float]]) -> None:
+        trace_manager.set_filtered_swc_rows(image_key=image_key, swc_rows=swc_rows)
+
     def _clear_model_weights_path() -> Optional[str]:
         return trace_manager.clear_model_weights_path()
 
@@ -1564,6 +1677,11 @@ def run_interactive_tracing_session(
             on_select_eval_output_dir=_select_eval_output_dir,
             on_clear_eval_output_dir=_clear_eval_output_dir,
             on_eval_params_changed=trace_manager.update_postprocess_config,
+            filtered_swc_output_dir=trace_manager.get_filtered_swc_output_dir(),
+            on_select_filtered_swc_output_dir=_select_filtered_swc_output_dir,
+            on_clear_filtered_swc_output_dir=_clear_filtered_swc_output_dir,
+            on_save_filtered_swc=_save_filtered_swc,
+            on_filtered_swc_changed=_on_filtered_swc_changed,
         )
         session.selected_seeds[session.current_relative_key()] = _normalize_seed_array(
             final_seeds.detach().cpu().numpy(),

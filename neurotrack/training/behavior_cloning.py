@@ -16,6 +16,8 @@ import torch
 import torch.nn.functional as F
 from tqdm import tqdm
 
+from neurotrack.data import save as data_save
+from neurotrack.evaluation.metrics import evaluate_reconstruction
 from neurotrack.training.memory import BehaviorCloningReplayBuffer
 from neurotrack.training.policy_utils import prepare_observation_for_model
 
@@ -33,7 +35,7 @@ class SupervisionLossConfig:
     norm_floor: float = 0.0
     norm_floor_weight: float = 0.0
     stop_violation_weight: float = 1.0
-    objective_mode: str = "legacy"
+    objective_mode: str = "norm_floor"
     continue_direction_weight: float = 1.0
     norm_cls_weight: float = 1.0
     norm_cls_temperature: float = 0.25
@@ -54,13 +56,25 @@ class SupervisionBatchStats:
     false_continue_count: int
 
 
+@dataclass(frozen=True)
+class SupervisionBatchContext:
+    """Shared per-batch tensors used by both loss and diagnostics."""
+
+    direction_loss_per_sample: torch.Tensor
+    min_target_norm: torch.Tensor
+    has_valid_target: torch.Tensor
+    continue_mask: torch.Tensor
+    stop_mask: torch.Tensor
+    pred_norms: torch.Tensor
+
+
 def _build_supervision_loss_config(
     continue_target_norm_threshold: float,
     continue_weight: float,
     norm_floor: float,
     norm_floor_weight: float,
     stop_violation_weight: float,
-    objective_mode: str = "legacy",
+    objective_mode: str = "norm_floor",
     continue_direction_weight: float = 1.0,
     norm_cls_weight: float = 1.0,
     norm_cls_temperature: float = 0.25,
@@ -91,8 +105,10 @@ def _build_supervision_loss_config(
         raise ValueError("norm_floor_weight must be non-negative")
     if stop_violation_weight_f < 0.0:
         raise ValueError("stop_violation_weight must be non-negative")
-    if objective_mode_s not in {"legacy", "norm_classifier_margin"}:
-        raise ValueError("objective_mode must be one of: {'legacy', 'norm_classifier_margin'}")
+    if objective_mode_s not in {"norm_floor", "norm_classifier_margin", "direction_sse"}:
+        raise ValueError(
+            "objective_mode must be one of: {'norm_floor', 'norm_classifier_margin', 'direction_sse'}"
+        )
     if continue_direction_weight_f < 0.0:
         raise ValueError("continue_direction_weight must be non-negative")
     if norm_cls_weight_f < 0.0:
@@ -163,6 +179,95 @@ def _safe_rate(numerator: int, denominator: int) -> float:
     if denominator <= 0:
         return 0.0
     return float(numerator / denominator)
+
+
+def _safe_float(value: object) -> Optional[float]:
+    try:
+        value_f = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not np.isfinite(value_f):
+        return None
+    return value_f
+
+
+def _csv_optional_float(value: Optional[float]) -> str | float:
+    if value is None:
+        return ""
+    return float(value)
+
+
+def _summarize_round_metric(
+    values: Sequence[Optional[float]],
+) -> Tuple[Optional[float], Optional[float], Optional[float]]:
+    finite_values = [v for v in (_safe_float(value) for value in values) if v is not None]
+    if len(finite_values) == 0:
+        return None, None, None
+    return (
+        float(np.mean(finite_values)),
+        float(np.min(finite_values)),
+        float(np.max(finite_values)),
+    )
+
+
+def _compute_episode_tracing_metrics(
+    env,
+) -> dict[str, Optional[float]]:
+    """Compute tracing metrics for one completed episode against ground truth."""
+    if not bool(getattr(env, "has_ground_truth", False)):
+        return {
+            "bidirectional_distance": None,
+            "precision": None,
+            "coverage": None,
+        }
+
+    finished_paths = getattr(env, "finished_paths", None)
+    full_tree = getattr(env, "full_tree", None)
+    if not isinstance(finished_paths, list) or full_tree is None:
+        return {
+            "bidirectional_distance": None,
+            "precision": None,
+            "coverage": None,
+        }
+
+    pred_paths = [
+        path.detach().cpu()
+        for path in finished_paths
+        if isinstance(path, torch.Tensor) and path.ndim == 2 and path.shape[1] == 3 and path.shape[0] >= 2
+    ]
+    if len(pred_paths) == 0:
+        return {
+            "bidirectional_distance": None,
+            "precision": None,
+            "coverage": None,
+        }
+
+    try:
+        pred_swc = data_save.paths_to_swc(pred_paths)
+        if len(pred_swc) == 0:
+            return {
+                "bidirectional_distance": None,
+                "precision": None,
+                "coverage": None,
+            }
+
+        gt_swc = torch.as_tensor(full_tree, dtype=torch.float32).detach().cpu().numpy().tolist()
+        metrics = evaluate_reconstruction(
+            pred_swc,
+            gt_swc,
+            return_l_measures=False,
+        )
+        return {
+            "bidirectional_distance": _safe_float(metrics.get("bidirectional_distance")),
+            "precision": _safe_float(metrics.get("precision")),
+            "coverage": _safe_float(metrics.get("coverage")),
+        }
+    except Exception:
+        return {
+            "bidirectional_distance": None,
+            "precision": None,
+            "coverage": None,
+        }
 
 
 def _aggregate_supervision_stats(
@@ -346,6 +451,274 @@ def _optimize_batch(
     )
 
 
+def _build_supervision_batch_context(
+    pred_actions: torch.Tensor,
+    target_tensor: torch.Tensor,
+    target_mask: torch.Tensor,
+    continue_target_norm_threshold: float,
+) -> SupervisionBatchContext:
+    """Compute reusable supervision tensors once for loss and metrics."""
+    direction_loss_per_sample = multi_target_direction_loss(
+        pred_actions,
+        target_tensor,
+        valid_mask=target_mask,
+        reduction="none",
+    )
+    min_target_norm, has_valid_target = _compute_min_target_norm(target_tensor, target_mask)
+    continue_mask = has_valid_target & (min_target_norm > continue_target_norm_threshold)
+    stop_mask = has_valid_target & ~continue_mask
+    pred_norms = torch.linalg.norm(pred_actions, dim=1)
+    return SupervisionBatchContext(
+        direction_loss_per_sample=direction_loss_per_sample,
+        min_target_norm=min_target_norm,
+        has_valid_target=has_valid_target,
+        continue_mask=continue_mask,
+        stop_mask=stop_mask,
+        pred_norms=pred_norms,
+    )
+
+
+def _norm_classifier_margin_loss(
+    loss_config: SupervisionLossConfig,
+    context: SupervisionBatchContext,
+) -> torch.Tensor:
+    direction_loss_per_sample = context.direction_loss_per_sample
+    continue_mask = context.continue_mask
+    stop_mask = context.stop_mask
+    pred_norms = context.pred_norms
+
+    zero = torch.zeros((), dtype=direction_loss_per_sample.dtype, device=direction_loss_per_sample.device)
+
+    continue_direction_loss = zero
+    if loss_config.continue_direction_weight > 0.0 and torch.any(continue_mask):
+        continue_direction_loss = direction_loss_per_sample[continue_mask].mean()
+
+    norm_cls_loss = zero
+    if loss_config.norm_cls_weight > 0.0:
+        logits = (
+            pred_norms - loss_config.continue_target_norm_threshold
+        ) / max(loss_config.norm_cls_temperature, torch.finfo(pred_norms.dtype).eps)
+        if torch.any(continue_mask) and torch.any(stop_mask):
+            cls_continue = F.binary_cross_entropy_with_logits(
+                logits[continue_mask],
+                torch.ones_like(logits[continue_mask]),
+            )
+            cls_stop = F.binary_cross_entropy_with_logits(
+                logits[stop_mask],
+                torch.zeros_like(logits[stop_mask]),
+            )
+            norm_cls_loss = (
+                (loss_config.continue_weight * cls_continue) + cls_stop
+            ) / (loss_config.continue_weight + 1.0)
+        elif torch.any(continue_mask):
+            norm_cls_loss = F.binary_cross_entropy_with_logits(
+                logits[continue_mask],
+                torch.ones_like(logits[continue_mask]),
+            )
+        elif torch.any(stop_mask):
+            norm_cls_loss = F.binary_cross_entropy_with_logits(
+                logits[stop_mask],
+                torch.zeros_like(logits[stop_mask]),
+            )
+
+    norm_margin_loss = zero
+    if loss_config.norm_margin_weight > 0.0:
+        continue_margin_loss = zero
+        stop_margin_loss = zero
+
+        if torch.any(continue_mask):
+            continue_floor = (
+                loss_config.continue_target_norm_threshold + loss_config.continue_margin
+            )
+            continue_shortfall = torch.relu(continue_floor - pred_norms[continue_mask])
+            continue_margin_loss = (continue_shortfall ** 2).mean()
+
+        if torch.any(stop_mask):
+            stop_ceiling = max(
+                0.0,
+                loss_config.continue_target_norm_threshold - loss_config.stop_margin,
+            )
+            stop_overshoot = torch.relu(pred_norms[stop_mask] - stop_ceiling)
+            stop_margin_loss = (stop_overshoot ** 2).mean()
+
+        if torch.any(continue_mask) and torch.any(stop_mask):
+            norm_margin_loss = (
+                (loss_config.continue_weight * continue_margin_loss) + stop_margin_loss
+            ) / (loss_config.continue_weight + 1.0)
+        elif torch.any(continue_mask):
+            norm_margin_loss = continue_margin_loss
+        elif torch.any(stop_mask):
+            norm_margin_loss = stop_margin_loss
+
+    # norm_floor_loss = zero
+    # if loss_config.norm_floor > 0.0 and loss_config.norm_floor_weight > 0.0 and torch.any(continue_mask):
+    #     norm_gap = torch.relu(loss_config.norm_floor - pred_norms[continue_mask])
+    #     norm_floor_loss = (norm_gap ** 2).mean()
+
+    loss = (
+        (loss_config.continue_direction_weight * continue_direction_loss)
+        + (loss_config.norm_cls_weight * norm_cls_loss)
+        + (loss_config.norm_margin_weight * norm_margin_loss)
+        # + (loss_config.norm_floor_weight * norm_floor_loss)
+    )
+
+    return loss
+
+def _norm_floor_loss(
+    loss_config: SupervisionLossConfig,
+    context: SupervisionBatchContext,
+) -> torch.Tensor:
+    direction_loss_per_sample = context.direction_loss_per_sample
+    continue_mask = context.continue_mask
+    stop_mask = context.stop_mask
+    pred_norms = context.pred_norms
+
+    if torch.any(continue_mask) and torch.any(stop_mask):
+        continue_direction_loss = direction_loss_per_sample[continue_mask].mean()
+        stop_direction_loss = direction_loss_per_sample[stop_mask].mean()
+        direction_loss = (
+            (loss_config.continue_weight * continue_direction_loss) + stop_direction_loss
+        ) / (loss_config.continue_weight + 1.0)
+    elif torch.any(continue_mask):
+        direction_loss = direction_loss_per_sample[continue_mask].mean()
+    elif torch.any(stop_mask):
+        direction_loss = direction_loss_per_sample[stop_mask].mean()
+    else:
+        direction_loss = direction_loss_per_sample.mean()
+
+    norm_floor_loss = torch.zeros((), dtype=direction_loss.dtype, device=direction_loss.device)
+    norm_stop_loss = torch.zeros((), dtype=direction_loss.dtype, device=direction_loss.device)
+
+    if loss_config.norm_floor > 0.0 and loss_config.norm_floor_weight > 0.0:
+        if torch.any(continue_mask):
+            norm_gap = torch.relu(loss_config.norm_floor - pred_norms)
+            norm_floor_loss = (norm_gap[continue_mask] ** 2).mean()
+
+        if torch.any(stop_mask):
+            stop_violation = torch.relu(
+                pred_norms[stop_mask] - loss_config.continue_target_norm_threshold
+            )
+            norm_stop_loss = (stop_violation ** 2).mean()
+
+    stop_regularization_weight = loss_config.norm_floor_weight * max(1.0, loss_config.stop_violation_weight)
+    loss = (
+        direction_loss
+        + (loss_config.norm_floor_weight * norm_floor_loss)
+        + (stop_regularization_weight * norm_stop_loss)
+    )
+    return loss
+
+
+def _direction_sse_loss(context: SupervisionBatchContext) -> torch.Tensor:
+    """Pure min-SSE supervision objective without auxiliary norm terms."""
+    return context.direction_loss_per_sample.mean()
+
+
+def _compute_supervision_loss(
+    pred_actions: torch.Tensor,
+    target_tensor: torch.Tensor,
+    target_mask: torch.Tensor,
+    loss_config: SupervisionLossConfig,
+) -> Tuple[torch.Tensor, SupervisionBatchContext]:
+    """Pure loss path used by both optimization and loss-only testing."""
+    context = _build_supervision_batch_context(
+        pred_actions=pred_actions,
+        target_tensor=target_tensor,
+        target_mask=target_mask,
+        continue_target_norm_threshold=loss_config.continue_target_norm_threshold,
+    )
+
+    if loss_config.objective_mode == "norm_classifier_margin":
+        loss = _norm_classifier_margin_loss(loss_config=loss_config, context=context)
+    elif loss_config.objective_mode == "norm_floor":
+        loss = _norm_floor_loss(loss_config=loss_config, context=context)
+    elif loss_config.objective_mode == "direction_sse":
+        loss = _direction_sse_loss(context=context)
+    else:
+        raise ValueError(
+            f"Unsupported objective_mode '{loss_config.objective_mode}'. "
+            "Expected one of: {'norm_floor', 'norm_classifier_margin', 'direction_sse'}."
+        )
+
+    return loss, context
+
+
+def _validate_tensors_before_backward(
+    pred_actions: torch.Tensor,
+    target_tensor: torch.Tensor,
+    target_mask: torch.Tensor,
+    loss: torch.Tensor,
+    context: SupervisionBatchContext,
+) -> bool:
+    """
+    Validate all tensors involved in backward pass for corruption.
+    
+    Returns:
+        True if all tensors are valid, False if any corruption detected.
+        Logs detailed error info but does NOT raise exceptions.
+    """
+    errors = []
+    
+    # Check pred_actions
+    if torch.isnan(pred_actions).any():
+        nan_count = torch.isnan(pred_actions).sum().item()
+        errors.append(f"pred_actions: {nan_count} NaN values out of {pred_actions.numel()}")
+    if torch.isinf(pred_actions).any():
+        inf_count = torch.isinf(pred_actions).sum().item()
+        errors.append(f"pred_actions: {inf_count} Inf values out of {pred_actions.numel()}")
+    if not pred_actions.requires_grad:
+        errors.append(f"pred_actions: requires_grad=False (shape={pred_actions.shape})")
+    
+    # Check target_tensor
+    if torch.isnan(target_tensor).any():
+        nan_count = torch.isnan(target_tensor).sum().item()
+        errors.append(f"target_tensor: {nan_count} NaN values out of {target_tensor.numel()}")
+    if torch.isinf(target_tensor).any():
+        inf_count = torch.isinf(target_tensor).sum().item()
+        errors.append(f"target_tensor: {inf_count} Inf values out of {target_tensor.numel()}")
+    
+    # Check target_mask
+    if target_mask.dtype != torch.bool:
+        errors.append(f"target_mask: dtype={target_mask.dtype}, expected torch.bool")
+    if not target_mask.any():
+        errors.append(f"target_mask: all False (no valid targets in batch)")
+    
+    # Check loss
+    if torch.isnan(loss):
+        errors.append(f"loss: NaN (dtype={loss.dtype}, requires_grad={loss.requires_grad})")
+    if torch.isinf(loss):
+        errors.append(f"loss: Inf (dtype={loss.dtype}, requires_grad={loss.requires_grad})")
+    if not loss.requires_grad:
+        errors.append(f"loss: requires_grad=False (value={loss.item():.6f})")
+    
+    # Check context tensors
+    if torch.isnan(context.direction_loss_per_sample).any():
+        nan_count = torch.isnan(context.direction_loss_per_sample).sum().item()
+        errors.append(f"direction_loss_per_sample: {nan_count} NaN values")
+    if torch.isnan(context.min_target_norm).any():
+        nan_count = torch.isnan(context.min_target_norm).sum().item()
+        errors.append(f"min_target_norm: {nan_count} NaN values")
+    if torch.isnan(context.pred_norms).any():
+        nan_count = torch.isnan(context.pred_norms).sum().item()
+        errors.append(f"pred_norms: {nan_count} NaN values")
+    
+    if errors:
+        print("\n" + "="*70)
+        print("TENSOR CORRUPTION DETECTED - SKIPPING BACKWARD PASS")
+        print("="*70)
+        for error in errors:
+            print(f"  • {error}")
+        loss_is_nan = bool(torch.isnan(loss).item())
+        loss_value_str = "NaN" if loss_is_nan else f"{float(loss.item()):.8f}"
+        print(f"  loss_value={loss_value_str}")
+        print(f"  pred_actions.shape={pred_actions.shape}, device={pred_actions.device}")
+        print(f"  target_tensor.shape={target_tensor.shape}, device={target_tensor.device}")
+        print("="*70 + "\n")
+        return False
+    
+    return True
+
+
 def _optimize_prepared_batch(
     actor: torch.nn.Module,
     actor_optimizer: torch.optim.Optimizer,
@@ -362,129 +735,13 @@ def _optimize_prepared_batch(
     target_tensor = target_tensor.to(device=model_device, dtype=dtype)
     target_mask = target_mask.to(device=model_device)
 
-    direction_loss_per_sample = multi_target_direction_loss(
-        pred_actions,
-        target_tensor,
-        valid_mask=target_mask,
-        reduction="none",
+    loss, context = _compute_supervision_loss(
+        pred_actions=pred_actions,
+        target_tensor=target_tensor,
+        target_mask=target_mask,
+        loss_config=loss_config,
     )
-    step_mse = float(direction_loss_per_sample.mean().item())
-    min_target_norm, has_valid_target = _compute_min_target_norm(target_tensor, target_mask)
 
-    continue_mask = has_valid_target & (min_target_norm > loss_config.continue_target_norm_threshold)
-    stop_mask = has_valid_target & ~continue_mask
-    pred_norms = torch.linalg.norm(pred_actions, dim=1)
-
-    if loss_config.objective_mode == "norm_classifier_margin":
-        zero = torch.zeros((), dtype=direction_loss_per_sample.dtype, device=direction_loss_per_sample.device)
-
-        continue_direction_loss = zero
-        if loss_config.continue_direction_weight > 0.0 and torch.any(continue_mask):
-            continue_direction_loss = direction_loss_per_sample[continue_mask].mean()
-
-        norm_cls_loss = zero
-        if loss_config.norm_cls_weight > 0.0:
-            logits = (
-                pred_norms - loss_config.continue_target_norm_threshold
-            ) / max(loss_config.norm_cls_temperature, torch.finfo(pred_norms.dtype).eps)
-            if torch.any(continue_mask) and torch.any(stop_mask):
-                cls_continue = F.binary_cross_entropy_with_logits(
-                    logits[continue_mask],
-                    torch.ones_like(logits[continue_mask]),
-                )
-                cls_stop = F.binary_cross_entropy_with_logits(
-                    logits[stop_mask],
-                    torch.zeros_like(logits[stop_mask]),
-                )
-                norm_cls_loss = (
-                    (loss_config.continue_weight * cls_continue) + cls_stop
-                ) / (loss_config.continue_weight + 1.0)
-            elif torch.any(continue_mask):
-                norm_cls_loss = F.binary_cross_entropy_with_logits(
-                    logits[continue_mask],
-                    torch.ones_like(logits[continue_mask]),
-                )
-            elif torch.any(stop_mask):
-                norm_cls_loss = F.binary_cross_entropy_with_logits(
-                    logits[stop_mask],
-                    torch.zeros_like(logits[stop_mask]),
-                )
-
-        norm_margin_loss = zero
-        if loss_config.norm_margin_weight > 0.0:
-            continue_margin_loss = zero
-            stop_margin_loss = zero
-
-            if torch.any(continue_mask):
-                continue_floor = (
-                    loss_config.continue_target_norm_threshold + loss_config.continue_margin
-                )
-                continue_shortfall = torch.relu(continue_floor - pred_norms[continue_mask])
-                continue_margin_loss = (continue_shortfall ** 2).mean()
-
-            if torch.any(stop_mask):
-                stop_ceiling = max(
-                    0.0,
-                    loss_config.continue_target_norm_threshold - loss_config.stop_margin,
-                )
-                stop_overshoot = torch.relu(pred_norms[stop_mask] - stop_ceiling)
-                stop_margin_loss = (stop_overshoot ** 2).mean()
-
-            if torch.any(continue_mask) and torch.any(stop_mask):
-                norm_margin_loss = (
-                    (loss_config.continue_weight * continue_margin_loss) + stop_margin_loss
-                ) / (loss_config.continue_weight + 1.0)
-            elif torch.any(continue_mask):
-                norm_margin_loss = continue_margin_loss
-            elif torch.any(stop_mask):
-                norm_margin_loss = stop_margin_loss
-
-        norm_floor_loss = zero
-        if loss_config.norm_floor > 0.0 and loss_config.norm_floor_weight > 0.0 and torch.any(continue_mask):
-            norm_gap = torch.relu(loss_config.norm_floor - pred_norms[continue_mask])
-            norm_floor_loss = (norm_gap ** 2).mean()
-
-        loss = (
-            (loss_config.continue_direction_weight * continue_direction_loss)
-            + (loss_config.norm_cls_weight * norm_cls_loss)
-            + (loss_config.norm_margin_weight * norm_margin_loss)
-            + (loss_config.norm_floor_weight * norm_floor_loss)
-        )
-    else:
-        # Legacy objective: class-balanced direction loss + norm floor + stop violation.
-        if torch.any(continue_mask) and torch.any(stop_mask):
-            continue_direction_loss = direction_loss_per_sample[continue_mask].mean()
-            stop_direction_loss = direction_loss_per_sample[stop_mask].mean()
-            direction_loss = (
-                (loss_config.continue_weight * continue_direction_loss) + stop_direction_loss
-            ) / (loss_config.continue_weight + 1.0)
-        elif torch.any(continue_mask):
-            direction_loss = direction_loss_per_sample[continue_mask].mean()
-        elif torch.any(stop_mask):
-            direction_loss = direction_loss_per_sample[stop_mask].mean()
-        else:
-            direction_loss = direction_loss_per_sample.mean()
-
-        norm_floor_loss = torch.zeros((), dtype=direction_loss.dtype, device=direction_loss.device)
-        norm_stop_loss = torch.zeros((), dtype=direction_loss.dtype, device=direction_loss.device)
-
-        if loss_config.norm_floor > 0.0 and loss_config.norm_floor_weight > 0.0:
-            if torch.any(continue_mask):
-                norm_gap = torch.relu(loss_config.norm_floor - pred_norms)
-                norm_floor_loss = (norm_gap[continue_mask] ** 2).mean()
-
-            if torch.any(stop_mask):
-                stop_violation = torch.relu(
-                    pred_norms[stop_mask] - loss_config.continue_target_norm_threshold
-                )
-                norm_stop_loss = (stop_violation ** 2).mean()
-
-        stop_regularization_weight = loss_config.norm_floor_weight * max(1.0, loss_config.stop_violation_weight)
-        loss = (
-            direction_loss
-            + (loss_config.norm_floor_weight * norm_floor_loss)
-            + (stop_regularization_weight * norm_stop_loss)
-        )
     (
         true_continue_count,
         false_choose_stop_count,
@@ -492,14 +749,25 @@ def _optimize_prepared_batch(
         false_continue_count,
     ) = _compute_policy_error_counts(
         pred_actions=pred_actions,
-        min_target_norm=min_target_norm,
-        has_valid_target=has_valid_target,
+        min_target_norm=context.min_target_norm,
+        has_valid_target=context.has_valid_target,
         continue_target_norm_threshold=loss_config.continue_target_norm_threshold,
     )
 
-    actor_optimizer.zero_grad()
-    loss.backward()
-    actor_optimizer.step()
+    if loss.requires_grad:
+        # === TENSOR VALIDATION BEFORE BACKWARD ===
+        tensors_valid = _validate_tensors_before_backward(pred_actions, target_tensor, target_mask, loss, context)
+        
+        if tensors_valid:
+            actor_optimizer.zero_grad()
+            loss.backward()
+            actor_optimizer.step()
+        else:
+            print("Skipping optimizer step for this batch due to tensor corruption")
+            # Still compute metrics without updating weights
+            pass
+
+    step_mse = float(context.direction_loss_per_sample.mean().item())
     return SupervisionBatchStats(
         loss=float(loss.item()),
         step_mse=step_mse,
@@ -522,11 +790,33 @@ def _optimize_from_bc_replay_buffer(
         return None
 
     sample_size = min(batch_size, len(replay_buffer))
-    obs_tensor, target_tensor, target_mask = replay_buffer.sample(
-        batch_size=sample_size,
-        replacement=False,
-        transform=transform,
-    )
+    
+    try:
+        obs_tensor, target_tensor, target_mask = replay_buffer.sample(
+            batch_size=sample_size,
+            replacement=False,
+            transform=transform,
+        )
+    except Exception as e:
+        print(f"\nERROR sampling from replay buffer: {e}")
+        print(f"  Skipping this optimization step\n")
+        return None
+    
+    # Quick validation on sampled tensors
+    try:
+        if torch.isnan(obs_tensor).any():
+            print(f"Replay buffer returned obs_tensor with NaN values, skipping step\n")
+            return None
+        if torch.isnan(target_tensor).any():
+            print(f"Replay buffer returned target_tensor with NaN values, skipping step\n")
+            return None
+        if not target_mask.any():
+            print(f"Replay buffer returned empty target_mask (no valid targets), skipping step\n")
+            return None
+    except Exception as e:
+        print(f"Error validating replay buffer sample: {e}, skipping step\n")
+        return None
+    
     return _optimize_prepared_batch(
         actor=actor,
         actor_optimizer=actor_optimizer,
@@ -793,11 +1083,16 @@ def _run_dagger_collection_episode(
             obs = next_obs
             prev_rollin_action = rollin_action.detach().cpu()
 
+    tracing_metrics = _compute_episode_tracing_metrics(env)
+
     return {
         "episode_avg_reward": float(np.mean(episode_rewards)) if episode_rewards else 0.0,
         "episode_avg_expert_step_norm": float(np.mean(episode_step_norms)) if episode_step_norms else 0.0,
         "policy_rollin_fraction": float(policy_steps / steps_done) if steps_done > 0 else 0.0,
         "steps_done": int(steps_done),
+        "episode_bidirectional_distance": tracing_metrics["bidirectional_distance"],
+        "episode_precision": tracing_metrics["precision"],
+        "episode_coverage": tracing_metrics["coverage"],
     }
 
 
@@ -861,6 +1156,15 @@ def _write_dagger_log_row(
     dataset_size: int,
     complexity: float,
     beta: float,
+    round_bidirectional_distance_avg: Optional[float] = None,
+    round_bidirectional_distance_min: Optional[float] = None,
+    round_bidirectional_distance_max: Optional[float] = None,
+    round_precision_avg: Optional[float] = None,
+    round_precision_min: Optional[float] = None,
+    round_precision_max: Optional[float] = None,
+    round_coverage_avg: Optional[float] = None,
+    round_coverage_min: Optional[float] = None,
+    round_coverage_max: Optional[float] = None,
 ) -> None:
     file_exists = csv_file_path.exists()
     with open(csv_file_path, "a", newline="") as handle:
@@ -882,6 +1186,15 @@ def _write_dagger_log_row(
                 "dataset_size",
                 "complexity",
                 "beta",
+                "round_bidirectional_distance_avg",
+                "round_bidirectional_distance_min",
+                "round_bidirectional_distance_max",
+                "round_precision_avg",
+                "round_precision_min",
+                "round_precision_max",
+                "round_coverage_avg",
+                "round_coverage_min",
+                "round_coverage_max",
             ])
         writer.writerow([
             phase,
@@ -899,6 +1212,15 @@ def _write_dagger_log_row(
             int(dataset_size),
             complexity,
             beta,
+            _csv_optional_float(round_bidirectional_distance_avg),
+            _csv_optional_float(round_bidirectional_distance_min),
+            _csv_optional_float(round_bidirectional_distance_max),
+            _csv_optional_float(round_precision_avg),
+            _csv_optional_float(round_precision_min),
+            _csv_optional_float(round_precision_max),
+            _csv_optional_float(round_coverage_avg),
+            _csv_optional_float(round_coverage_min),
+            _csv_optional_float(round_coverage_max),
         ])
 
 
@@ -974,7 +1296,7 @@ def train(
     norm_floor: float = 0.0,
     norm_floor_weight: float = 0.0,
     stop_violation_weight: float = 1.0,
-    objective_mode: str = "legacy",
+    objective_mode: str = "norm_floor",
     continue_direction_weight: float = 1.0,
     norm_cls_weight: float = 1.0,
     norm_cls_temperature: float = 0.25,
@@ -1107,7 +1429,7 @@ def train_dagger(
     norm_floor: float = 0.0,
     norm_floor_weight: float = 0.0,
     stop_violation_weight: float = 1.0,
-    objective_mode: str = "legacy",
+    objective_mode: str = "norm_floor",
     continue_direction_weight: float = 1.0,
     norm_cls_weight: float = 1.0,
     norm_cls_temperature: float = 0.25,
@@ -1229,6 +1551,7 @@ def train_dagger(
             beta=1.0,
         )
 
+
     for round_index in range(dagger_rounds):
         beta = _compute_dagger_beta(round_index, dagger_rounds=dagger_rounds, beta_start=beta_start, beta_end=beta_end)
         if not use_progress_bar:
@@ -1237,6 +1560,9 @@ def train_dagger(
         rollout_rewards: List[float] = []
         rollout_step_norms: List[float] = []
         rollout_policy_fractions: List[float] = []
+        rollout_bidirectional_distances: List[Optional[float]] = []
+        rollout_precisions: List[Optional[float]] = []
+        rollout_coverages: List[Optional[float]] = []
         round_collection_steps = 0
         round_iter = tqdm(
             range(rollout_episodes_per_round),
@@ -1270,6 +1596,9 @@ def train_dagger(
             rollout_rewards.append(float(episode_metrics["episode_avg_reward"]))
             rollout_step_norms.append(float(episode_metrics["episode_avg_expert_step_norm"]))
             rollout_policy_fractions.append(float(episode_metrics["policy_rollin_fraction"]))
+            rollout_bidirectional_distances.append(_safe_float(episode_metrics.get("episode_bidirectional_distance")))
+            rollout_precisions.append(_safe_float(episode_metrics.get("episode_precision")))
+            rollout_coverages.append(_safe_float(episode_metrics.get("episode_coverage")))
 
             # When the buffer is full and we have collected one full-capacity turnover
             # of new samples without any intermediate policy updates, more collection is
@@ -1280,37 +1609,46 @@ def train_dagger(
         round_losses: List[float] = []
         round_batch_stats: List[SupervisionBatchStats] = []
         for _epoch in range(dataset_epochs_per_round):
-            epoch_batch_stats = _run_supervision_epoch(
-                actor=actor,
-                actor_optimizer=actor_optimizer,
-                aggregate_buffer=aggregate_buffer,
-                batch_size=batch_size,
-                transform=True,
-                loss_config=loss_config,
-            )
-            round_batch_stats.extend(epoch_batch_stats)
-            round_losses.extend(stat.loss for stat in epoch_batch_stats)
-            last_save_bucket = _maybe_save_checkpoint(
-                actor=actor,
-                actor_optimizer=actor_optimizer,
-                outdir=outdir,
-                name=name,
-                steps_done=steps_done,
-                episodes_done=episodes_done,
-                save_every_steps=save_every_steps,
-                last_save_bucket=last_save_bucket,
-                algorithm="multi_target_dagger",
-                extra_metadata={
-                    "dagger_round": int(round_index + 1),
-                    "beta": float(beta),
-                    "dataset_size": len(aggregate_buffer),
-                    "aggregate_memory_budget": memory_budget_meta,
-                    "continue_target_norm_threshold": float(loss_config.continue_target_norm_threshold),
-                    "continue_weight": float(loss_config.continue_weight),
-                    "norm_floor": float(loss_config.norm_floor),
-                    "norm_floor_weight": float(loss_config.norm_floor_weight),
-                },
-            )
+            try:
+                epoch_batch_stats = _run_supervision_epoch(
+                    actor=actor,
+                    actor_optimizer=actor_optimizer,
+                    aggregate_buffer=aggregate_buffer,
+                    batch_size=batch_size,
+                    transform=True,
+                    loss_config=loss_config,
+                )
+                round_batch_stats.extend(epoch_batch_stats)
+                round_losses.extend(stat.loss for stat in epoch_batch_stats)
+                last_save_bucket = _maybe_save_checkpoint(
+                    actor=actor,
+                    actor_optimizer=actor_optimizer,
+                    outdir=outdir,
+                    name=name,
+                    steps_done=steps_done,
+                    episodes_done=episodes_done,
+                    save_every_steps=save_every_steps,
+                    last_save_bucket=last_save_bucket,
+                    algorithm="multi_target_dagger",
+                    extra_metadata={
+                        "dagger_round": int(round_index + 1),
+                        "beta": float(beta),
+                        "dataset_size": len(aggregate_buffer),
+                        "aggregate_memory_budget": memory_budget_meta,
+                        "continue_target_norm_threshold": float(loss_config.continue_target_norm_threshold),
+                        "continue_weight": float(loss_config.continue_weight),
+                        "norm_floor": float(loss_config.norm_floor),
+                        "norm_floor_weight": float(loss_config.norm_floor_weight),
+                    },
+                )
+            except Exception as exc:
+                _log_episode_exception(
+                    f"DAgger update round {round_index + 1}",
+                    episodes_done,
+                    exc,
+                    env,
+                )
+                continue
 
         (
             round_true_continue_count,
@@ -1318,6 +1656,22 @@ def train_dagger(
             round_true_stop_count,
             round_false_continue_count,
         ) = _aggregate_supervision_stats(round_batch_stats)
+
+        (
+            round_bidirectional_distance_avg,
+            round_bidirectional_distance_min,
+            round_bidirectional_distance_max,
+        ) = _summarize_round_metric(rollout_bidirectional_distances)
+        (
+            round_precision_avg,
+            round_precision_min,
+            round_precision_max,
+        ) = _summarize_round_metric(rollout_precisions)
+        (
+            round_coverage_avg,
+            round_coverage_min,
+            round_coverage_max,
+        ) = _summarize_round_metric(rollout_coverages)
 
         _write_dagger_log_row(
             csv_file_path=csv_file_path,
@@ -1336,6 +1690,37 @@ def train_dagger(
             dataset_size=len(aggregate_buffer),
             complexity=float(env.dataset.alpha),
             beta=float(beta),
+            round_bidirectional_distance_avg=round_bidirectional_distance_avg,
+            round_bidirectional_distance_min=round_bidirectional_distance_min,
+            round_bidirectional_distance_max=round_bidirectional_distance_max,
+            round_precision_avg=round_precision_avg,
+            round_precision_min=round_precision_min,
+            round_precision_max=round_precision_max,
+            round_coverage_avg=round_coverage_avg,
+            round_coverage_min=round_coverage_min,
+            round_coverage_max=round_coverage_max,
+        )
+
+        # Save a checkpoint for this round with a unique name
+        round_ckpt_name = f"{name}_round_{round_index + 1}"
+        _save_checkpoint(
+            actor=actor,
+            actor_optimizer=actor_optimizer,
+            outdir=outdir,
+            name=round_ckpt_name,
+            steps_done=steps_done,
+            episodes_done=episodes_done,
+            algorithm="multi_target_dagger",
+            extra_metadata={
+                "dagger_round": int(round_index + 1),
+                "beta": float(beta),
+                "dataset_size": len(aggregate_buffer),
+                "aggregate_memory_budget": memory_budget_meta,
+                "continue_target_norm_threshold": float(loss_config.continue_target_norm_threshold),
+                "continue_weight": float(loss_config.continue_weight),
+                "norm_floor": float(loss_config.norm_floor),
+                "norm_floor_weight": float(loss_config.norm_floor_weight),
+            },
         )
 
     final_beta = _compute_dagger_beta(dagger_rounds - 1, dagger_rounds=dagger_rounds, beta_start=beta_start, beta_end=beta_end)
@@ -1383,7 +1768,7 @@ def train_dagger_online(
     norm_floor: float = 0.0,
     norm_floor_weight: float = 0.0,
     stop_violation_weight: float = 1.0,
-    objective_mode: str = "legacy",
+    objective_mode: str = "norm_floor",
     continue_direction_weight: float = 1.0,
     norm_cls_weight: float = 1.0,
     norm_cls_temperature: float = 0.25,

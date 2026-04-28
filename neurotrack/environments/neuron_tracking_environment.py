@@ -358,7 +358,7 @@ class NeuronTrackingEnvironment:
                 self.target_step_len,
                 adj_dict=self.adj_dict,
                 id_to_idx=self.id_to_idx,
-                terminal_points=None,
+                terminal_points=self.terminal_points,
                 valid_nodes=self.section_nodes,
                 valid_dist2=self.close_dist2,
             )
@@ -394,7 +394,7 @@ class NeuronTrackingEnvironment:
                         self.target_step_len,
                         adj_dict=self.adj_dict,
                         id_to_idx=self.id_to_idx,
-                        terminal_points=None,
+                        terminal_points=self.terminal_points,
                         valid_nodes=self.section_nodes,
                         valid_dist2=self.close_dist2,
                     )
@@ -479,6 +479,23 @@ class NeuronTrackingEnvironment:
             info['status'] = status
 
             if status in ["out_of_image", "choose_stop", "oscillating"]: # then terminate path
+
+                # If the agent took a small step to stop, update visited edges based on the new position before termination.
+                if status == "choose_stop" and torch.any(action) > 0:
+                    if self.section_nodes is not None:
+                        # update visited edges
+                        updates = update_visited_edges(
+                            current_position,
+                            new_position,
+                            self.section_nodes,
+                            self.visited,
+                            self.unvisited_tree,
+                            self.id_to_idx,
+                            self.adj_dict,
+                            self.cut_ends,
+                            self.close_dist2)
+                        self.visited, self.unvisited_tree, self.adj_dict, self.cut_ends, self.id_to_idx = updates
+
                 terminated = True
                 # Terminate the branch, but the episode may continue.
                 # Reward is negative squared distance to nearest termination point times 1 / (1 - gamma).
@@ -507,7 +524,6 @@ class NeuronTrackingEnvironment:
                     # terminate path
                     info['terminate_episode'] = self._terminate_path()
                 else: # if the step is valid, update section nodes, termination points, target vectors, and visited edges based on the new position.
-                    close_dist2 = self.close_dist2
 
                     # Check if section_nodes should be assigned (cut ends entered window)
                     if self.section_nodes is None and self.cut_ends:
@@ -519,7 +535,7 @@ class NeuronTrackingEnvironment:
                             self.cut_ends,
                             self.adj_dict,
                             self.id_to_idx,
-                            close_dist2,
+                            self.close_dist2,
                             neuron_root_ids=self.neuron_root_ids
                             )
                         
@@ -536,7 +552,7 @@ class NeuronTrackingEnvironment:
                             self.id_to_idx,
                             self.adj_dict,
                             self.cut_ends,
-                            close_dist2)
+                            self.close_dist2)
                         self.visited, self.unvisited_tree, self.adj_dict, self.cut_ends, self.id_to_idx = updates
 
                         # update_current_section is a no-op when cut_ends is empty or no nearby cut ends are found.
@@ -549,7 +565,7 @@ class NeuronTrackingEnvironment:
                                     self.cut_ends,
                                     self.adj_dict,
                                     self.id_to_idx,
-                                    close_dist2,
+                                    self.close_dist2,
                                     neuron_root_ids=self.neuron_root_ids,
                             )
 
@@ -559,7 +575,8 @@ class NeuronTrackingEnvironment:
                         if branch_roots_tensor.device != new_position.device:
                             branch_roots_tensor = branch_roots_tensor.to(new_position.device)
                         distances = ((branch_roots_tensor - new_position) ** 2).sum(dim=1)
-                        if not torch.any(distances < 25.0):  # no branches within 5 pixels (5^2 to avoid sqrt)
+                        # if not torch.any(distances < 25.0):  # no branches within 5 pixels (5^2 to avoid sqrt)
+                        if not torch.any(distances < 4.0):
                             self.paths.append([new_position])
                             self._append_branch_root(new_position)
 
@@ -574,7 +591,7 @@ class NeuronTrackingEnvironment:
                             self.target_step_len,
                             adj_dict=self.adj_dict,
                             id_to_idx=self.id_to_idx,
-                            terminal_points=None,
+                            terminal_points=self.terminal_points,
                             valid_nodes=self.section_nodes,
                             valid_dist2=self.close_dist2,
                         )

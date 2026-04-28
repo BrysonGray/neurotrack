@@ -3,6 +3,7 @@ from collections import deque
 import numpy as np
 import torch
 from typing import List, Union, Tuple, Dict
+import warnings
 
 from neurotrack.data import loading as load
 
@@ -714,7 +715,7 @@ def _get_points_at_distance(
 
         node_pos = swc_t[id_to_idx[node], 2:5]
         sq_dist = torch.sum((node_pos - current_pos_t) ** 2).item()
-        if sq_dist >= sq_step_size:
+        if sq_dist > sq_step_size:
             if prev_node is not None:
                 boundary_pairs.append((int(prev_node), node))
             continue
@@ -842,6 +843,7 @@ def _compute_target_action(
     """
     swc_t = ensure_tensor(swc_list, dtype=torch.float32)
     pt = ensure_tensor(current_pos, dtype=torch.float32, device=swc_t.device)
+    step_size2 = step_size ** 2
     step_size = float(step_size)
     if step_size < 0:
         raise ValueError("step_size must be non-negative.")
@@ -903,7 +905,7 @@ def _compute_target_action(
             stop_target = True  # if there are no points in the neuron and no nearby terminals, signal to stop
     else:
         # Prefer a nearby terminal when it is reachable within one target step.
-        if nearest_valid_terminal is not None and sq_dist_to_nearest_terminal <= step_size ** 2:
+        if nearest_valid_terminal is not None and sq_dist_to_nearest_terminal <= step_size2:
             target_points = nearest_valid_terminal.unsqueeze(0)
             target_vectors = _target_vectors_from_points(pt, target_points, device=swc_t.device)
             return target_vectors, bool(stop_target), sq_dist_to_nearest_terminal
@@ -927,7 +929,7 @@ def _compute_target_action(
             return target_vectors, bool(stop_target), sq_dist_to_nearest_point
 
         sq_dist_to_nearest_point = torch.sum((nearest_point - pt) ** 2).item()
-        if sq_dist_to_nearest_point > step_size ** 2:
+        if sq_dist_to_nearest_point > step_size2:
             if sq_dist_to_nearest_point <= valid_dist2:
                 target_points = nearest_point.unsqueeze(0)
                 target_vectors = _target_vectors_from_points(pt, target_points, device=swc_t.device)
@@ -952,10 +954,12 @@ def _compute_target_action(
             valid_nodes=valid_nodes
         )
 
-        # If no points are found at step_size, use the farthest node away from the current position.
+        # If no points are found at step_size, use the farthest node from the current position that is within step_size.
         # This should never happen since the farthest node should be a terminal if there are nodes within
         # step_size but no edges cross the step_size boundary.
         if targets.numel() == 0:
+            warnings.warn("No target points found at the specified step_size. Falling back to farthest node within step_size. \n\
+                          This fallback should be rare and may indicate an unusual neuron geometry or a bug in the target point computation. Please investigate if you see this warning frequently.")
             if valid_nodes is None:
                 node_coords = swc_t[:, 2:5]
             else:
@@ -964,8 +968,12 @@ def _compute_target_action(
 
             if node_coords.numel() > 0:
                 dists2 = torch.sum((node_coords - pt.unsqueeze(0)) ** 2, dim=1)
-                farthest_idx = torch.argmax(dists2)
-                targets = node_coords[farthest_idx].unsqueeze(0)
+                # nodes with distance <= step_size
+                valid_indices = torch.where(dists2 <= step_size2)[0]
+                if valid_indices.numel() == 0:
+                    raise RuntimeError("Unexpected condition: Fallback to target less than step_size distance away failed because no nodes are within step_size. This should not happen because the nearest point is within step_size.")
+                farthest_idx = torch.argmax(dists2[valid_indices])
+                targets = node_coords[valid_indices[farthest_idx]].unsqueeze(0)
             else:
                 targets = nearest_point.unsqueeze(0)
 
@@ -2018,8 +2026,9 @@ def update_visited_edges(
         valid_dist2=valid_dist2,
     )
 
-    # Fallback: if cut-end anchored start produced no progress, re-anchor at prev_position
-    # projected onto the connected component containing the end projection.
+    # Fallback: if cut-end anchored start produced no progress, first try a cut-end
+    # anchor constrained to the end-point component; then re-anchor at prev_position
+    # projected onto that same component.
     if cut_ends and section_nodes is not None and not _visited_changed(visited_before, visited):
         _end_point, end_edge = _get_nearest_point(
             new_position,
@@ -2030,13 +2039,28 @@ def update_visited_edges(
         )
         if end_edge[0] is not None:
             comp_nodes = _component_nodes(int(end_edge[0]), adj_dict, valid_nodes=section_nodes)
-            fallback_start, _fallback_edge = _project_point_to_component(
-                prev_position,
-                unvisited_tree,
-                id_to_idx,
-                adj_dict,
-                comp_nodes,
-            )
+            id_lookup = id_to_idx.get
+            component_cut_end_indices = [
+                idx
+                for ce in cut_ends
+                for ce_i in (int(ce),)
+                if ce_i in comp_nodes
+                for idx in (id_lookup(ce_i),)
+                if idx is not None
+            ]
+
+            if component_cut_end_indices:
+                component_cut_end_coords = unvisited_tree[component_cut_end_indices][:, 2:5]
+                dists2 = torch.sum((component_cut_end_coords - new_position.unsqueeze(0)) ** 2, dim=1)
+                fallback_start = component_cut_end_coords[torch.argmin(dists2)]
+            else:
+                fallback_start, _fallback_edge = _project_point_to_component(
+                    prev_position,
+                    unvisited_tree,
+                    id_to_idx,
+                    adj_dict,
+                    comp_nodes,
+                )
             if fallback_start is not None:
                 visited, neuron_end_point = _add_to_visited(
                     fallback_start,

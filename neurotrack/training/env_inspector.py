@@ -27,7 +27,8 @@ def get_unvisited_sections(env):
 
 
 def draw_2d_panel(ax, environment, cropped=False, sections=None,
-                  skeleton_color='lightgray', path_color='red', target_color='blue', step_size=4.0, dim=0):
+                  skeleton_color='lightgray', path_color='red', target_color='blue', step_size=4.0, dim=0,
+                  size_scale=1.0):
     """
     Draw a 2D projection of skeleton, traced path, and target points.
 
@@ -52,8 +53,13 @@ def draw_2d_panel(ax, environment, cropped=False, sections=None,
         Step size for target point computation.
     dim : int
         Dimension to drop for 2D projection (0=z, 1=y, 2=x).
+    size_scale : float
+        Scales line widths and marker sizes for visibility.
     """
     env = environment
+    size_scale = max(float(size_scale), 0.1)
+    line_zorder = 2
+    marker_zorder = 4
     if sections is None:
         sections = get_unvisited_sections(env)
 
@@ -83,18 +89,18 @@ def draw_2d_panel(ax, environment, cropped=False, sections=None,
             y0, x0 = -float(p0[i]), float(p0[j])
             y1, x1 = -float(p1[i]), float(p1[j])
             if not cropped or (in_crop(y0, x0) or in_crop(y1, x1)):
-                ax.plot([x0, x1], [y0, y1], color=skeleton_color, linewidth=3.0, alpha=0.8)
+                ax.plot([x0, x1], [y0, y1], color=skeleton_color, linewidth=2.0 * size_scale, alpha=1.0, zorder=line_zorder)
 
     if len(env.paths) > 0 and len(env.paths[0]) > 0:
         ys = [-float(pt[i]) for pt in env.paths[0]]
         xs = [float(pt[j]) for pt in env.paths[0]]
         if not cropped:
-            ax.plot(xs, ys, color=path_color, linewidth=2.0)
+            ax.plot(xs, ys, color=path_color, linewidth=2.0 * size_scale, zorder=line_zorder)
         else:
             filt = [in_crop(y, x) for y, x in zip(ys, xs)]
             for k in range(1, len(xs)):
                 if filt[k - 1] or filt[k]:
-                    ax.plot([xs[k - 1], xs[k]], [ys[k - 1], ys[k]], color=path_color, linewidth=1.5)
+                    ax.plot([xs[k - 1], xs[k]], [ys[k - 1], ys[k]], color=path_color, linewidth=1.0 * size_scale, zorder=line_zorder)
 
     try:
         if len(env.paths) > 0 and len(env.paths[0]) > 0:
@@ -108,7 +114,7 @@ def draw_2d_panel(ax, environment, cropped=False, sections=None,
                 tys = [-float(p[i]) for p in target_points]
                 txs = [float(p[j]) for p in target_points]
                 if not cropped:
-                    ax.scatter(txs, tys, color=target_color, marker='x', s=70)
+                    ax.scatter(txs, tys, color=target_color, marker='x', s=100 * size_scale, linewidths=1.0 * size_scale, zorder=marker_zorder)
                 else:
                     txs_c = []
                     tys_c = []
@@ -117,7 +123,7 @@ def draw_2d_panel(ax, environment, cropped=False, sections=None,
                             tys_c.append(ty)
                             txs_c.append(tx)
                     if len(txs_c) > 0:
-                        ax.scatter(txs_c, tys_c, color=target_color, marker='x',s=70)
+                        ax.scatter(txs_c, tys_c, color=target_color, marker='x', s=100 * size_scale, linewidths=1.0 * size_scale, zorder=marker_zorder)
     except Exception as e:
         print(f"Warning: target point computation failed: {e}")
 
@@ -125,7 +131,7 @@ def draw_2d_panel(ax, environment, cropped=False, sections=None,
         term_ys = [-pt[i].item() for pt in env.terminal_points]
         term_xs = [pt[j].item() for pt in env.terminal_points]
         if not cropped:
-            ax.scatter(term_xs, term_ys, color='green', s=90, marker='o', facecolors='none', linewidths=1.0)
+            ax.scatter(term_xs, term_ys, color='red', s=100 * size_scale, marker='o', facecolors='none', linewidths=1.0 * size_scale, zorder=marker_zorder)
         else:
             term_xs_c = []
             term_ys_c = []
@@ -134,7 +140,7 @@ def draw_2d_panel(ax, environment, cropped=False, sections=None,
                     term_ys_c.append(ty)
                     term_xs_c.append(tx)
             if len(term_xs_c) > 0:
-                ax.scatter(term_xs_c, term_ys_c, color='green', s=90, marker='o', facecolors='none', linewidths=1.0)
+                ax.scatter(term_xs_c, term_ys_c, color='red', s=100 * size_scale, marker='o', facecolors='none', linewidths=1.0 * size_scale, zorder=marker_zorder)
     
 
     tree = getattr(env, 'unvisited_tree', None)
@@ -153,7 +159,7 @@ def draw_2d_panel(ax, environment, cropped=False, sections=None,
                 valid_ys.append(vy)
                 valid_xs.append(vx)
         if len(valid_xs) > 0:
-            ax.scatter(valid_xs, valid_ys, color='blue', s=20, marker='o', alpha=0.5)
+            ax.scatter(valid_xs, valid_ys, color='blue', s=80 * size_scale, marker='o', alpha=0.5, zorder=marker_zorder)
 
         if env.paths:
             # plot the nearest point on the unvisited tree to the current head position.
@@ -163,7 +169,7 @@ def draw_2d_panel(ax, environment, cropped=False, sections=None,
                 vy = -float(nearest_point[i])
                 vx = float(nearest_point[j])
                 if not cropped or in_crop(vy, vx):
-                    ax.scatter([vx], [vy], color='cyan', s=90, marker='P', alpha=0.7)
+                    ax.scatter([vx], [vy], color='cyan', s=70 * size_scale, marker='*', linewidths=1.0 * size_scale, alpha=1.0, zorder=marker_zorder+1)
 
     # Plot branch roots as yellow dots
     branch_roots = getattr(env, 'branch_roots', None)
@@ -171,7 +177,7 @@ def draw_2d_panel(ax, environment, cropped=False, sections=None,
         branch_ys = [-float(br[i]) for br in branch_roots]
         branch_xs = [float(br[j]) for br in branch_roots]
         if not cropped:
-            ax.scatter(branch_xs, branch_ys, color='yellow', s=60, marker='o', facecolors='none', linewidths=1.0)
+            ax.scatter(branch_xs, branch_ys, color='lime', s=100 * size_scale, marker='o', facecolors='none', linewidths=1.0 * size_scale, zorder=marker_zorder)
         else:
             branch_xs_c = []
             branch_ys_c = []
@@ -180,7 +186,7 @@ def draw_2d_panel(ax, environment, cropped=False, sections=None,
                     branch_ys_c.append(by)
                     branch_xs_c.append(bx)
             if len(branch_xs_c) > 0:
-                ax.scatter(branch_xs_c, branch_ys_c, color='yellow', s=60, marker='o', facecolors='none', linewidths=1.0)
+                ax.scatter(branch_xs_c, branch_ys_c, color='lime', s=100 * size_scale, marker='o', facecolors='none', linewidths=1.0 * size_scale, zorder=marker_zorder)
 
     # Plot cut ends as purple dots
     cut_ends = getattr(env, 'cut_ends', None)
@@ -200,7 +206,7 @@ def draw_2d_panel(ax, environment, cropped=False, sections=None,
                         cut_ys.append(cy)
                         cut_xs.append(cx)
             if len(cut_xs) > 0:
-                ax.scatter(cut_xs, cut_ys, color='purple', s=40, marker='D', facecolors='none', linewidths=1.0)
+                ax.scatter(cut_xs, cut_ys, color='purple', s=130 * size_scale, marker='D', facecolors='none', linewidths=1.0 * size_scale, zorder=marker_zorder)
 
     if cropped and y_min is not None:
         ax.set_xlim(x_min, x_max)
@@ -705,9 +711,14 @@ def run_policy(env, actor, stochastic=False):
 policy_step = run_policy
 
 
-def manual_step(env, step_size=4.0):
+def manual_step(env, step_size=4.0, display_mode='all'):
     """
     Interactive manual stepping helper.
+
+        Display modes:
+            - all: full six-panel layout (image, crop, and 2D projections)
+            - tree: only XY projection of the full unvisited skeleton/path view
+            - image: only XY projection of the full image with path overlay
 
     Controls:
       - w/a/s/d: move in-plane (y/x)
@@ -726,6 +737,10 @@ def manual_step(env, step_size=4.0):
     import matplotlib.pyplot as plt
 
     plt.ioff()
+    valid_display_modes = {'all', 'tree', 'image'}
+    if display_mode not in valid_display_modes:
+        raise ValueError(f"Invalid display_mode '{display_mode}'. Expected one of {sorted(valid_display_modes)}")
+
     device = env.img.data.device
     user_input_dict = {
         'a': torch.tensor([0.0, 0.0, -1.0]),
@@ -738,22 +753,38 @@ def manual_step(env, step_size=4.0):
     }
 
     fig = plt.figure(figsize=(16, 12))
-    gs = fig.add_gridspec(3, 2, wspace=0.05, hspace=0.15)
-
-    ax0 = fig.add_subplot(gs[0, 0])
-    ax1 = fig.add_subplot(gs[0, 1])
-    ax2 = fig.add_subplot(gs[1, 0])
-    ax3 = fig.add_subplot(gs[1, 1])
-    ax4 = fig.add_subplot(gs[2, 0])
-    ax5 = fig.add_subplot(gs[2, 1])
-
-    axes = [ax0, ax1, ax2, ax3, ax4, ax5]
+    if display_mode == 'all':
+        gs = fig.add_gridspec(
+            3,
+            2,
+            left=0.01,
+            right=0.99,
+            bottom=0.01,
+            top=0.99,
+            wspace=0.03,
+            hspace=0.08,
+        )
+        ax0 = fig.add_subplot(gs[0, 0])
+        ax1 = fig.add_subplot(gs[0, 1])
+        ax2 = fig.add_subplot(gs[1, 0])
+        ax3 = fig.add_subplot(gs[1, 1])
+        ax4 = fig.add_subplot(gs[2, 0])
+        ax5 = fig.add_subplot(gs[2, 1])
+        axes = [ax0, ax1, ax2, ax3, ax4, ax5]
+        ax_main = None
+    else:
+        ax_main = fig.add_axes([0.0, 0.0, 1.0, 1.0])
+        axes = [ax_main]
+        ax0 = None
+        ax1 = None
+        ax2 = None
+        ax3 = None
+        ax4 = None
+        ax5 = None
 
     skeleton_color = 'tab:gray'
     path_color = 'tab:orange'
     target_color = 'tab:red'
-    sections = get_unvisited_sections(env)
-
     total_steps = 0
     frame_handle = None
     stats_handle = None
@@ -772,32 +803,77 @@ def manual_step(env, step_size=4.0):
         for a in axes:
             a.clear()
 
-        img = env.img.data[0].amax(dim=0)
-        path_im = env.img.data[-1].amax(dim=0)
-        ax0.imshow(img, cmap='gray')
-        ax0.imshow(path_im, cmap='gray', alpha=0.5)
-        ax0.set_title('Full image + path')
-        ax0.axis('off')
+        if display_mode == 'all':
+            img = env.img.data[0].amax(dim=0)
+            path_im = env.img.data[-1].amax(dim=0)
+            ax0.imshow(img, cmap='gray')
+            ax0.imshow(path_im, cmap='gray', alpha=0.5)
+            ax0.set_title('Full image + path')
+            ax0.axis('off')
 
-        patch = observation[0]
-        z_index = getattr(env, 'radius', patch.shape[1] // 2)
-        z_index = int(max(0, min(int(z_index), patch.shape[1] - 1)))
-        slice_ = patch[:, z_index]
-        ax1.imshow(slice_[0], cmap='gray')
-        ax1.imshow(slice_[-1], cmap='gray', alpha=0.5)
-        ax1.set_title('Cropped patch + path')
-        ax1.axis('off')
+            patch = observation[0]
+            z_index = getattr(env, 'radius', patch.shape[1] // 2)
+            z_index = int(max(0, min(int(z_index), patch.shape[1] - 1)))
+            slice_ = patch[:, z_index]
+            ax1.imshow(slice_[0], cmap='gray')
+            ax1.imshow(slice_[-1], cmap='gray', alpha=0.5)
+            ax1.set_title('Cropped patch + path')
+            ax1.axis('off')
 
-        current_sections = get_unvisited_sections(env)
+            current_sections = get_unvisited_sections(env)
 
-        draw_2d_panel(ax2, env, cropped=False, sections=current_sections, dim=0,
-                      skeleton_color=skeleton_color, path_color=path_color, target_color=target_color)
-        draw_2d_panel(ax3, env, cropped=True, sections=current_sections, dim=0,
-                      skeleton_color=skeleton_color, path_color=path_color, target_color=target_color)
-        draw_2d_panel(ax4, env, cropped=True, sections=current_sections, dim=1,
-                      skeleton_color=skeleton_color, path_color=path_color, target_color=target_color)
-        draw_2d_panel(ax5, env, cropped=True, sections=current_sections, dim=2,
-                      skeleton_color=skeleton_color, path_color=path_color, target_color=target_color)
+            draw_2d_panel(ax2, env, cropped=False, sections=current_sections, dim=0,
+                          skeleton_color=skeleton_color, path_color=path_color, target_color=target_color)
+            draw_2d_panel(ax3, env, cropped=True, sections=current_sections, dim=0,
+                          skeleton_color=skeleton_color, path_color=path_color, target_color=target_color)
+            draw_2d_panel(ax4, env, cropped=True, sections=current_sections, dim=1,
+                          skeleton_color=skeleton_color, path_color=path_color, target_color=target_color)
+            draw_2d_panel(ax5, env, cropped=True, sections=current_sections, dim=2,
+                          skeleton_color=skeleton_color, path_color=path_color, target_color=target_color)
+        elif display_mode == 'tree':
+            from matplotlib.lines import Line2D
+
+            current_sections = get_unvisited_sections(env)
+            draw_2d_panel(
+                ax_main,
+                env,
+                cropped=False,
+                sections=current_sections,
+                dim=0,
+                skeleton_color=skeleton_color,
+                path_color=path_color,
+                target_color=target_color,
+                size_scale=3.0,
+            )
+            ax_main.set_title('')
+            legend_handles = [
+                Line2D([0], [0], marker='x', color='none', markeredgecolor=target_color, markersize=10, label='Target points'),
+                Line2D([0], [0], marker='o', color='none', markeredgecolor='red', markerfacecolor='none', markersize=9, label='Terminal points'),
+                Line2D([0], [0], marker='o', color='none', markeredgecolor='blue', markerfacecolor='blue', alpha=0.5, markersize=8, label='Section nodes'),
+                Line2D([0], [0], marker='*', color='none', markeredgecolor='cyan', markerfacecolor='cyan', markersize=10, label='Nearest point'),
+                Line2D([0], [0], marker='o', color='none', markeredgecolor='lime', markerfacecolor='none', markersize=9, label='Branch roots'),
+                Line2D([0], [0], marker='D', color='none', markeredgecolor='purple', markerfacecolor='none', markersize=8, label='Cut ends'),
+            ]
+            # Add vertical breathing room without hard-coding absolute limits.
+            ax_main.margins(y=0.2)
+            ax_main.legend(
+            handles=legend_handles,
+            loc='center right',
+            framealpha=0.85,
+            fontsize=14,
+            markerscale=1.5,
+            borderpad=0.8,
+            labelspacing=0.7,
+            handletextpad=0.7,
+            )
+            ax_main.set_position([0.0, 0.0, 1.0, 1.0])
+        else:
+            img = env.img.data[0].amax(dim=0)
+            path_im = env.img.data[-1].amax(dim=0)
+            ax_main.imshow(img, cmap='gray')
+            ax_main.imshow(path_im, cmap='gray', alpha=0.5)
+            ax_main.axis('off')
+            ax_main.set_position([0.0, 0.0, 1.0, 1.0])
 
         nonlocal frame_handle, stats_handle
         if frame_handle is None:
@@ -841,7 +917,6 @@ def manual_step(env, step_size=4.0):
             break
         elif action_key == 'r':
             observation = env.reset(return_state=True)
-            sections = get_unvisited_sections(env)
             _render(observation, reward=None, info=None, action=None)
         elif action_key == 'b':
             point = env.paths[0][-1]
@@ -928,15 +1003,7 @@ def manual_step(env, step_size=4.0):
                     print(last_stats_text)
 
     try:
-        sections = get_unvisited_sections(env)
-        draw_2d_panel(ax2, env, cropped=False, sections=sections, dim=0,
-                      skeleton_color=skeleton_color, path_color=path_color, target_color=target_color)
-        draw_2d_panel(ax3, env, cropped=True, sections=sections, dim=0,
-                      skeleton_color=skeleton_color, path_color=path_color, target_color=target_color)
-        draw_2d_panel(ax4, env, cropped=True, sections=sections, dim=1,
-                      skeleton_color=skeleton_color, path_color=path_color, target_color=target_color)
-        draw_2d_panel(ax5, env, cropped=True, sections=sections, dim=2,
-                      skeleton_color=skeleton_color, path_color=path_color, target_color=target_color)
+        _render(env.get_state(), reward=None, info=last_info_snapshot, action=None)
         ipy_display(plt.gcf())
     except Exception:
         pass

@@ -23,6 +23,7 @@ from neurotrack.models import ConvNet
 from neurotrack.training import behavior_cloning
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print(f"Using device: {DEVICE}")
 dtype = torch.float32
 date_time = datetime.now().strftime("'%Y-%m-%d_%H-%M-%S'")
 

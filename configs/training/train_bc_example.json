@@ -3,7 +3,6 @@
     "swc_dir": "/home/brysongray/data/neurotrack_data/gold166/gold166_cropped/train_set/morphology_soma_removed/",
     "seeds_path": "/home/brysongray/data/neurotrack_data/gold166/gold166_cropped/soma_removed_seeds.json",
     "outdir": "/home/brysongray/data/neurotrack_data/model_weights/bc_weights/training_outputs/",
-    "policy_weights": "/home/brysongray/data/neurotrack_data/model_weights/bc_weights/training_outputs/model_state_dicts_bc_only_pretraining_'2026-04-17_11-59-43'.pt",
     "name": "bc_only_pretraining",
     "target_step_len": 5.0,
     "step_width": 2.0,

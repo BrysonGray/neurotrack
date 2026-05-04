@@ -325,12 +325,14 @@ def _get_connected_nodes(
         if n in visited:
             continue
         visited.add(n)
+        # get terminal nodes (but not the starting node, root node, or cut end)
+        # when adj_dict[n] is empty, it's an isolated terminal.
         if (
             len(adj_dict.get(n, [])) == 1
             and n != node
             and n not in root_nodes
             and n not in cut_end_nodes
-        ):  # terminal node (but not the starting node, root node, or cut end)
+        ) or len(adj_dict.get(n, [])) == 0:
             terminals.append(n)
         
         # Check if we've exceeded max_dist. If so, don't explore neighbors
@@ -728,6 +730,64 @@ def _get_points_at_distance(
                 queue.append((neighbor, node))
 
     if not boundary_pairs:
+        # No boundary crossing pairs were found by BFS. This can occur when the
+        # nearest point lies on a long edge that intersects the sphere of
+        # radius `step_size` around `current_pos`, but both edge endpoints are
+        # outside that sphere. In that case, compute the intersection(s)
+        # between the segment containing the nearest projected point and the
+        # sphere and return those intersection points.
+        try:
+            nearest_point, nearest_edge = _get_nearest_point(
+                current_pos_t, swc_t, id_to_idx=id_to_idx, adj_dict=adj_dict, valid_nodes=valid_node_set
+            )
+        except Exception:
+            nearest_point, nearest_edge = None, (None, None)
+
+        if nearest_point is None:
+            return empty_points
+
+        # If the nearest projected point is inside the step radius, try to
+        # compute the sphere-segment intersections on its edge.
+        sq_dist_nearest = torch.sum((nearest_point - current_pos_t) ** 2).item()
+        if sq_dist_nearest <= sq_step_size and nearest_edge and None not in nearest_edge:
+            u, v = int(nearest_edge[0]), int(nearest_edge[1])
+            if u in id_to_idx and v in id_to_idx:
+                # Ensure both edge endpoints are allowed by valid_node_set (if provided)
+                if valid_node_set is None or (u in valid_node_set and v in valid_node_set):
+                    p_u = swc_t[id_to_idx[u], 2:5] - current_pos_t
+                    p_v = swc_t[id_to_idx[v], 2:5] - current_pos_t
+                    ab = p_v - p_u
+                    A = torch.dot(ab, ab)
+                    if float(A.item()) > 1e-12:
+                        B = 2 * torch.dot(p_u, ab)
+                        C = torch.dot(p_u, p_u) - sq_step_size
+                        discriminant = B ** 2 - 4 * A * C
+                        if float(discriminant.item()) >= -1e-8:
+                            discriminant = torch.clamp(discriminant, min=0.0)
+                            sqrt_disc = torch.sqrt(discriminant)
+                            denom = 2 * A
+                            t1 = (-B + sqrt_disc) / denom
+                            t2 = (-B - sqrt_disc) / denom
+                            pts = []
+                            for t in (t1, t2):
+                                t_val = float(t.item())
+                                if 0.0 <= t_val <= 1.0:
+                                    # convert back to absolute coords
+                                    pts.append(p_u + t * ab + current_pos_t)
+                            if pts:
+                                pts_t = torch.stack(pts, dim=0)
+                                # Deduplicate near-identical intersection roots
+                                keep_indices = []
+                                tol_sq = 1e-10
+                                for i in range(pts_t.shape[0]):
+                                    if not keep_indices:
+                                        keep_indices.append(i)
+                                        continue
+                                    sq_diffs = torch.sum((pts_t[keep_indices] - pts_t[i]) ** 2, dim=1)
+                                    if torch.all(sq_diffs > tol_sq):
+                                        keep_indices.append(i)
+                                return pts_t[keep_indices]
+
         return empty_points
 
     # for each pair of nodes where one is inside the step size and the other is outside,
@@ -805,10 +865,11 @@ def _compute_target_action(
     step_size: float,
     id_to_idx: Dict[int, int],
     adj_dict: Dict[int, list] = None,
-    terminal_points: torch.Tensor = None,
+    terminal_nodes: set = None,
     valid_nodes: set = None,
     valid_dist2: float = 49.0,
     stop_distance: float = None,
+    step_count: int = 0
 ) -> Tuple[torch.Tensor, bool, float]:
     """
     Compute target points, usually one but potentially multiple possible target points, along the neuron structure at a specified distance from the nearest
@@ -827,8 +888,8 @@ def _compute_target_action(
         Undirected edge list from load.adjacency_dict(). If None, will be computed.
     id_to_idx : dict
         Mapping from node IDs to their indices in the SWC list.
-    terminal_points : (N,3) torch.Tensor, optional
-        Terminal points in the neuron structure.
+    terminal_nodes : set of int, optional
+        Terminal node IDs in the neuron structure.
     valid_nodes : set, optional
         Optional node IDs to restrict nearest-point and target search.
         
@@ -853,6 +914,8 @@ def _compute_target_action(
     if stop_distance < 0:
         raise ValueError("stop_distance must be non-negative.")
 
+    sq_dist_to_nearest_point = float("inf")
+
     if adj_dict is None and swc_t.ndim >= 2 and swc_t.shape[0] >= 2:
         adj_dict = load.adjacency_dict(swc_t)
 
@@ -862,39 +925,30 @@ def _compute_target_action(
         if component_start is not None:
             component_nodes = _component_nodes(component_start, adj_dict, valid_nodes=valid_nodes)
 
-    terminals_t = None
     terminals_exist = False
     nearest_valid_terminal = None
     sq_dist_to_nearest_terminal = float("inf")
-    if terminal_points is not None:
-        terminals_t = ensure_tensor(terminal_points, dtype=torch.float32, device=swc_t.device).view(-1, 3)
-        if terminals_t.numel() > 0 and component_nodes:
-            keep_indices = []
-            for i in range(terminals_t.shape[0]):
-                tp = terminals_t[i]
-                nearest_terminal_node = _get_nearest_node(tp, swc_t, id_to_idx=id_to_idx)
-                if nearest_terminal_node is None:
-                    continue
-                nearest_terminal_node = int(nearest_terminal_node)
-                if nearest_terminal_node not in component_nodes:
-                    continue
-                node_coord = swc_t[id_to_idx[nearest_terminal_node], 2:5]
-                if torch.sum((tp - node_coord) ** 2).item() <= 1e-6:
-                    keep_indices.append(i)
-            if keep_indices:
-                terminals_t = terminals_t[keep_indices]
-            else:
-                terminals_t = torch.empty((0, 3), dtype=torch.float32, device=swc_t.device)
-        terminals_exist = terminals_t.numel() > 0
-
-    stop_target = False
-    sq_dist_to_nearest_point = float("inf")
-    if terminals_exist:
-        sq_dists_to_terminals = torch.sum((terminals_t - pt.unsqueeze(0)) ** 2, dim=1)
-        nearest_terminal = terminals_t[torch.argmin(sq_dists_to_terminals)]
-        sq_dist_to_nearest_terminal = torch.min(sq_dists_to_terminals).item()
-        nearest_valid_terminal = nearest_terminal if sq_dist_to_nearest_terminal <= valid_dist2 else None
-        stop_target = sq_dist_to_nearest_terminal <= (stop_distance ** 2)
+    if terminal_nodes is not None and len(terminal_nodes) > 0:
+        # Filter terminal nodes to those on the current component
+        valid_terminal_nodes = []
+        if component_nodes:
+            valid_terminal_nodes = [int(n) for n in terminal_nodes if int(n) in component_nodes and int(n) in id_to_idx]
+        else:
+            valid_terminal_nodes = [int(n) for n in terminal_nodes if int(n) in id_to_idx]
+        
+        if valid_terminal_nodes:
+            terminals_exist = True
+            # Convert node IDs to coordinates
+            terminal_coords = torch.stack([swc_t[id_to_idx[int(n)], 2:5] for n in valid_terminal_nodes])
+            sq_dists_to_terminals = torch.sum((terminal_coords - pt.unsqueeze(0)) ** 2, dim=1)
+            nearest_terminal = terminal_coords[torch.argmin(sq_dists_to_terminals)]
+            sq_dist_to_nearest_terminal = torch.min(sq_dists_to_terminals).item()
+            nearest_valid_terminal = nearest_terminal if sq_dist_to_nearest_terminal <= valid_dist2 else None
+            stop_target = sq_dist_to_nearest_terminal <= (stop_distance ** 2)
+        else:
+            stop_target = False
+    else:
+        stop_target = False
 
     # if the swc_list is empty or has only one point, return the nearest terminal if within step size, otherwise return empty
     if swc_t.ndim < 2 or swc_t.shape[0] < 2:
@@ -958,7 +1012,7 @@ def _compute_target_action(
         # This should never happen since the farthest node should be a terminal if there are nodes within
         # step_size but no edges cross the step_size boundary.
         if targets.numel() == 0:
-            warnings.warn("No target points found at the specified step_size. Falling back to farthest node within step_size. \n\
+            warnings.warn(f"Step {step_count}: No target points found at the specified step_size. Falling back to farthest node within step_size. \n\
                           This fallback should be rare and may indicate an unusual neuron geometry or a bug in the target point computation. Please investigate if you see this warning frequently.")
             if valid_nodes is None:
                 node_coords = swc_t[:, 2:5]
@@ -1615,8 +1669,8 @@ def _add_to_visited(start_point: Union[torch.Tensor, np.ndarray],
         if visited.get(edge) is None:
             edge = (edge[1], edge[0])
 
-        start_node_pos = swc_t[id_to_idx[int(edge[0])], 2:5]
-        end_node_pos = swc_t[id_to_idx[int(edge[1])], 2:5]
+        start_node_pos = swc_t[id_to_idx[edge[0]], 2:5]
+        end_node_pos = swc_t[id_to_idx[edge[1]], 2:5]
         edge_vec = end_node_pos - start_node_pos
         edge_len_sq = torch.dot(edge_vec, edge_vec)
 
@@ -1718,7 +1772,8 @@ def _add_to_visited(start_point: Union[torch.Tensor, np.ndarray],
 def remove_visited(swc_list: Union[np.ndarray, torch.Tensor],
                    visited: Dict[Tuple[int, int], float],
                    adj_dict: Dict[Tuple[int, int], float],
-                   id_to_idx: Dict[int, int]) -> Tuple[np.ndarray, Dict[Tuple[int, int], float], Dict[int, list], list]:
+                   id_to_idx: Dict[int, int],
+                   terminal_nodes: set = None) -> Tuple[np.ndarray, Dict[Tuple[int, int], float], Dict[int, list], list]:
 
     swc_list = ensure_tensor(swc_list, dtype=torch.float32)
     if not swc_list.any():
@@ -1727,6 +1782,7 @@ def remove_visited(swc_list: Union[np.ndarray, torch.Tensor],
     # Keep all nodes that are not only part of fully visited edges
     nodes_to_keep = set()
     cut_ends = set()
+    terminal_node_set = {int(n) for n in terminal_nodes} if terminal_nodes is not None else set()
     # Compute max node ID once; incremented per new node to avoid O(n) scan per partial edge.
     next_node_id = int(swc_list[:, 0].max().item()) + 1
     for edge, coverage in visited.copy().items():
@@ -1738,8 +1794,8 @@ def remove_visited(swc_list: Union[np.ndarray, torch.Tensor],
                 nodes_to_keep.update(edge)
                 continue
 
-            n0 = int(edge[0])
-            n1 = int(edge[1])
+            n0 = edge[0]
+            n1 = edge[1]
             if n0 not in id_to_idx or n1 not in id_to_idx:
                 del visited[edge]
                 continue
@@ -1889,6 +1945,45 @@ def remove_visited(swc_list: Union[np.ndarray, torch.Tensor],
         if not isinstance(coverage, (int, float, np.floating)):
             continue
         if abs(float(coverage)) > 0.999:
+            terminal_node = next((node_id for node_id in edge if node_id in terminal_node_set), None)
+            if terminal_node is not None:
+                terminal_idx = id_to_idx.get(terminal_node)
+                terminal_pos = swc_list[terminal_idx, 2:5]
+                nb_idx = adj_dict[terminal_node][0]
+                adj_dict[nb_idx].remove(terminal_node)
+                if not adj_dict[nb_idx]:
+                    del adj_dict[nb_idx]
+                stub_id = next_node_id
+                next_node_id += 1
+                adj_dict[terminal_node] = [stub_id]
+                adj_dict[stub_id] = [terminal_node]
+
+                # Keep the terminal as the leaf and add a zero-length root stub.
+                swc_list[terminal_idx, 6] = stub_id
+                stub_node = torch.tensor(
+                    [
+                        stub_id,
+                        swc_list[terminal_idx, 1],
+                        terminal_pos[0],
+                        terminal_pos[1],
+                        terminal_pos[2],
+                        swc_list[terminal_idx, 5],
+                        -1,
+                    ],
+                    dtype=swc_list.dtype,
+                    device=swc_list.device,
+                )
+                swc_list = torch.cat([swc_list, stub_node.reshape(1, -1)])
+
+                nodes_to_keep.update([terminal_node, stub_id])
+                cut_ends.update([stub_id])
+
+                del visited[edge]
+                new_edge = (terminal_node, stub_id)
+                visited[new_edge] = 0.0
+
+                continue
+
             del visited[edge]
             # Check if nodes still exist in adj_dict before accessing
             if edge[0] in adj_dict:
@@ -1904,10 +1999,9 @@ def remove_visited(swc_list: Union[np.ndarray, torch.Tensor],
                 else:
                     cut_ends.add(edge[1])
     # Keep only nodes that are still part of at least one remaining edge.
-    # This keeps swc_list and adj_dict synchronized and avoids isolated nodes.
     active_nodes = set()
     for edge in visited.keys():
-        active_nodes.update([int(edge[0]), int(edge[1])])
+        active_nodes.update([edge[0], edge[1]])
 
     if not active_nodes:
         return (
@@ -1926,15 +2020,15 @@ def remove_visited(swc_list: Union[np.ndarray, torch.Tensor],
         pruned_neighbors = [int(nb) for nb in neighbors if int(nb) in active_nodes]
         if pruned_neighbors:
             pruned_adj[node_i] = pruned_neighbors
+    
     adj_dict = pruned_adj
-
     active_nodes = set(adj_dict.keys())
     visited = {
-        (int(edge[0]), int(edge[1])): float(coverage)
+        (edge[0], edge[1]): float(coverage)
         for edge, coverage in visited.items()
-        if int(edge[0]) in active_nodes and int(edge[1]) in active_nodes
+        if edge[0] in active_nodes and edge[1] in active_nodes
     }
-    cut_ends = {int(n) for n in cut_ends if int(n) in active_nodes}
+    cut_ends = {n for n in cut_ends if n in active_nodes}
 
     # remove nodes from swc_list
     new_swc_list = [node for node in swc_list if int(node[0]) in nodes_to_keep and int(node[0]) in active_nodes]
@@ -1956,11 +2050,12 @@ def update_visited_edges(
         id_to_idx,
         adj_dict,
         cut_ends,
+        terminal_nodes=None,
         valid_dist2=49.0):
     """
     Updates the visited edges based on the path from the previous position to the new position. If section_nodes is not None, only
     consider paths that go through those nodes. Update cut_ends to reflect any new cut ends created by removing visited edges.
-    Also updates the unvisited_tree, adj_dict, and id_to_idx to reflect any removed nodes.
+    Also updates the unvisited_tree, adj_dict, id_to_idx, and terminal_nodes to reflect any removed nodes.
 
     Parameters
     ----------
@@ -1978,6 +2073,8 @@ def update_visited_edges(
         Undirected edge list from load.adjacency_dict() for the current unvisited tree.
     cut_ends : list of int
         List of node IDs that are the current cut ends of the unvisited tree.
+    terminal_nodes : set of int, optional
+        Set of terminal node IDs to preserve during visited edge removal.
     valid_dist2 : float, optional
         The squared distance threshold for considering cut ends as part of the current section. Default is 49.0 (7 pixels).
 
@@ -1993,10 +2090,12 @@ def update_visited_edges(
         Updated list of cut ends.
     id_to_idx : dict
         Updated mapping from node ID to index in the unvisited_tree tensor.
+    terminal_nodes : set of int or None
+        Updated set of terminal nodes, with removed nodes filtered out.
     """
 
     if section_nodes is None:
-        return visited, unvisited_tree, adj_dict, cut_ends, id_to_idx
+        return visited, unvisited_tree, adj_dict, cut_ends, id_to_idx, terminal_nodes
 
     # update visited edges
     if cut_ends:
@@ -2007,7 +2106,7 @@ def update_visited_edges(
             swc_filtered = unvisited_tree[cut_ends_indices]
             node_coords = swc_filtered[:, 2:5]  # shape (M,3)
             # Compute distances
-            dists2 = torch.sum((node_coords - new_position.unsqueeze(0)) ** 2, dim=1)
+            dists2 = torch.sum((node_coords - prev_position.unsqueeze(0)) ** 2, dim=1)
             start_pos = node_coords[torch.argmin(dists2)]
         else:
             start_pos = prev_position
@@ -2074,7 +2173,7 @@ def update_visited_edges(
                 )
 
     if neuron_end_point is not None:
-        unvisited_tree, visited, adj_dict, changed_nodes = remove_visited(unvisited_tree, visited, adj_dict, id_to_idx=id_to_idx)
+        unvisited_tree, visited, adj_dict, changed_nodes = remove_visited(unvisited_tree, visited, adj_dict, id_to_idx=id_to_idx, terminal_nodes=terminal_nodes)
     
         # Update id_to_idx mapping
         if unvisited_tree.shape[0] > 0:
@@ -2082,26 +2181,24 @@ def update_visited_edges(
         else:
             id_to_idx = {}
 
-    
-        cut_ends.extend(changed_nodes)
+        updated_cut_ends = list(cut_ends)
+        updated_cut_ends.extend(changed_nodes)
         # remove nodes from cut ends that no longer exist
-        adj_get = adj_dict.get
         cut_ends = list({
             ce_int
-            for ce in cut_ends
+            for ce in updated_cut_ends
             for ce_int in (int(ce),)
-            if ce_int in id_to_idx
-            and adj_get(ce_int)
+            if ce_int in id_to_idx and ce_int in adj_dict
         })
 
-    return visited, unvisited_tree, adj_dict, cut_ends, id_to_idx
+    return visited, unvisited_tree, adj_dict, cut_ends, id_to_idx, terminal_nodes
 
 
 def update_current_section(
     new_position,
     section_nodes,
     unvisited_tree,
-    terminal_points,
+    terminal_nodes,
     cut_ends,
     adj_dict,
     id_to_idx,
@@ -2111,10 +2208,8 @@ def update_current_section(
     """
     Updates the current section nodes based on the proximity of cut ends to the new position. If no cut ends are within
     valid_dist2 pixels of the new position, the section nodes remain unchanged. For each cut end within
-    valid_dist2 pixels of the new position, add descendants of the cut end, up to a maximum geodesic distance,to the
-    current section nodes. Add terminal points encountered in the new section to the terminal points list. Remove
-    terminal points not in the new section and farther than valid_dist2 pixels from the new position from the terminal
-    points list.
+    valid_dist2 pixels of the new position, add descendants of the cut end, up to a maximum geodesic distance, to the
+    current section nodes. Replace terminal nodes with those encountered in the new section.
 
     Parameters
     ----------
@@ -2124,8 +2219,8 @@ def update_current_section(
         List of node IDs that are part of the current section, or None if all nodes are considered.
     unvisited_tree : torch.Tensor
         The current unvisited tree as an SWC tensor.
-    terminal_points : torch.Tensor or None
-        The current terminal points as a tensor of shape (N, 3), or None if there are no terminal points.
+    terminal_nodes : set of int or None
+        The current terminal node IDs, or None if there are no terminal nodes.
     cut_ends : list of int
         List of node IDs that are the current cut ends of the unvisited tree.
     adj_dict : dict
@@ -2142,19 +2237,18 @@ def update_current_section(
     section_nodes : list of int or None
         List of node IDs that are part of the current section based on proximity to cut ends, or None if there are no section
         nodes.
-    terminal_points : torch.Tensor or None
-        Updated tensor of terminal points including new terminals from the current section and excluding those farther than
-        valid_dist2 from the new position.
+    terminal_nodes : set of int or None
+        Updated set of terminal node IDs from the current section only (not accumulated from previous sections).
     """
-    terminal_nodes = None
+    new_terminal_nodes = None
     # Update section nodes based on proximity to the new position. Use any cut ends within close_dist pixels.
     if unvisited_tree.shape[0] == 0 or not cut_ends:
-        return section_nodes, terminal_points
+        return section_nodes, terminal_nodes
 
     id_lookup = id_to_idx.get
     cut_ends_indices = [idx for v in cut_ends for idx in (id_lookup(int(v)),) if idx is not None]
     if not cut_ends_indices:
-        return section_nodes, terminal_points
+        return section_nodes, terminal_nodes
 
     pos_row = new_position.unsqueeze(0)
     swc_filtered = unvisited_tree[cut_ends_indices]
@@ -2166,7 +2260,7 @@ def update_current_section(
     if torch.any(close_mask):
         close_cut_ends = [int(node_id) for node_id in swc_filtered[close_mask][:, 0].tolist()]
         section_nodes = []
-        terminal_nodes = []
+        new_terminal_nodes = set()
         for node in close_cut_ends:
             connected_nodes, terminals = _get_connected_nodes(
                 int(node),
@@ -2178,22 +2272,6 @@ def update_current_section(
                 cut_ends=cut_ends,
             )
             section_nodes.extend(connected_nodes)
-            terminal_nodes.extend(terminals)
+            new_terminal_nodes.update(terminals)
 
-    # Don't remove terminal points
-    # # remove terminal points that are not part of the section and farther than valid_dist from the new position
-    # if terminal_points is not None and terminal_points.shape[0] > 0:
-    #     dists2 = torch.sum((terminal_points - pos_row) ** 2, dim=1)
-    #     valid_mask = dists2 <= valid_dist2
-    #     terminal_points = terminal_points[valid_mask]
-    # and add new terminals to terminal points
-    if terminal_nodes:
-        new_terminal_points = [unvisited_tree[id_to_idx[int(t)], 2:5] for t in terminal_nodes]
-        new_terminal_points_t = torch.stack(new_terminal_points)
-        if terminal_points is None:
-            terminal_points = new_terminal_points_t
-        else:
-            terminal_points = torch.cat([terminal_points, new_terminal_points_t])
-
-
-    return section_nodes, terminal_points
+    return section_nodes, new_terminal_nodes

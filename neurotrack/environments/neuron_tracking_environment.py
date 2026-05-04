@@ -83,7 +83,7 @@ class NeuronTrackingEnvironment:
         self.branching = branching
         self.repeat_starts = repeat_starts
         self.inference_mode = inference_mode
-        self.close_dist2 = 7.0 ** 2  # distance threshold for cut end assignment and neuron end point assignment when removing visited edges
+        self.close_dist2 = 9.0 ** 2  # distance threshold for cut end assignment and neuron end point assignment when removing visited edges
         
         # Initialize other attributes that will be set when neuron data is loaded
         self.img = None
@@ -95,7 +95,7 @@ class NeuronTrackingEnvironment:
         self._zero_state_patch: Optional[torch.Tensor] = None
         self.finished_paths = []
         self.section_nodes = None
-        self.terminal_points = None # termination points for the current path
+        self.terminal_nodes = set() # terminal node IDs for the current path
         self.cut_ends = []
         self.visited = {}
         self.id_to_idx = {}
@@ -224,7 +224,7 @@ class NeuronTrackingEnvironment:
             self._init_path()
         else:
             self.visited = {}
-            self.terminal_points = torch.empty((0, 3), dtype=torch.float32)
+            self.terminal_nodes = set()
             self.target_vectors = self._zero_target_vectors()
             self.section_nodes = None
             self.section_assigned = False
@@ -331,19 +331,19 @@ class NeuronTrackingEnvironment:
         Assign new section nodes. If there are cut ends, sections nodes will begin from nearby cut ends. If not, from the nearest node within the agents observable window.
         If no unvisited nodes remain, or no nearby nodes, section nodes will be None.
         """
-        terminal_nodes = []
+        terminal_nodes = set()
         # Set default termination points, target vectors, and section nodes.
-        self.terminal_points = torch.empty((0, 3), dtype=torch.float32, device=self.unvisited_tree.device)
+        self.terminal_nodes = set()
         self.target_vectors = self._zero_target_vectors(device=self.unvisited_tree.device)
         self.section_nodes = None
         self.section_assigned = False
         current_position = self.paths[0][-1]
         # update section uses nearby cut ends. If there are no nearby cut ends, it will be a no-op and section_nodes will remain None.
-        self.section_nodes, self.terminal_points = update_current_section(
+        self.section_nodes, self.terminal_nodes = update_current_section(
             current_position,
             self.section_nodes,
             self.unvisited_tree,
-            self.terminal_points,
+            self.terminal_nodes,
             self.cut_ends,
             self.adj_dict,
             self.id_to_idx,
@@ -358,7 +358,7 @@ class NeuronTrackingEnvironment:
                 self.target_step_len,
                 adj_dict=self.adj_dict,
                 id_to_idx=self.id_to_idx,
-                terminal_points=self.terminal_points,
+                terminal_nodes=self.terminal_nodes,
                 valid_nodes=self.section_nodes,
                 valid_dist2=self.close_dist2,
             )
@@ -383,10 +383,7 @@ class NeuronTrackingEnvironment:
                         cut_ends=self.cut_ends,
                     )
                     if terminals:
-                        terminal_indices = [self.id_to_idx.get(int(t)) for t in terminals]
-                        terminal_indices = [idx for idx in terminal_indices if idx is not None]
-                        if terminal_indices:
-                            self.terminal_points = self.unvisited_tree[terminal_indices, 2:5]
+                        self.terminal_nodes.update([int(t) for t in terminals if int(t) in self.id_to_idx])
                     self.section_assigned = True
                     target_points, _unused_stop_flag, _nearest_dist2 = _compute_target_action(
                         current_position,
@@ -394,7 +391,7 @@ class NeuronTrackingEnvironment:
                         self.target_step_len,
                         adj_dict=self.adj_dict,
                         id_to_idx=self.id_to_idx,
-                        terminal_points=self.terminal_points,
+                        terminal_nodes=self.terminal_nodes,
                         valid_nodes=self.section_nodes,
                         valid_dist2=self.close_dist2,
                     )
@@ -437,9 +434,86 @@ class NeuronTrackingEnvironment:
                 self._append_branch_root(self.finished_paths[0][0])
 
         return terminate_episode
+
+
+    def _remove_terminal_path_on_stop(self, stop_position: torch.Tensor, terminal_distance: float = 3.0) -> bool:
+        """Remove a terminal node, and optionally its degree-1 neighbor, when stopping near that terminal."""
+        if self.unvisited_tree is None or self.unvisited_tree.numel() == 0:
+            return False
+        if not self.terminal_nodes:
+            return False
+
+        stop_position_t = torch.as_tensor(stop_position, dtype=torch.float32, device=self.unvisited_tree.device)
+        terminal_ids = [int(node_id) for node_id in self.terminal_nodes if int(node_id) in self.id_to_idx]
+        if not terminal_ids:
+            return False
+
+        terminal_coords = torch.stack([
+            self.unvisited_tree[self.id_to_idx[node_id], 2:5]
+            for node_id in terminal_ids
+        ], dim=0)
+        terminal_dists2 = torch.sum((terminal_coords - stop_position_t.unsqueeze(0)) ** 2, dim=1)
+        terminal_index = int(torch.argmin(terminal_dists2).item())
+        nearest_terminal_node = terminal_ids[terminal_index]
+        if float(terminal_dists2[terminal_index].item()) > terminal_distance ** 2:
+            return False
+
+        terminal_neighbors = [int(neighbor) for neighbor in self.adj_dict.get(nearest_terminal_node, [])]
+        if len(terminal_neighbors) == 0:
+            nodes_to_remove = {nearest_terminal_node}
+        elif len(terminal_neighbors) == 1:
+            neighbor_node = terminal_neighbors[0]
+            if neighbor_node not in self.id_to_idx:
+                return False
+            neighbor_neighbors = [int(neighbor) for neighbor in self.adj_dict.get(neighbor_node, [])]
+            neighbor_coords = self.unvisited_tree[self.id_to_idx[neighbor_node], 2:5]
+            terminal_coords_t = self.unvisited_tree[self.id_to_idx[nearest_terminal_node], 2:5]
+            neighbor_terminal_dist2 = torch.sum((neighbor_coords - terminal_coords_t) ** 2).item()
+            if len(neighbor_neighbors) == 1 and neighbor_neighbors[0] == nearest_terminal_node and neighbor_terminal_dist2 <= terminal_distance ** 2:
+                nodes_to_remove = {nearest_terminal_node, neighbor_node}
+            else:
+                return False
+        else:
+            return False
+
+        if not nodes_to_remove:
+            return False
+
+        # Remove path edges from the visited dictionary and adjacency graph.
+        for edge in list(self.visited.keys()):
+            if int(edge[0]) in nodes_to_remove or int(edge[1]) in nodes_to_remove:
+                del self.visited[edge]
+
+        for node_id in list(nodes_to_remove):
+            neighbors = list(self.adj_dict.get(node_id, []))
+            for neighbor in neighbors:
+                neighbor_i = int(neighbor)
+                if neighbor_i in self.adj_dict and node_id in self.adj_dict[neighbor_i]:
+                    self.adj_dict[neighbor_i].remove(node_id)
+                    if not self.adj_dict[neighbor_i]:
+                        del self.adj_dict[neighbor_i]
+            if node_id in self.adj_dict:
+                del self.adj_dict[node_id]
+
+        keep_mask = torch.tensor(
+            [int(node_id) not in nodes_to_remove for node_id in self.unvisited_tree[:, 0].tolist()],
+            dtype=torch.bool,
+            device=self.unvisited_tree.device,
+        )
+        self.unvisited_tree = self.unvisited_tree[keep_mask]
+        if self.unvisited_tree.shape[0] > 0:
+            self.id_to_idx = {int(node_id): idx for idx, node_id in enumerate(self.unvisited_tree[:, 0].tolist())}
+        else:
+            self.id_to_idx = {}
+
+        self.terminal_nodes = {int(node_id) for node_id in self.terminal_nodes if int(node_id) in self.id_to_idx}
+
+        self.cut_ends = [node_id for node_id in self.cut_ends if int(node_id) in self.id_to_idx]
+
+        return True
     
 
-    def step(self, action: torch.Tensor, verbose: bool = False) -> Tuple[torch.Tensor, torch.Tensor, bool]:
+    def step(self, action: torch.Tensor, verbose: bool = False, step_count: int = 0) -> Tuple[torch.Tensor, torch.Tensor, bool]:
         """
         Perform a single step in the environment.
         
@@ -481,8 +555,8 @@ class NeuronTrackingEnvironment:
             if status in ["out_of_image", "choose_stop", "oscillating"]: # then terminate path
 
                 # If the agent took a small step to stop, update visited edges based on the new position before termination.
-                if status == "choose_stop" and torch.any(action) > 0:
-                    if self.section_nodes is not None:
+                if status == "choose_stop":
+                    if torch.any(action) > 0 and self.section_nodes is not None:
                         # update visited edges
                         updates = update_visited_edges(
                             current_position,
@@ -493,8 +567,11 @@ class NeuronTrackingEnvironment:
                             self.id_to_idx,
                             self.adj_dict,
                             self.cut_ends,
+                            self.terminal_nodes,
                             self.close_dist2)
-                        self.visited, self.unvisited_tree, self.adj_dict, self.cut_ends, self.id_to_idx = updates
+                        self.visited, self.unvisited_tree, self.adj_dict, self.cut_ends, self.id_to_idx, self.terminal_nodes = updates
+                    # remove the terminal if the agent stopped within the terminal distance threshold of a terminal node. 
+                    self._remove_terminal_path_on_stop(new_position, terminal_distance=3.0)
 
                 terminated = True
                 # Terminate the branch, but the episode may continue.
@@ -527,11 +604,11 @@ class NeuronTrackingEnvironment:
 
                     # Check if section_nodes should be assigned (cut ends entered window)
                     if self.section_nodes is None and self.cut_ends:
-                        self.section_nodes, self.terminal_points = update_current_section(
+                        self.section_nodes, self.terminal_nodes = update_current_section(
                             new_position,
                             self.section_nodes,
                             self.unvisited_tree,
-                            self.terminal_points,
+                            self.terminal_nodes,
                             self.cut_ends,
                             self.adj_dict,
                             self.id_to_idx,
@@ -552,16 +629,17 @@ class NeuronTrackingEnvironment:
                             self.id_to_idx,
                             self.adj_dict,
                             self.cut_ends,
+                            self.terminal_nodes,
                             self.close_dist2)
-                        self.visited, self.unvisited_tree, self.adj_dict, self.cut_ends, self.id_to_idx = updates
+                        self.visited, self.unvisited_tree, self.adj_dict, self.cut_ends, self.id_to_idx, self.terminal_nodes = updates
 
                         # update_current_section is a no-op when cut_ends is empty or no nearby cut ends are found.
                         if self.cut_ends:
-                            self.section_nodes, self.terminal_points = update_current_section(
+                            self.section_nodes, self.terminal_nodes = update_current_section(
                                     new_position,
                                     self.section_nodes,
                                     self.unvisited_tree,
-                                    self.terminal_points,
+                                    self.terminal_nodes,
                                     self.cut_ends,
                                     self.adj_dict,
                                     self.id_to_idx,
@@ -591,9 +669,10 @@ class NeuronTrackingEnvironment:
                             self.target_step_len,
                             adj_dict=self.adj_dict,
                             id_to_idx=self.id_to_idx,
-                            terminal_points=self.terminal_points,
+                            terminal_nodes=self.terminal_nodes,
                             valid_nodes=self.section_nodes,
                             valid_dist2=self.close_dist2,
+                            step_count=step_count
                         )
                         self.target_vectors = target_points
                     info['next_target_vectors'] = self.target_vectors
@@ -628,7 +707,7 @@ class NeuronTrackingEnvironment:
         self.neuron_root_ids = set()
         self._zero_state_patch = None
         self.finished_paths = []
-        self.terminal_points = None # termination points for the current path
+        self.terminal_nodes = set() # terminal node IDs for the current path
         self.visited = {}
         self.id_to_idx = {}
         self.adj_dict = {}

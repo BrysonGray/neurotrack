@@ -127,24 +127,25 @@ def draw_2d_panel(ax, environment, cropped=False, sections=None,
     except Exception as e:
         print(f"Warning: target point computation failed: {e}")
 
-    if env.terminal_points is not None and len(env.terminal_points) > 0:
-        term_ys = [-pt[i].item() for pt in env.terminal_points]
-        term_xs = [pt[j].item() for pt in env.terminal_points]
-        if not cropped:
-            ax.scatter(term_xs, term_ys, color='red', s=100 * size_scale, marker='o', facecolors='none', linewidths=1.0 * size_scale, zorder=marker_zorder)
-        else:
-            term_xs_c = []
-            term_ys_c = []
-            for ty, tx in zip(term_ys, term_xs):
-                if in_crop(ty, tx):
-                    term_ys_c.append(ty)
-                    term_xs_c.append(tx)
-            if len(term_xs_c) > 0:
-                ax.scatter(term_xs_c, term_ys_c, color='red', s=100 * size_scale, marker='o', facecolors='none', linewidths=1.0 * size_scale, zorder=marker_zorder)
-    
-
     tree = getattr(env, 'unvisited_tree', None)
     id_to_idx = getattr(env, 'id_to_idx', {})
+    terminal_nodes = getattr(env, 'terminal_nodes', None)
+    if terminal_nodes is not None and len(terminal_nodes) > 0:
+        terminal_xs = []
+        terminal_ys = []
+        for node_id in terminal_nodes:
+            idx = id_to_idx.get(int(node_id))
+            if idx is None or tree is None or idx >= tree.shape[0]:
+                continue
+            node = tree[idx]
+            ty = -float(node[i + 2])
+            tx = float(node[j + 2])
+            if not cropped or in_crop(ty, tx):
+                terminal_ys.append(ty)
+                terminal_xs.append(tx)
+        if len(terminal_xs) > 0:
+            ax.scatter(terminal_xs, terminal_ys, color='red', s=100 * size_scale, marker='o', facecolors='none', linewidths=1.0 * size_scale, zorder=marker_zorder)
+
     if env.section_nodes is not None and tree is not None and getattr(tree, 'ndim', 0) >= 2 and tree.shape[0] > 0:
         valid_ys = []
         valid_xs = []
@@ -259,7 +260,7 @@ def run_expert_episode(env):
         current_target_vectors = _current_target_action_from_env(env)
         expert_action = select_expert_action(current_target_vectors, previous_action=prev_expert_action)
 
-        next_obs, reward, terminated, _truncated, info = env.step(expert_action)
+        next_obs, reward, terminated, _truncated, info = env.step(expert_action, step_count=steps_done)
         steps_done += 1
         total_reward += float(torch.as_tensor(reward, dtype=torch.float32).item())
         step_len = float(torch.linalg.norm(expert_action).item())
@@ -847,25 +848,25 @@ def manual_step(env, step_size=4.0, display_mode='all'):
             )
             ax_main.set_title('')
             legend_handles = [
-                Line2D([0], [0], marker='x', color='none', markeredgecolor=target_color, markersize=10, label='Target points'),
-                Line2D([0], [0], marker='o', color='none', markeredgecolor='red', markerfacecolor='none', markersize=9, label='Terminal points'),
+                Line2D([0], [0], marker='x', color='none', markeredgecolor=target_color, markersize=10, markeredgewidth=4, label='Target points'),
+                Line2D([0], [0], marker='o', color='none', markeredgecolor='red', markerfacecolor='none', markersize=9, markeredgewidth=4, label='Terminal points'),
                 Line2D([0], [0], marker='o', color='none', markeredgecolor='blue', markerfacecolor='blue', alpha=0.5, markersize=8, label='Section nodes'),
                 Line2D([0], [0], marker='*', color='none', markeredgecolor='cyan', markerfacecolor='cyan', markersize=10, label='Nearest point'),
-                Line2D([0], [0], marker='o', color='none', markeredgecolor='lime', markerfacecolor='none', markersize=9, label='Branch roots'),
-                Line2D([0], [0], marker='D', color='none', markeredgecolor='purple', markerfacecolor='none', markersize=8, label='Cut ends'),
+                Line2D([0], [0], marker='o', color='none', markeredgecolor='lime', markerfacecolor='none', markersize=9, markeredgewidth=4, label='Branch roots'),
+                Line2D([0], [0], marker='D', color='none', markeredgecolor='purple', markerfacecolor='none', markersize=8, markeredgewidth=4, label='Cut ends'),
             ]
             # Add vertical breathing room without hard-coding absolute limits.
             ax_main.margins(y=0.2)
-            ax_main.legend(
-            handles=legend_handles,
-            loc='center right',
-            framealpha=0.85,
-            fontsize=14,
-            markerscale=1.5,
-            borderpad=0.8,
-            labelspacing=0.7,
-            handletextpad=0.7,
-            )
+            # ax_main.legend(
+            # handles=legend_handles,
+            # loc='center right',
+            # framealpha=0.85,
+            # fontsize=24,
+            # markerscale=4.0,
+            # borderpad=0.8,
+            # labelspacing=1.0,
+            # handletextpad=0.7,
+            # )
             ax_main.set_position([0.0, 0.0, 1.0, 1.0])
         else:
             img = env.img.data[0].amax(dim=0)
@@ -926,6 +927,7 @@ def manual_step(env, step_size=4.0, display_mode='all'):
             _render(env.get_state(), reward=None, info=None, action=None)
 
         else:
+
             if action_key not in user_input_dict and action_key not in {'x', 'e', 't', 'g'}:
                 print(f"Unrecognized action '{action_key}'. Valid: w/a/s/d, p/l, x, e, t, z, g, r, b, q")
                 continue
@@ -951,7 +953,7 @@ def manual_step(env, step_size=4.0, display_mode='all'):
 
                 for _ in range(burst_steps):
                     action, choose_stop = _get_expert_action_and_stop()
-                    last_observation, last_reward, terminated, truncated, last_info = env.step(action, verbose=True)
+                    last_observation, last_reward, terminated, truncated, last_info = env.step(action, verbose=True, step_count=total_steps)
                     total_steps += 1
                     last_action = action
 
@@ -991,10 +993,12 @@ def manual_step(env, step_size=4.0, display_mode='all'):
                 choose_stop = False
                 use_explicit_stop = True
 
-            observation, reward, terminated, truncated, info = env.step(action, verbose=True)
+            observation, reward, terminated, truncated, info = env.step(action, verbose=True, step_count=total_steps)
             total_steps += 1
 
             _render(observation, reward=reward, info=info, action=action)
+            # fig.canvas.draw()  # ensure the figure is rendered before saving
+            # fig.savefig(f'step{step_count}_snapshot.png')
 
             if info.get('terminate_episode'):
                 print('All paths finished. Final state is shown; press r to reset.')
@@ -1005,6 +1009,9 @@ def manual_step(env, step_size=4.0, display_mode='all'):
     try:
         _render(env.get_state(), reward=None, info=last_info_snapshot, action=None)
         ipy_display(plt.gcf())
+        # save the current state of the figure to a file for reference
+        # fig.canvas.draw()  # ensure the figure is rendered before saving
+        # fig.savefig(f'step{step_count}_snapshot.png')
     except Exception:
         pass
 

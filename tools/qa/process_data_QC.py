@@ -210,33 +210,38 @@ if __name__ == "__main__":
     import sys
     
     # Default directories to process (tiff_dir, swc_dir, title)
-    dataset_configs = [
-        (
-            "/home/brysongray/data/neurotrack_data/gold166/gold166_cropped/train_set/images",
-            "/home/brysongray/data/neurotrack_data/gold166/gold166_cropped/train_set/morphology",
-            "Training Set"
-        ),
-        (
-            "/home/brysongray/data/neurotrack_data/gold166/gold166_cropped/validate_set/images",
-            "/home/brysongray/data/neurotrack_data/gold166/gold166_cropped/validate_set/morphology",
-            "Validation Set"
-        ),
-        (
-            "/home/brysongray/data/neurotrack_data/gold166/gold166_cropped/test_set/images",
-            "/home/brysongray/data/neurotrack_data/gold166/gold166_cropped/test_set/morphology",
-            "Test Set"
-        )
-    ]
-
     # dataset_configs = [
     #     (
-    #         "/home/brysongray/data/neurotrack_data/gold166/gold166_cleaned/all/images",
-    #         "/home/brysongray/data/neurotrack_data/gold166/gold166_cleaned/all/morphology_soma_removed_deduped",
-    #         "Whole Set"
+    #         "/home/brysongray/data/neurotrack_data/gold166/gold166_cropped/train_set/images",
+    #         "/home/brysongray/data/neurotrack_data/gold166/gold166_cropped/train_set/morphology",
+    #         "Training Set"
+    #     ),
+    #     (
+    #         "/home/brysongray/data/neurotrack_data/gold166/gold166_cropped/validate_set/images",
+    #         "/home/brysongray/data/neurotrack_data/gold166/gold166_cropped/validate_set/morphology",
+    #         "Validation Set"
+    #     ),
+    #     (
+    #         "/home/brysongray/data/neurotrack_data/gold166/gold166_cropped/test_set/images",
+    #         "/home/brysongray/data/neurotrack_data/gold166/gold166_cropped/test_set/morphology",
+    #         "Test Set"
     #     )
     # ]
+
+    dataset_configs = [
+        # (
+        #     "/home/brysongray/data/neurotrack_data/gold166/gold166_cleaned/all/images",
+        #     "/home/brysongray/data/neurotrack_data/gold166/gold166_cleaned/all/morphology_soma_removed_deduped",
+        #     "Whole Set"
+        # )
+        (
+            "/home/brysongray/bmap/data/neurotrack_data/gold166/gold166_cropped/train_set_soma_removed/images",
+            "/home/brysongray/bmap/data/neurotrack_data/gold166/gold166_cropped/train_set_soma_removed/morphology",
+            "Training Set (Soma Removed)"
+        )
+    ]
     
     # Output to outputs/data_QC directory
-    output_dir = str(Path(__file__).resolve().parents[2] / "outputs" / "cropped_QC")
+    output_dir = str(Path(__file__).resolve().parents[2] / "outputs" / "cropped_remote_QC")
     
     process_dataset(dataset_configs, output_dir)

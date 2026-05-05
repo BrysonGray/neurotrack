@@ -10,13 +10,15 @@ BASE_CONFIG="${BASE_CONFIG:-$BASE_DIR/configs/training/train_bc_example.json}"
 SEED_START="${SEED_START:-1}"
 TMP_ROOT="${TMP_ROOT:-${SLURM_TMPDIR:-/tmp}/neurotrack_bc_${SLURM_JOB_ID:-local}}"
 CONFIG_DIR="$TMP_ROOT/configs"
+PYTHON_BIN="${PYTHON_BIN:-/ifshome/bgray/anaconda3/envs/intel_env/bin/python}"
 
 mkdir -p "$CONFIG_DIR"
 export CONFIG_DIR
+export PYTHON_BIN
 
 JOB_NODE_COUNT="${SLURM_NNODES:-${SLURM_JOB_NUM_NODES:-1}}"
 
-python - "$BASE_CONFIG" "$CONFIG_DIR" "$JOB_NODE_COUNT" "$SEED_START" <<'PY'
+"$PYTHON_BIN" - "$BASE_CONFIG" "$CONFIG_DIR" "$JOB_NODE_COUNT" "$SEED_START" <<'PY'
 import json
 import pathlib
 import sys
@@ -51,10 +53,10 @@ srun \
     --ntasks="$JOB_NODE_COUNT" \
     --ntasks-per-node=1 \
     --kill-on-bad-exit=1 \
-    bash -c '
+    /bin/bash -c '
         set -euo pipefail
         node_id="${SLURM_NODEID:-${SLURM_PROCID:-0}}"
         cfg="${CONFIG_DIR}/node_$(printf "%02d" "$node_id").json"
         echo "[$node_id] Starting training with ${cfg}"
-        python -m neurotrack.cli.run_bc_train -i "$cfg"
+        "${PYTHON_BIN}" -m neurotrack.cli.run_bc_train -i "$cfg"
     '

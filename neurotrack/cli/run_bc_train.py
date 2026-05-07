@@ -127,7 +127,6 @@ class BCTrainConfig:
     crop_patches: bool = True
     dagger_rounds: int = 0
     rollout_episodes_per_round: int = 1000
-    dataset_epochs_per_round: int = 1
     update_after_steps: int = 500
     update_every: Optional[int] = None
     updates_per_step: int = 1
@@ -195,7 +194,6 @@ class BCTrainConfig:
             crop_patches=bool(_get_param(params, "crop_patches", default=True)),
             dagger_rounds=int(_get_param(params, "dagger_rounds", default=0)),
             rollout_episodes_per_round=rollout_episodes_per_round,
-            dataset_epochs_per_round=int(_get_param(params, "dataset_epochs_per_round", "epochs_per_round", default=1)),
             update_after_steps=int(_get_param(params, "update_after_steps", default=500)),
             update_every=None if update_every_raw is None else int(update_every_raw),
             updates_per_step=int(_get_param(params, "updates_per_step", default=1)),
@@ -238,8 +236,6 @@ class BCTrainConfig:
             raise ValueError("save_every_steps must be > 0.")
         if self.rollout_episodes_per_round <= 0:
             raise ValueError("rollout_episodes_per_round must be > 0.")
-        if self.dataset_epochs_per_round <= 0:
-            raise ValueError("dataset_epochs_per_round must be > 0.")
         if self.update_after_steps <= 0:
             raise ValueError("update_after_steps must be > 0.")
         if self.updates_per_step <= 0:
@@ -347,7 +343,6 @@ def _run_single_experiment(params: Dict, config_path: Path) -> None:
             warmstart_episodes=config.warmstart_episodes,
             dagger_rounds=config.dagger_rounds,
             rollout_episodes_per_round=config.rollout_episodes_per_round,
-            dataset_epochs_per_round=config.dataset_epochs_per_round,
             beta_start=config.beta_start,
             beta_end=config.beta_end,
             save_every_steps=config.save_every_steps,

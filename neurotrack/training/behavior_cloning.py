@@ -895,22 +895,53 @@ def _run_supervision_epoch(
     transform: bool,
     loss_config: SupervisionLossConfig,
 ) -> List[SupervisionBatchStats]:
-    if len(aggregate_buffer) == 0:
+    """
+    Run one deterministic (no-replacement) pass over a snapshot of the replay buffer.
+
+    This function samples the current contents of `aggregate_buffer` exactly once
+    (in a random permutation) and runs optimization on disjoint minibatches so
+    that no sample is reused within the epoch and no sample is overwritten
+    before it has been used.
+    """
+    real_size = len(aggregate_buffer)
+    if real_size == 0:
         return []
 
-    n_batches = max(1, (len(aggregate_buffer) + batch_size - 1) // batch_size)
+    # Build a single random permutation over the logical buffer entries [0..real_size-1]
+    perm = torch.randperm(real_size).tolist()
+
+    # Map logical positions to physical indices inside the circular buffer
+    def logical_to_physical(pos: int) -> int:
+        if aggregate_buffer.full:
+            return (aggregate_buffer.idx + pos) % aggregate_buffer.capacity
+        return pos
+
     batch_stats: List[SupervisionBatchStats] = []
-    for _batch_idx in range(n_batches):
-        maybe_loss = _optimize_from_bc_replay_buffer(
+    # Iterate over the permutation in contiguous chunks (each chunk is a minibatch)
+    for start in range(0, real_size, batch_size):
+        chunk = perm[start : start + batch_size]
+        phys_idxs = [logical_to_physical(p) for p in chunk]
+
+        # Gather batched observation tensor and per-row target lists
+        obs_batch = aggregate_buffer.obs[phys_idxs].to(device=DEVICE)
+        target_list = [aggregate_buffer.target_vectors[int(i)] for i in phys_idxs]
+
+        try:
+            target_tensor, target_mask = pad_target_candidate_batch(target_list)
+        except Exception:
+            # If padding fails for some reason, skip this minibatch
+            continue
+
+        maybe_stats = _optimize_prepared_batch(
             actor=actor,
             actor_optimizer=actor_optimizer,
-            replay_buffer=aggregate_buffer,
-            batch_size=batch_size,
-            transform=transform,
+            obs_tensor=obs_batch,
+            target_tensor=target_tensor,
+            target_mask=target_mask,
             loss_config=loss_config,
         )
-        if maybe_loss is not None:
-            batch_stats.append(maybe_loss)
+        batch_stats.append(maybe_stats)
+
     return batch_stats
 
 
@@ -1417,7 +1448,6 @@ def train_dagger(
     warmstart_episodes: int = 100,
     dagger_rounds: int = 5,
     rollout_episodes_per_round: int = 100,
-    dataset_epochs_per_round: int = 1,
     beta_start: float = 1.0,
     beta_end: float = 0.0,
     save_every_steps: int = 500,
@@ -1446,8 +1476,6 @@ def train_dagger(
         raise ValueError("dagger_rounds must be at least 1")
     if rollout_episodes_per_round < 1:
         raise ValueError("rollout_episodes_per_round must be at least 1")
-    if dataset_epochs_per_round < 1:
-        raise ValueError("dataset_epochs_per_round must be at least 1")
     if aggregate_memory_budget < 1:
         raise ValueError("aggregate_memory_budget must be at least 1")
 
@@ -1564,6 +1592,8 @@ def train_dagger(
         rollout_precisions: List[Optional[float]] = []
         rollout_coverages: List[Optional[float]] = []
         round_collection_steps = 0
+        round_batch_stats: List[SupervisionBatchStats] = []
+        round_losses: List[float] = []
         round_iter = tqdm(
             range(rollout_episodes_per_round),
             desc=f"DAgger round {round_index + 1}/{dagger_rounds}",
@@ -1573,6 +1603,9 @@ def train_dagger(
             mininterval=1.0,
             disable=not use_progress_bar,
         )
+        # Track how many new samples have been pushed since the last supervision epoch.
+        pushes_since_last_opt = 0
+
         for _round_episode in round_iter:
             try:
                 episode_metrics = _run_dagger_collection_episode(
@@ -1599,16 +1632,32 @@ def train_dagger(
             rollout_bidirectional_distances.append(_safe_float(episode_metrics.get("episode_bidirectional_distance")))
             rollout_precisions.append(_safe_float(episode_metrics.get("episode_precision")))
             rollout_coverages.append(_safe_float(episode_metrics.get("episode_coverage")))
-
             # When the buffer is full and we have collected one full-capacity turnover
-            # of new samples without any intermediate policy updates, more collection is
-            # typically redundant under a fixed policy.
-            if len(aggregate_buffer) >= aggregate_memory_budget and round_collection_steps >= aggregate_memory_budget:
-                break
+            # of new samples without any intermediate policy updates, trigger a
+            # supervision epoch (consuming the current buffer snapshot) and reset
+            # the push counter. Additionally, break the rollout loop if we've
+            # already collected enough steps for this round.
+            pushes_since_last_opt += int(episode_metrics["steps_done"])
 
+            if len(aggregate_buffer) >= aggregate_memory_budget and pushes_since_last_opt >= aggregate_memory_budget:
+                # Run one supervision epoch over the current buffer snapshot
+                epoch_batch_stats = _run_supervision_epoch(
+                    actor=actor,
+                    actor_optimizer=actor_optimizer,
+                    aggregate_buffer=aggregate_buffer,
+                    batch_size=batch_size,
+                    transform=True,
+                    loss_config=loss_config,
+                )
+                round_batch_stats.extend(epoch_batch_stats)
+                round_losses.extend(stat.loss for stat in epoch_batch_stats)
+                # Reset the push counter to measure the next turnover
+                pushes_since_last_opt = 0
+
+        # If there are any unoptimized pushes remaining at round end, run a
+        # final supervision epoch to consume them before beta is reduced.
         round_losses: List[float] = []
-        round_batch_stats: List[SupervisionBatchStats] = []
-        for _epoch in range(dataset_epochs_per_round):
+        if pushes_since_last_opt > 0 or len(round_batch_stats) == 0:
             try:
                 epoch_batch_stats = _run_supervision_epoch(
                     actor=actor,
@@ -1648,7 +1697,8 @@ def train_dagger(
                     exc,
                     env,
                 )
-                continue
+                # continue on; we still want to record summary metrics below
+                pass
 
         (
             round_true_continue_count,

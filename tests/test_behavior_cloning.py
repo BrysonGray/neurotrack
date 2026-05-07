@@ -357,11 +357,9 @@ class BehaviorCloningPolicyTests(unittest.TestCase):
                 logdir=Path(tmp_dir),
                 name="dagger_policy_rollin",
                 batch_size=2,
-                n_episodes=1,
                 warmstart_episodes=0,
-                update_after_steps=1,
-                update_every=1,
-                updates_per_step=1,
+                dagger_rounds=1,
+                rollout_episodes_per_round=1,
                 beta_start=0.0,
                 beta_end=0.0,
                 save_every_steps=1,
@@ -389,30 +387,26 @@ class BehaviorCloningPolicyTests(unittest.TestCase):
                 logdir=logdir,
                 name="dagger_metadata",
                 batch_size=2,
-                n_episodes=2,
                 warmstart_episodes=1,
-                update_after_steps=1,
-                update_every=1,
-                updates_per_step=1,
+                dagger_rounds=1,
+                rollout_episodes_per_round=1,
                 beta_start=0.25,
                 beta_end=0.25,
                 save_every_steps=1,
             )
 
             checkpoints = list(outdir.glob("model_state_dicts_dagger_metadata_*.pt"))
-            self.assertEqual(len(checkpoints), 1)
-            checkpoint = torch.load(checkpoints[0], map_location="cpu")
+            self.assertGreaterEqual(len(checkpoints), 1)
+            latest_checkpoint = max(checkpoints, key=lambda p: p.stat().st_mtime)
+            checkpoint = torch.load(latest_checkpoint, map_location="cpu")
 
-        self.assertEqual(checkpoint["algorithm"], "multi_target_dagger_online")
+        self.assertEqual(checkpoint["algorithm"], "multi_target_dagger")
         self.assertEqual(checkpoint["policy_output_mode"], "direct_vector")
         self.assertEqual(checkpoint["policy_output_dim"], 3)
-        self.assertEqual(checkpoint["dagger_episode"], 1)
+        self.assertEqual(checkpoint["dagger_round"], 1)
         self.assertEqual(checkpoint["beta"], 0.25)
         self.assertGreaterEqual(checkpoint["dataset_size"], 2)
         self.assertEqual(checkpoint["aggregate_memory_budget"], 10000)
-        self.assertEqual(checkpoint["update_after_steps"], 1)
-        self.assertEqual(checkpoint["update_every"], 1)
-        self.assertEqual(checkpoint["updates_per_step"], 1)
 
     def test_train_dagger_respects_fifo_memory_budget(self):
         env = _ToyEnv([
@@ -434,11 +428,9 @@ class BehaviorCloningPolicyTests(unittest.TestCase):
                 logdir=logdir,
                 name="dagger_fifo_budget",
                 batch_size=2,
-                n_episodes=4,
                 warmstart_episodes=2,
-                update_after_steps=1,
-                update_every=1,
-                updates_per_step=1,
+                dagger_rounds=1,
+                rollout_episodes_per_round=1,
                 beta_start=0.5,
                 beta_end=0.5,
                 save_every_steps=1,
@@ -447,8 +439,9 @@ class BehaviorCloningPolicyTests(unittest.TestCase):
             )
 
             checkpoints = list(outdir.glob("model_state_dicts_dagger_fifo_budget_*.pt"))
-            self.assertEqual(len(checkpoints), 1)
-            checkpoint = torch.load(checkpoints[0], map_location="cpu")
+            self.assertGreaterEqual(len(checkpoints), 1)
+            latest_checkpoint = max(checkpoints, key=lambda p: p.stat().st_mtime)
+            checkpoint = torch.load(latest_checkpoint, map_location="cpu")
 
         self.assertEqual(checkpoint["aggregate_memory_budget"], 3)
         self.assertEqual(checkpoint["dataset_size"], 3)

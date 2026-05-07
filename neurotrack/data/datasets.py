@@ -89,10 +89,15 @@ class NeuronPatchDataset(TorchDataset):
             Random offset to add to sampled points.
 
         """
+        self.rng = rng or np.random.default_rng(0)
         self.swc_files = []
         if swc_dir is not None:
             swc_dir = Path(swc_dir)
             self.swc_files = sorted(file for file in swc_dir.rglob("*.swc") if file.is_file())
+            # Randomly permute the SWC file order
+            if len(self.swc_files) > 0:
+                perm_indices = self.rng.permutation(len(self.swc_files))
+                self.swc_files = [self.swc_files[i] for i in perm_indices]
         img_dir = Path(img_dir)
         self.img_dir = img_dir
         self.img_files_unordered = sorted(f for f in img_dir.rglob("*.tif") if f.is_file())
@@ -118,7 +123,6 @@ class NeuronPatchDataset(TorchDataset):
 
         self.crop_size = crop_size
         self.patches_per_image = patches_per_image
-        self.rng = rng or np.random.default_rng(0)
         self.alpha = alpha
         self.step_width = float(step_width)
         self.crop_patches = crop_patches

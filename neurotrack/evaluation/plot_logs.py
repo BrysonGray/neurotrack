@@ -5,57 +5,106 @@ import numpy as np
 from pathlib import Path
 
 def plot_logs(logs_csv: Path, output_dir: Path):
-    # CSV fields expected: episode,image_file,num_branches,episode_avg_reward,episode_avg_var,episode_return,episode_avg_policy_loss,moving_avg_reward,complexity
-    # We want to plot moving_avg_reward, episode_return and episode_avg_policy_loss over episodes
-    logs = []
+    """
+    Plot training logs with separate plots for each metric.
+    
+    An epoch is defined as all episodes until the first image file repeats.
+    Each point represents the average value across all episodes in that epoch.
+    Creates 4 separate plots:
+    - episode_avg_loss
+    - episode_avg_step_mse
+    - false_stop_rate
+    - false_continue_rate
+    """
+    # Parse CSV: episode,image_file,episode_avg_reward,episode_avg_loss,episode_avg_step_mse,
+    #            episode_avg_expert_step_norm,false_stop_rate,false_continue_rate,steps_done,complexity
+    epochs_data = []
+    current_epoch = {
+        "losses": [],
+        "step_mses": [],
+        "false_stops": [],
+        "false_continues": []
+    }
+    seen_images = set()
+    
     with open(logs_csv, "r") as f:
         next(f)  # Skip header
         for line in f:
             fields = line.strip().split(",")
-            log = {
-                "episode": int(fields[2]),
-                "image_file": fields[3],
-                "episode_avg_reward": float(fields[4]),
-                "episode_avg_loss": float(fields[5]),
-                "false_stop_rate": float(fields[8]),
-                "false_continue_rate": float(fields[9])
-            }
-            logs.append(log)
-
-    # Sort logs by episode
-    logs.sort(key=lambda x: x["episode"])
-    episodes = [log["episode"] for log in logs]
-    episode_avg_rewards = [log["episode_avg_reward"] for log in logs]
-    update_episodes = [log["episode"] for log in logs if log["episode_avg_loss"] > 0.0]
-    episode_avg_loss = [log["episode_avg_loss"] for log in logs if log["episode_avg_loss"] > 0.0]
-    false_stop_rates = [log["false_stop_rate"] for log in logs if "false_stop_rate" in log]
-    false_continue_rates = [log["false_continue_rate"] for log in logs if "false_continue_rate" in log]
-
-
-    plt.figure(figsize=(16, 8))
-    plt.subplot(4, 1, 1)
-    plt.plot(episodes, episode_avg_rewards, label="Episode Avg Reward", color="blue")
-    plt.xlabel("Episode")
-    plt.ylabel("Moving Avg Reward")
-    plt.legend()
-    plt.subplot(4, 1, 2)
-    plt.plot(update_episodes, episode_avg_loss, label="Episode Avg Loss", color="green")
-    plt.xlabel("Episode")
-    plt.ylabel("Episode Avg Loss")
-    plt.legend()
-    plt.subplot(4, 1, 3)
-    plt.scatter(episodes, false_stop_rates, label="False Stop Rate", color="red", s=5)
-    plt.xlabel("Episode")
-    plt.ylabel("False Stop Rate")
-    plt.legend()
-    plt.subplot(4, 1, 4)
-    plt.scatter(episodes, false_continue_rates, label="False Continue Rate", color="purple", s=5)
-    plt.xlabel("Episode")
-    plt.ylabel("False Continue Rate")
-    plt.legend()
+            image_file = fields[1]
+            episode_avg_loss = float(fields[3])
+            episode_avg_step_mse = float(fields[4])
+            false_stop_rate = float(fields[6])
+            false_continue_rate = float(fields[7])
+            
+            # Check if we've seen this image before (marks start of new epoch)
+            if image_file in seen_images:
+                # Save current epoch and start a new one
+                epochs_data.append(current_epoch)
+                current_epoch = {
+                    "losses": [],
+                    "step_mses": [],
+                    "false_stops": [],
+                    "false_continues": []
+                }
+                seen_images = set()
+            
+            seen_images.add(image_file)
+            current_epoch["losses"].append(episode_avg_loss)
+            current_epoch["step_mses"].append(episode_avg_step_mse)
+            current_epoch["false_stops"].append(false_stop_rate)
+            current_epoch["false_continues"].append(false_continue_rate)
+    
+    # Don't forget the last epoch
+    if current_epoch["losses"]:
+        epochs_data.append(current_epoch)
+    
+    # Aggregate: calculate mean for each epoch
+    epoch_numbers = list(range(1, len(epochs_data) + 1))
+    avg_losses = [np.mean(e["losses"]) for e in epochs_data]
+    avg_step_mses = [np.mean(e["step_mses"]) for e in epochs_data]
+    avg_false_stops = [np.mean(e["false_stops"]) for e in epochs_data]
+    avg_false_continues = [np.mean(e["false_continues"]) for e in epochs_data]
+    
+    # Create figure with 4 subplots
+    fig, axes = plt.subplots(4, 1, figsize=(12, 12))
+    
+    # Plot 1: episode_avg_loss
+    axes[0].plot(epoch_numbers, avg_losses, label="Episode Avg Loss", color="blue", linewidth=2)
+    axes[0].set_xlabel("Epoch")
+    axes[0].set_ylabel("Episode Avg Loss")
+    axes[0].set_title("Average Loss per Epoch")
+    axes[0].legend()
+    axes[0].grid(True, alpha=0.3)
+    
+    # Plot 2: episode_avg_step_mse
+    axes[1].plot(epoch_numbers, avg_step_mses, label="Episode Avg Step MSE", color="green", linewidth=2)
+    axes[1].set_xlabel("Epoch")
+    axes[1].set_ylabel("Episode Avg Step MSE")
+    axes[1].set_title("Average Step MSE per Epoch")
+    axes[1].legend()
+    axes[1].grid(True, alpha=0.3)
+    
+    # Plot 3: false_stop_rate
+    axes[2].plot(epoch_numbers, avg_false_stops, label="False Stop Rate", color="red", linewidth=2)
+    axes[2].set_xlabel("Epoch")
+    axes[2].set_ylabel("False Stop Rate")
+    axes[2].set_title("Average False Stop Rate per Epoch")
+    axes[2].legend()
+    axes[2].grid(True, alpha=0.3)
+    
+    # Plot 4: false_continue_rate
+    axes[3].plot(epoch_numbers, avg_false_continues, label="False Continue Rate", color="purple", linewidth=2)
+    axes[3].set_xlabel("Epoch")
+    axes[3].set_ylabel("False Continue Rate")
+    axes[3].set_title("Average False Continue Rate per Epoch")
+    axes[3].legend()
+    axes[3].grid(True, alpha=0.3)
+    
     plt.tight_layout()
     output_file = output_dir / f"training_logs_plot_{logs_csv.stem}.png"
-    plt.savefig(output_file)
+    plt.savefig(output_file, dpi=100)
+    plt.close()
     print(f"Plot saved to {output_file}")
 
 if __name__ == "__main__":

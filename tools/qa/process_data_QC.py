@@ -235,13 +235,13 @@ if __name__ == "__main__":
         #     "Whole Set"
         # )
         (
-            "/home/brysongray/bmap/data/neurotrack_data/gold166/gold166_cropped/train_set_soma_removed/images",
-            "/home/brysongray/bmap/data/neurotrack_data/gold166/gold166_cropped/train_set_soma_removed/morphology",
-            "Training Set (Soma Removed)"
+            "/home/brysongray/data/neurotrack_data/gold166/gold166_cropped/train_set_soma_removed/images_synthetic_simple",
+            "/home/brysongray/data/neurotrack_data/gold166/gold166_cropped/train_set_soma_removed/morphology",
+            "Training Set (Soma Removed Synthetic Simple)"
         )
     ]
     
     # Output to outputs/data_QC directory
-    output_dir = str(Path(__file__).resolve().parents[2] / "outputs" / "cropped_remote_QC")
+    output_dir = str(Path(__file__).resolve().parents[2] / "outputs" / "cropped_synthetic_simple_QC")
     
     process_dataset(dataset_configs, output_dir)

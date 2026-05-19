@@ -1259,6 +1259,10 @@ def train(
     fill_rewards: List[float] = []
     fill_step_norms: List[float] = []
 
+    steps_progress = None
+    if use_progress_bar:
+        steps_progress = tqdm(total=total_steps, desc="BC steps", unit="step")
+
     while steps_done < total_steps:
         # Limit collection so we pause exactly when enough new samples
         # have been accumulated for an optimization pass.
@@ -1279,6 +1283,8 @@ def train(
 
         steps_done += episode_steps
         episodes_done += 1
+        if steps_progress is not None:
+            steps_progress.update(episode_steps)
         rewards.append(float(episode_metrics["episode_avg_reward"]))
         step_norms.append(float(episode_metrics["episode_avg_expert_step_norm"]))
         fill_rewards.append(float(episode_metrics["episode_avg_reward"]))
@@ -1344,6 +1350,9 @@ def train(
         steps_since_last_optimization = 0
         fill_rewards.clear()
         fill_step_norms.clear()
+
+    if steps_progress is not None:
+        steps_progress.close()
 
 
 
@@ -1461,6 +1470,9 @@ def train_dagger(
         warm_step_norms: List[float] = []
         warm_fill_rewards: List[float] = []
         warm_fill_step_norms: List[float] = []
+        warmstart_progress = None
+        if use_progress_bar:
+            warmstart_progress = tqdm(total=warmstart_steps, desc="Warmstart steps", unit="step")
 
         while warmstart_steps_done < warmstart_steps:
             try:
@@ -1480,6 +1492,8 @@ def train_dagger(
             warmstart_steps_done += episode_steps
             steps_done += episode_steps
             episodes_done += 1
+            if warmstart_progress is not None:
+                warmstart_progress.update(episode_steps)
             warm_rewards.append(float(episode_metrics["episode_avg_reward"]))
             warm_step_norms.append(float(episode_metrics["episode_avg_expert_step_norm"]))
             warm_fill_rewards.append(float(episode_metrics["episode_avg_reward"]))
@@ -1551,6 +1565,13 @@ def train_dagger(
             warm_fill_rewards.clear()
             warm_fill_step_norms.clear()
 
+        if warmstart_progress is not None:
+            warmstart_progress.close()
+
+    rounds_progress = None
+    if use_progress_bar:
+        rounds_progress = tqdm(total=dagger_rounds, desc="DAgger rounds", unit="round")
+
     for round_index in range(dagger_rounds):
         beta = _compute_dagger_beta(round_index, dagger_rounds=dagger_rounds, beta_start=beta_start, beta_end=beta_end)
         if not use_progress_bar:
@@ -1565,6 +1586,14 @@ def train_dagger(
         fill_coverages: List[Optional[float]] = []
 
         round_collection_steps = 0
+        steps_progress = None
+        if use_progress_bar:
+            steps_progress = tqdm(
+                total=steps_per_round,
+                desc=f"Round {round_index + 1} steps",
+                unit="step",
+                leave=False,
+            )
         while round_collection_steps < steps_per_round:
             try:
                 steps_budget = min(steps_per_round - round_collection_steps, buffer_capacity - steps_since_last_optimization)
@@ -1591,6 +1620,8 @@ def train_dagger(
             steps_done += episode_steps
             episodes_done += 1
             round_collection_steps += episode_steps
+            if steps_progress is not None:
+                steps_progress.update(episode_steps)
 
             r_reward = float(episode_metrics["episode_avg_reward"])
             r_step_norm = float(episode_metrics["episode_avg_expert_step_norm"])
@@ -1689,12 +1720,21 @@ def train_dagger(
             fill_precisions.clear()
             fill_coverages.clear()
 
+        if steps_progress is not None:
+            steps_progress.close()
+
         # reset env between rounds, but keep memory_buffer contents
         try:
             env.reset(return_state=True)
         except Exception:
             # best-effort reset; continue regardless
             pass
+
+        if rounds_progress is not None:
+            rounds_progress.update(1)
+
+    if rounds_progress is not None:
+        rounds_progress.close()
 
     final_beta = _compute_dagger_beta(dagger_rounds - 1, dagger_rounds=dagger_rounds, beta_start=beta_start, beta_end=beta_end)
     _save_checkpoint(

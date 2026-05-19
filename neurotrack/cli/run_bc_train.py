@@ -71,7 +71,10 @@ def _get_param(params: dict, *names: str, default=None):
 
 
 def _resolve_experiment_configs(base_params: dict) -> List[dict]:
-    """Expand optional ablation overrides into concrete experiment configs."""
+    """Expand optional ablation overrides into concrete experiment configs.
+    
+    Uses only canonical parameter names; deprecated parameter aliases not supported.
+    """
     ablations = _get_param(base_params, "ablations", "ablation_overrides", default=None)
     if ablations is None:
         return [base_params]
@@ -79,7 +82,7 @@ def _resolve_experiment_configs(base_params: dict) -> List[dict]:
         raise ValueError("'ablations' must be a non-empty list when provided.")
 
     base_name = _get_param(base_params, "name")
-    base_outdir_raw = _get_param(base_params, "outdir", "out_dir")
+    base_outdir_raw = _get_param(base_params, "outdir")
     if base_name is None or base_outdir_raw is None:
         raise ValueError("Base config must define name and outdir when using ablations.")
     base_outdir = Path(str(base_outdir_raw))
@@ -128,18 +131,11 @@ class BCTrainConfig:
     dagger_rounds: int = 0
     steps_per_round: int = 100000
     epochs_per_buffer_fill: int = 1
-    update_after_steps: int = 500
-    update_every: Optional[int] = None
-    updates_per_step: int = 1
     warmstart_steps: int = 100000
     beta_start: float = 1.0
     beta_end: float = 0.0
     buffer_capacity: int = 100000
-    # DAgger-online path remains episode based.
-    n_episodes: int = 1000
-    warmstart_episodes: int = 200
     save_every_steps: int = 500
-    aggregate_memory_budget: int = 10000
     continue_target_norm_threshold: Optional[float] = None
     continue_weight: float = 1.0
     norm_floor: float = 0.0
@@ -159,9 +155,10 @@ class BCTrainConfig:
 
     @classmethod
     def from_params(cls, params: Dict) -> "BCTrainConfig":
-        img_dir = _get_param(params, "img_dir", "img_path")
+        """Create a config from a params dict. Uses only canonical parameter names."""
+        img_dir = _get_param(params, "img_dir")
         swc_dir = _get_param(params, "swc_dir")
-        outdir = _get_param(params, "outdir", "out_dir")
+        outdir = _get_param(params, "outdir")
         name = _get_param(params, "name")
         if img_dir is None or swc_dir is None or outdir is None or name is None:
             raise ValueError("Config must define img_dir, swc_dir, outdir, and name.")
@@ -169,7 +166,6 @@ class BCTrainConfig:
         total_steps = int(_get_param(params, "total_steps", default=100000))
         steps_per_round = int(_get_param(params, "steps_per_round", default=100000))
 
-        update_every_raw = _get_param(params, "update_every", default=None)
         continue_target_norm_threshold_raw = _get_param(params, "continue_target_norm_threshold", default=None)
 
         config = cls(
@@ -177,9 +173,9 @@ class BCTrainConfig:
             swc_dir=str(swc_dir),
             outdir=str(outdir),
             name=str(name),
-            target_step_len=float(_get_param(params, "target_step_len", "step_size", default=1.0)),
+            target_step_len=float(_get_param(params, "target_step_len", default=1.0)),
             step_width=float(_get_param(params, "step_width", default=1.0)),
-            batch_size=int(_get_param(params, "batch_size", "batchsize", default=64)),
+            batch_size=int(_get_param(params, "batch_size", default=64)),
             lr=float(_get_param(params, "lr", "learning_rate", default=0.001)),
             total_steps=total_steps,
             repeat_starts=bool(_get_param(params, "repeat_starts", default=True)),
@@ -190,7 +186,7 @@ class BCTrainConfig:
             crop_size=int(_get_param(params, "crop_size", default=128)),
             patches_per_image=int(_get_param(params, "patches_per_image", default=10)),
             save_every_buffer_fills=int(_get_param(params, "save_every_buffer_fills", default=1)),
-            policy_weights=_get_param(params, "policy_weights", "bc_weights"),
+            policy_weights=_get_param(params, "policy_weights"),
             seeds_path=_get_param(params, "seeds_path"),
             root_sampling_probability=_get_param(params, "root_sampling_probability"),
             soma_sample_radius=float(_get_param(params, "soma_sample_radius", default=0.0)),
@@ -199,17 +195,11 @@ class BCTrainConfig:
             dagger_rounds=int(_get_param(params, "dagger_rounds", default=0)),
             steps_per_round=steps_per_round,
             epochs_per_buffer_fill=int(_get_param(params, "epochs_per_buffer_fill", default=1)),
-            update_after_steps=int(_get_param(params, "update_after_steps", default=500)),
-            update_every=None if update_every_raw is None else int(update_every_raw),
-            updates_per_step=int(_get_param(params, "updates_per_step", default=1)),
             warmstart_steps=int(_get_param(params, "warmstart_steps", default=100000)),
             beta_start=float(_get_param(params, "beta_start", default=1.0)),
             beta_end=float(_get_param(params, "beta_end", default=0.0)),
             buffer_capacity=int(_get_param(params, "buffer_capacity", default=100000)),
-            n_episodes=int(_get_param(params, "n_episodes", default=1000)),
-            warmstart_episodes=int(_get_param(params, "warmstart_episodes", default=200)),
             save_every_steps=int(_get_param(params, "save_every_steps", default=500)),
-            aggregate_memory_budget=int(_get_param(params, "aggregate_memory_budget", default=10000)),
             continue_target_norm_threshold=None if continue_target_norm_threshold_raw is None else float(continue_target_norm_threshold_raw),
             continue_weight=float(_get_param(params, "continue_weight", default=1.0)),
             norm_floor=float(_get_param(params, "norm_floor", default=0.0)),
@@ -251,24 +241,12 @@ class BCTrainConfig:
             raise ValueError("warmstart_steps must be >= 0.")
         if self.buffer_capacity <= 0:
             raise ValueError("buffer_capacity must be > 0.")
-        if self.update_after_steps <= 0:
-            raise ValueError("update_after_steps must be > 0.")
-        if self.updates_per_step <= 0:
-            raise ValueError("updates_per_step must be > 0.")
-        if self.n_episodes <= 0:
-            raise ValueError("n_episodes must be > 0.")
-        if self.warmstart_episodes < 0:
-            raise ValueError("warmstart_episodes must be >= 0.")
         if self.save_every_steps <= 0:
             raise ValueError("save_every_steps must be > 0.")
-        if self.aggregate_memory_budget <= 0:
-            raise ValueError("aggregate_memory_budget must be > 0.")
         if self.max_len <= 0 or self.max_paths <= 0:
             raise ValueError("max_len and max_paths must be > 0.")
         if self.start_idx < 0:
             raise ValueError("start_idx must be >= 0.")
-        if self.update_every is not None and self.update_every <= 0:
-            raise ValueError("update_every must be > 0 when provided.")
         if self.stop_violation_weight < 0:
             raise ValueError("stop_violation_weight must be >= 0.")
         if self.objective_mode not in {"norm_floor", "norm_classifier_margin", "direction_sse"}:
@@ -367,38 +345,6 @@ def _run_single_experiment(params: Dict, config_path: Path) -> None:
             save_every_buffer_fills=config.save_every_buffer_fills,
             buffer_capacity=config.buffer_capacity,
             epochs_per_buffer_fill=config.epochs_per_buffer_fill,
-            rng=rng,
-            continue_target_norm_threshold=config.continue_target_norm_threshold,
-            continue_weight=config.continue_weight,
-            norm_floor=config.norm_floor,
-            norm_floor_weight=config.norm_floor_weight,
-            stop_violation_weight=config.stop_violation_weight,
-            objective_mode=config.objective_mode,
-            continue_direction_weight=config.continue_direction_weight,
-            norm_cls_weight=config.norm_cls_weight,
-            norm_cls_temperature=config.norm_cls_temperature,
-            norm_margin_weight=config.norm_margin_weight,
-            stop_margin=config.stop_margin,
-            continue_margin=config.continue_margin,
-        )
-    elif config.update_every is not None:
-        behavior_cloning.train_dagger_online(
-            env=env,
-            actor=actor,
-            actor_optimizer=actor_optimizer,
-            outdir=config.outdir,
-            logdir=logdir,
-            name=config.name,
-            batch_size=config.batch_size,
-            n_episodes=config.n_episodes,
-            warmstart_episodes=config.warmstart_episodes,
-            update_after_steps=config.update_after_steps,
-            update_every=config.update_every,
-            updates_per_step=config.updates_per_step,
-            beta_start=config.beta_start,
-            beta_end=config.beta_end,
-            save_every_steps=config.save_every_steps,
-            aggregate_memory_budget=config.aggregate_memory_budget,
             rng=rng,
             continue_target_norm_threshold=config.continue_target_norm_threshold,
             continue_weight=config.continue_weight,

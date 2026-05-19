@@ -430,27 +430,6 @@ def select_expert_action(
     return targets[best_idx]
 
 
-def _optimize_batch(
-    actor: torch.nn.Module,
-    actor_optimizer: torch.optim.Optimizer,
-    obs_batch: Sequence[torch.Tensor],
-    target_batches: Sequence[torch.Tensor],
-    loss_config: SupervisionLossConfig,
-) -> SupervisionBatchStats:
-    """Run one optimizer step on a buffered supervision batch."""
-    obs_tensor = torch.cat([obs.detach().cpu() for obs in obs_batch], dim=0)
-    target_tensor, target_mask = pad_target_candidate_batch(target_batches)
-
-    return _optimize_prepared_batch(
-        actor=actor,
-        actor_optimizer=actor_optimizer,
-        obs_tensor=obs_tensor,
-        target_tensor=target_tensor,
-        target_mask=target_mask,
-        loss_config=loss_config,
-    )
-
-
 def _build_supervision_batch_context(
     pred_actions: torch.Tensor,
     target_tensor: torch.Tensor,
@@ -778,90 +757,11 @@ def _optimize_prepared_batch(
     )
 
 
-def _optimize_from_bc_replay_buffer(
-    actor: torch.nn.Module,
-    actor_optimizer: torch.optim.Optimizer,
-    replay_buffer: BehaviorCloningReplayBuffer,
-    batch_size: int,
-    transform: bool,
-    loss_config: SupervisionLossConfig,
-) -> Optional[SupervisionBatchStats]:
-    if len(replay_buffer) == 0:
-        return None
-
-    sample_size = min(batch_size, len(replay_buffer))
-    
-    try:
-        obs_tensor, target_tensor, target_mask = replay_buffer.sample(
-            batch_size=sample_size,
-            replacement=False,
-            transform=transform,
-        )
-    except Exception as e:
-        print(f"\nERROR sampling from replay buffer: {e}")
-        print(f"  Skipping this optimization step\n")
-        return None
-    
-    # Quick validation on sampled tensors
-    try:
-        if torch.isnan(obs_tensor).any():
-            print(f"Replay buffer returned obs_tensor with NaN values, skipping step\n")
-            return None
-        if torch.isnan(target_tensor).any():
-            print(f"Replay buffer returned target_tensor with NaN values, skipping step\n")
-            return None
-        if not target_mask.any():
-            print(f"Replay buffer returned empty target_mask (no valid targets), skipping step\n")
-            return None
-    except Exception as e:
-        print(f"Error validating replay buffer sample: {e}, skipping step\n")
-        return None
-    
-    return _optimize_prepared_batch(
-        actor=actor,
-        actor_optimizer=actor_optimizer,
-        obs_tensor=obs_tensor,
-        target_tensor=target_tensor,
-        target_mask=target_mask,
-        loss_config=loss_config,
-    )
-
-
 def _current_target_vectors_from_env(env) -> torch.Tensor:
     current_target_vectors = env.target_vectors
     if current_target_vectors is None:
         current_target_vectors = torch.zeros((1, 3), dtype=torch.float32)
     return torch.as_tensor(current_target_vectors, dtype=torch.float32).view(-1, 3)
-
-
-def _append_supervision_example(
-    obs: torch.Tensor,
-    target_vectors: torch.Tensor,
-    obs_store: List[torch.Tensor],
-    target_store: List[torch.Tensor],
-) -> None:
-    obs_cpu = obs.detach().cpu()
-    targets_cpu = torch.as_tensor(target_vectors, dtype=torch.float32).detach().cpu().view(-1, 3)
-    obs_store.append(obs_cpu)
-    target_store.append(targets_cpu)
-
-
-def _flush_supervision_batch(
-    actor: torch.nn.Module,
-    actor_optimizer: torch.optim.Optimizer,
-    obs_store: List[torch.Tensor],
-    target_store: List[torch.Tensor],
-    losses: List[float],
-    batch_stats_store: List[SupervisionBatchStats],
-    loss_config: SupervisionLossConfig,
-) -> None:
-    if not obs_store:
-        return
-    batch_stats = _optimize_batch(actor, actor_optimizer, obs_store, target_store, loss_config=loss_config)
-    losses.append(float(batch_stats.loss))
-    batch_stats_store.append(batch_stats)
-    obs_store.clear()
-    target_store.clear()
 
 
 def _predict_policy_action(actor: torch.nn.Module, obs: torch.Tensor) -> torch.Tensor:
@@ -871,20 +771,6 @@ def _predict_policy_action(actor: torch.nn.Module, obs: torch.Tensor) -> torch.T
         pred_actions = actor(obs_model)
     pred_actions = _ensure_action_batch(pred_actions)
     return pred_actions[0].detach().to(dtype=torch.float32).cpu()
-
-
-def _sample_rollin_source(
-    beta: float,
-    rng: np.random.Generator,
-) -> str:
-    beta = float(beta)
-    if beta >= 1.0:
-        return "expert"
-    if beta <= 0.0:
-        return "policy"
-    if float(rng.random()) < beta:
-        return "expert"
-    return "policy"
 
 
 def _run_supervision_epoch(
@@ -907,29 +793,17 @@ def _run_supervision_epoch(
     if real_size == 0:
         return []
 
-    # Build a single random permutation over the logical buffer entries [0..real_size-1]
     perm = torch.randperm(real_size).tolist()
 
-    # Map logical positions to physical indices inside the circular buffer
-    def logical_to_physical(pos: int) -> int:
-        if aggregate_buffer.full:
-            return (aggregate_buffer.idx + pos) % aggregate_buffer.capacity
-        return pos
-
     batch_stats: List[SupervisionBatchStats] = []
-    # Iterate over the permutation in contiguous chunks (each chunk is a minibatch)
     for start in range(0, real_size, batch_size):
         chunk = perm[start : start + batch_size]
-        phys_idxs = [logical_to_physical(p) for p in chunk]
-
-        # Gather batched observation tensor and per-row target lists
-        obs_batch = aggregate_buffer.obs[phys_idxs].to(device=DEVICE)
-        target_list = [aggregate_buffer.target_vectors[int(i)] for i in phys_idxs]
-
         try:
-            target_tensor, target_mask = pad_target_candidate_batch(target_list)
+            obs_batch, target_tensor, target_mask = aggregate_buffer.sample_indices(
+                logical_indices=chunk,
+                transform=transform,
+            )
         except Exception:
-            # If padding fails for some reason, skip this minibatch
             continue
 
         maybe_stats = _optimize_prepared_batch(
@@ -947,20 +821,6 @@ def _run_supervision_epoch(
 
 def _reward_to_float(reward: torch.Tensor | float) -> float:
     return float(torch.as_tensor(reward, dtype=torch.float32).item())
-
-
-def _min_target_norm(
-    target_vectors: Optional[torch.Tensor | np.ndarray | Sequence[float]],
-) -> Optional[float]:
-    if target_vectors is None:
-        return None
-    targets = torch.as_tensor(target_vectors, dtype=torch.float32).view(-1, 3)
-    if targets.numel() == 0:
-        return None
-    norms = torch.linalg.norm(targets, dim=1)
-    if norms.numel() == 0:
-        return None
-    return float(torch.min(norms).item())
 
 
 def _compute_dagger_beta(round_index: int, dagger_rounds: int, beta_start: float, beta_end: float) -> float:
@@ -994,38 +854,30 @@ def _log_episode_exception(
 
 def _run_expert_episode(
     env,
-    actor: torch.nn.Module,
-    actor_optimizer: torch.optim.Optimizer,
-    batch_size: int,
-    loss_config: SupervisionLossConfig,
-    aggregate_buffer: Optional[BehaviorCloningReplayBuffer] = None,
-) -> dict[str, float | int]:
-    obs = env.reset(return_state=True)
-    prev_expert_action: Optional[torch.Tensor] = None
-    supervision_obs: List[torch.Tensor] = []
-    supervision_targets: List[torch.Tensor] = []
-    episode_losses: List[float] = []
-    episode_batch_stats: List[SupervisionBatchStats] = []
+    aggregate_buffer: BehaviorCloningReplayBuffer,
+    steps_budget: Optional[int] = None,
+    start_obs: Optional[torch.Tensor] = None,
+    prev_expert_action: Optional[torch.Tensor] = None,
+) -> Tuple[dict[str, float | int], dict[str, object]]:
+    if steps_budget is not None and int(steps_budget) <= 0:
+        return {
+            "episode_avg_reward": 0.0,
+            "episode_avg_expert_step_norm": 0.0,
+            "steps_done": 0,
+        }
+
+    if start_obs is None:
+        obs = env.reset(return_state=True)
+        prev_expert_action = None
+    else:
+        obs = start_obs
     episode_rewards: List[float] = []
     episode_step_norms: List[float] = []
     steps_done = 0
 
     for _step_idx in count():
         current_target_vectors = _current_target_vectors_from_env(env)
-        _append_supervision_example(obs, current_target_vectors, supervision_obs, supervision_targets)
-        if aggregate_buffer is not None:
-            aggregate_buffer.push(obs, current_target_vectors)
-
-        if len(supervision_obs) >= batch_size:
-            _flush_supervision_batch(
-                actor,
-                actor_optimizer,
-                supervision_obs,
-                supervision_targets,
-                episode_losses,
-                episode_batch_stats,
-                loss_config=loss_config,
-            )
+        aggregate_buffer.push(obs, current_target_vectors)
 
         expert_action = select_expert_action(current_target_vectors, previous_action=prev_expert_action)
         episode_step_norms.append(float(torch.linalg.norm(expert_action).item()))
@@ -1034,16 +886,23 @@ def _run_expert_episode(
         steps_done += 1
         episode_rewards.append(_reward_to_float(reward))
 
-        if info["terminate_episode"]:
-            _flush_supervision_batch(
-                actor,
-                actor_optimizer,
-                supervision_obs,
-                supervision_targets,
-                episode_losses,
-                episode_batch_stats,
-                loss_config=loss_config,
+        if steps_budget is not None and steps_done >= int(steps_budget):
+            # Pause collection mid-episode; return resume state so trainer
+            # can continue from this exact environment state after optimization.
+            return (
+                {
+                    "episode_avg_reward": float(np.mean(episode_rewards)) if episode_rewards else 0.0,
+                    "episode_avg_expert_step_norm": float(np.mean(episode_step_norms)) if episode_step_norms else 0.0,
+                    "steps_done": int(steps_done),
+                },
+                {
+                    "obs": obs if (terminated := False) else obs,
+                    "prev_action": prev_expert_action,
+                    "terminated": False,
+                },
             )
+
+        if info["terminate_episode"]:
             break
 
         if terminated:
@@ -1053,22 +912,19 @@ def _run_expert_episode(
             obs = next_obs
             prev_expert_action = expert_action.detach().cpu()
 
-    (
-        true_continue_count,
-        false_choose_stop_count,
-        true_stop_count,
-        false_continue_count,
-    ) = _aggregate_supervision_stats(episode_batch_stats)
-
-    return {
-        "episode_avg_reward": float(np.mean(episode_rewards)) if episode_rewards else 0.0,
-        "episode_avg_loss": float(np.mean(episode_losses)) if episode_losses else 0.0,
-        "episode_avg_step_mse": float(np.mean([stat.step_mse for stat in episode_batch_stats])) if episode_batch_stats else 0.0,
-        "episode_avg_expert_step_norm": float(np.mean(episode_step_norms)) if episode_step_norms else 0.0,
-        "false_stop_rate": _safe_rate(false_choose_stop_count, true_continue_count),
-        "false_continue_rate": _safe_rate(false_continue_count, true_stop_count),
-        "steps_done": int(steps_done),
-    }
+    # Episode finished normally or hit terminal condition.
+    return (
+        {
+            "episode_avg_reward": float(np.mean(episode_rewards)) if episode_rewards else 0.0,
+            "episode_avg_expert_step_norm": float(np.mean(episode_step_norms)) if episode_step_norms else 0.0,
+            "steps_done": int(steps_done),
+        },
+        {
+            "obs": env.get_state(),
+            "prev_action": None,
+            "terminated": True,
+        },
+    )
 
 
 def _run_dagger_collection_episode(
@@ -1077,9 +933,26 @@ def _run_dagger_collection_episode(
     aggregate_buffer: BehaviorCloningReplayBuffer,
     beta: float,
     rng: np.random.Generator,
-) -> dict[str, float | int]:
-    obs = env.reset(return_state=True)
-    prev_rollin_action: Optional[torch.Tensor] = None
+    steps_budget: Optional[int] = None,
+    start_obs: Optional[torch.Tensor] = None,
+    prev_rollin_action: Optional[torch.Tensor] = None,
+) -> Tuple[dict[str, float | int], dict[str, object]]:
+    if steps_budget is not None and int(steps_budget) <= 0:
+        return {
+            "episode_avg_reward": 0.0,
+            "episode_avg_expert_step_norm": 0.0,
+            "policy_rollin_fraction": 0.0,
+            "steps_done": 0,
+            "episode_bidirectional_distance": None,
+            "episode_precision": None,
+            "episode_coverage": None,
+        }
+
+    if start_obs is None:
+        obs = env.reset(return_state=True)
+        prev_rollin_action = None
+    else:
+        obs = start_obs
     episode_rewards: List[float] = []
     episode_step_norms: List[float] = []
     steps_done = 0
@@ -1104,6 +977,25 @@ def _run_dagger_collection_episode(
         steps_done += 1
         episode_rewards.append(_reward_to_float(reward))
 
+        if steps_budget is not None and steps_done >= int(steps_budget):
+            # Pause mid-episode; return resume info so trainer can continue
+            return (
+                {
+                    "episode_avg_reward": float(np.mean(episode_rewards)) if episode_rewards else 0.0,
+                    "episode_avg_expert_step_norm": float(np.mean(episode_step_norms)) if episode_step_norms else 0.0,
+                    "policy_rollin_fraction": float(policy_steps / steps_done) if steps_done > 0 else 0.0,
+                    "steps_done": int(steps_done),
+                    "episode_bidirectional_distance": None,
+                    "episode_precision": None,
+                    "episode_coverage": None,
+                },
+                {
+                    "obs": obs,
+                    "prev_action": prev_rollin_action,
+                    "terminated": False,
+                },
+            )
+
         if info["terminate_episode"]:
             break
 
@@ -1116,21 +1008,27 @@ def _run_dagger_collection_episode(
 
     tracing_metrics = _compute_episode_tracing_metrics(env)
 
-    return {
-        "episode_avg_reward": float(np.mean(episode_rewards)) if episode_rewards else 0.0,
-        "episode_avg_expert_step_norm": float(np.mean(episode_step_norms)) if episode_step_norms else 0.0,
-        "policy_rollin_fraction": float(policy_steps / steps_done) if steps_done > 0 else 0.0,
-        "steps_done": int(steps_done),
-        "episode_bidirectional_distance": tracing_metrics["bidirectional_distance"],
-        "episode_precision": tracing_metrics["precision"],
-        "episode_coverage": tracing_metrics["coverage"],
-    }
+    return (
+        {
+            "episode_avg_reward": float(np.mean(episode_rewards)) if episode_rewards else 0.0,
+            "episode_avg_expert_step_norm": float(np.mean(episode_step_norms)) if episode_step_norms else 0.0,
+            "policy_rollin_fraction": float(policy_steps / steps_done) if steps_done > 0 else 0.0,
+            "steps_done": int(steps_done),
+            "episode_bidirectional_distance": tracing_metrics["bidirectional_distance"],
+            "episode_precision": tracing_metrics["precision"],
+            "episode_coverage": tracing_metrics["coverage"],
+        },
+        {
+            "obs": env.get_state(),
+            "prev_action": None,
+            "terminated": True,
+        },
+    )
 
 
 def _write_bc_log_row(
     csv_file_path: Path,
-    episode_index: int,
-    image_file: str,
+    buffer_epoch_index: int,
     avg_reward: float,
     avg_loss: float,
     avg_step_mse: float,
@@ -1138,6 +1036,7 @@ def _write_bc_log_row(
     false_stop_rate: float,
     false_continue_rate: float,
     steps_done: int,
+    episodes_done: int,
     complexity: float,
 ) -> None:
     file_exists = csv_file_path.exists()
@@ -1145,8 +1044,7 @@ def _write_bc_log_row(
         writer = csv.writer(handle)
         if not file_exists:
             writer.writerow([
-                "episode",
-                "image_file",
+                "buffer_epoch_index",
                 "episode_avg_reward",
                 "episode_avg_loss",
                 "episode_avg_step_mse",
@@ -1154,11 +1052,11 @@ def _write_bc_log_row(
                 "false_stop_rate",
                 "false_continue_rate",
                 "steps_done",
+                "episodes_done",
                 "complexity",
             ])
         writer.writerow([
-            episode_index,
-            image_file,
+            int(buffer_epoch_index),
             avg_reward,
             avg_loss,
             avg_step_mse,
@@ -1166,6 +1064,7 @@ def _write_bc_log_row(
             false_stop_rate,
             false_continue_rate,
             int(steps_done),
+            int(episodes_done),
             complexity,
         ])
 
@@ -1174,8 +1073,7 @@ def _write_dagger_log_row(
     csv_file_path: Path,
     phase: str,
     round_index: int,
-    episode_index: int,
-    image_file: str,
+    buffer_epoch_index: int,
     avg_reward: float,
     avg_loss: float,
     avg_step_mse: float,
@@ -1184,6 +1082,7 @@ def _write_dagger_log_row(
     false_stop_rate: float,
     false_continue_rate: float,
     steps_done: int,
+    episodes_done: int,
     dataset_size: int,
     complexity: float,
     beta: float,
@@ -1204,8 +1103,7 @@ def _write_dagger_log_row(
             writer.writerow([
                 "phase",
                 "round",
-                "episode",
-                "image_file",
+                "buffer_epoch_index",
                 "episode_avg_reward",
                 "episode_avg_loss",
                 "episode_avg_step_mse",
@@ -1214,6 +1112,7 @@ def _write_dagger_log_row(
                 "false_stop_rate",
                 "false_continue_rate",
                 "steps_done",
+                "episodes_done",
                 "dataset_size",
                 "complexity",
                 "beta",
@@ -1230,8 +1129,7 @@ def _write_dagger_log_row(
         writer.writerow([
             phase,
             int(round_index),
-            int(episode_index),
-            image_file,
+            int(buffer_epoch_index),
             avg_reward,
             avg_loss,
             avg_step_mse,
@@ -1240,6 +1138,7 @@ def _write_dagger_log_row(
             false_stop_rate,
             false_continue_rate,
             int(steps_done),
+            int(episodes_done),
             int(dataset_size),
             complexity,
             beta,
@@ -1289,14 +1188,15 @@ def _maybe_save_checkpoint(
     name: str,
     steps_done: int,
     episodes_done: int,
-    save_every_steps: int,
+    save_every_buffer_fills: int,
+    buffer_fills_done: int,
     last_save_bucket: int,
     algorithm: str,
     extra_metadata: Optional[dict[str, float | int | str]] = None,
 ) -> int:
-    if save_every_steps <= 0:
+    if save_every_buffer_fills <= 0:
         return last_save_bucket
-    current_bucket = steps_done // save_every_steps
+    current_bucket = int(buffer_fills_done) // int(save_every_buffer_fills)
     if current_bucket > last_save_bucket:
         _save_checkpoint(
             actor=actor,
@@ -1320,8 +1220,10 @@ def train(
     logdir: Path | str,
     name: str,
     batch_size: int = 64,
-    n_episodes: int = 1000,
-    save_every_steps: int = 500,
+    total_steps: int = 100000,
+    buffer_capacity: int = 100000,
+    epochs_per_buffer_fill: int = 1,
+    save_every_buffer_fills: int = 1,
     continue_target_norm_threshold: Optional[float] = None,
     continue_weight: float = 1.0,
     norm_floor: float = 0.0,
@@ -1338,6 +1240,12 @@ def train(
     """Train a deterministic actor with multi-target behavior cloning."""
     if batch_size < 1:
         raise ValueError("batch_size must be at least 1")
+    if total_steps < 1:
+        raise ValueError("total_steps must be at least 1")
+    if buffer_capacity < 1:
+        raise ValueError("buffer_capacity must be at least 1")
+    if epochs_per_buffer_fill < 1:
+        raise ValueError("epochs_per_buffer_fill must be at least 1")
 
     outdir = Path(outdir)
     logdir = Path(logdir)
@@ -1362,62 +1270,173 @@ def train(
     )
 
     steps_done = 0
+    episodes_done = 0
+    buffer_fills_done = 0
+    buffer_epoch_index = 0
     last_save_bucket = -1
     use_progress_bar = sys.stdout.isatty()
     csv_file_path = logdir / f"{name}_{date_time}_log.csv"
 
-    for ep in tqdm(
-        range(n_episodes),
-        dynamic_ncols=True,
-        leave=True,
-        file=sys.stdout,
-        mininterval=1.0,
-        disable=not use_progress_bar,
-    ):
-        if not use_progress_bar:
-            print(f"Starting BC episode {ep + 1}/{n_episodes}", flush=True)
+    # Persistent FIFO memory buffer used for the entire BC run.
+    memory_buffer = BehaviorCloningReplayBuffer(capacity=buffer_capacity, include_z_flip=True)
+    rewards: List[float] = []
+    step_norms: List[float] = []
+    steps_since_last_optimization = 0
+    fill_rewards: List[float] = []
+    fill_step_norms: List[float] = []
 
+    resume_state: Optional[dict[str, object]] = None
+
+    while steps_done < total_steps:
+        # Limit collection so we pause exactly when enough new samples
+        # have been accumulated for an optimization pass.
         try:
-            episode_metrics = _run_expert_episode(
+            episode_metrics, resume_state = _run_expert_episode(
                 env=env,
-                actor=actor,
-                actor_optimizer=actor_optimizer,
-                batch_size=batch_size,
-                loss_config=loss_config,
+                aggregate_buffer=memory_buffer,
+                steps_budget=min(total_steps - steps_done, buffer_capacity - steps_since_last_optimization),
+                start_obs=(None if resume_state is None or resume_state.get("terminated", True) else resume_state.get("obs")),
+                prev_expert_action=(None if resume_state is None else resume_state.get("prev_action")),
             )
         except Exception as exc:
-            _log_episode_exception("BC", ep + 1, exc, env)
+            _log_episode_exception("BC", episodes_done + 1, exc, env)
             continue
-        steps_done += int(episode_metrics["steps_done"])
+
+        episode_steps = int(episode_metrics["steps_done"])
+        if episode_steps <= 0:
+            break
+
+        steps_done += episode_steps
+        episodes_done += 1
+        rewards.append(float(episode_metrics["episode_avg_reward"]))
+        step_norms.append(float(episode_metrics["episode_avg_expert_step_norm"]))
+        fill_rewards.append(float(episode_metrics["episode_avg_reward"]))
+        fill_step_norms.append(float(episode_metrics["episode_avg_expert_step_norm"]))
+        steps_since_last_optimization += episode_steps
+
+        # When we've collected enough new samples, pause collection
+        # and run supervised optimization epochs on the persistent buffer.
+        if steps_since_last_optimization >= buffer_capacity:
+            for _epoch_idx in range(epochs_per_buffer_fill):
+                epoch_batch_stats = _run_supervision_epoch(
+                    actor=actor,
+                    actor_optimizer=actor_optimizer,
+                    aggregate_buffer=memory_buffer,
+                    batch_size=batch_size,
+                    transform=True,
+                    loss_config=loss_config,
+                )
+
+                (
+                    true_continue_count,
+                    false_choose_stop_count,
+                    true_stop_count,
+                    false_continue_count,
+                ) = _aggregate_supervision_stats(epoch_batch_stats)
+
+                buffer_epoch_index += 1
+                _write_bc_log_row(
+                    csv_file_path=csv_file_path,
+                    buffer_epoch_index=buffer_epoch_index,
+                    avg_reward=float(np.mean(fill_rewards)) if fill_rewards else 0.0,
+                    avg_loss=float(np.mean([stat.loss for stat in epoch_batch_stats])) if epoch_batch_stats else 0.0,
+                    avg_step_mse=float(np.mean([stat.step_mse for stat in epoch_batch_stats])) if epoch_batch_stats else 0.0,
+                    avg_step_norm=float(np.mean(fill_step_norms)) if fill_step_norms else 0.0,
+                    false_stop_rate=_safe_rate(false_choose_stop_count, true_continue_count),
+                    false_continue_rate=_safe_rate(false_continue_count, true_stop_count),
+                    steps_done=steps_done,
+                    episodes_done=episodes_done,
+                    complexity=float(env.dataset.alpha),
+                )
+
+            buffer_fills_done += 1
+            last_save_bucket = _maybe_save_checkpoint(
+                actor=actor,
+                actor_optimizer=actor_optimizer,
+                outdir=outdir,
+                name=name,
+                steps_done=steps_done,
+                episodes_done=episodes_done,
+                save_every_buffer_fills=save_every_buffer_fills,
+                buffer_fills_done=buffer_fills_done,
+                last_save_bucket=last_save_bucket,
+                algorithm="multi_target_behavior_cloning",
+                extra_metadata={
+                    "buffer_fills_done": int(buffer_fills_done),
+                    "buffer_capacity": int(buffer_capacity),
+                    "continue_target_norm_threshold": float(loss_config.continue_target_norm_threshold),
+                    "continue_weight": float(loss_config.continue_weight),
+                    "norm_floor": float(loss_config.norm_floor),
+                    "norm_floor_weight": float(loss_config.norm_floor_weight),
+                },
+            )
+
+            # Reset fill counters and resume collection on the same buffer and env
+            steps_since_last_optimization = 0
+            fill_rewards.clear()
+            fill_step_norms.clear()
+
+            # If the previous fill paused mid-episode, keep resume_state so
+            # collection continues without resetting the environment. If the
+            # episode terminated, clear resume_state so the next episode
+            # starts fresh.
+            if resume_state is not None and resume_state.get("terminated", False):
+                resume_state = None
+
+    # Final optimization epoch(s) at end of run (if there are unoptimized samples)
+    if steps_since_last_optimization > 0:
+        for _epoch_idx in range(epochs_per_buffer_fill):
+            epoch_batch_stats = _run_supervision_epoch(
+                actor=actor,
+                actor_optimizer=actor_optimizer,
+                aggregate_buffer=memory_buffer,
+                batch_size=batch_size,
+                transform=True,
+                loss_config=loss_config,
+            )
+
+            (
+                true_continue_count,
+                false_choose_stop_count,
+                true_stop_count,
+                false_continue_count,
+            ) = _aggregate_supervision_stats(epoch_batch_stats)
+
+            buffer_epoch_index += 1
+            _write_bc_log_row(
+                csv_file_path=csv_file_path,
+                buffer_epoch_index=buffer_epoch_index,
+                avg_reward=float(np.mean(fill_rewards)) if fill_rewards else 0.0,
+                avg_loss=float(np.mean([stat.loss for stat in epoch_batch_stats])) if epoch_batch_stats else 0.0,
+                avg_step_mse=float(np.mean([stat.step_mse for stat in epoch_batch_stats])) if epoch_batch_stats else 0.0,
+                avg_step_norm=float(np.mean(fill_step_norms)) if fill_step_norms else 0.0,
+                false_stop_rate=_safe_rate(false_choose_stop_count, true_continue_count),
+                false_continue_rate=_safe_rate(false_continue_count, true_stop_count),
+                steps_done=steps_done,
+                episodes_done=episodes_done,
+                complexity=float(env.dataset.alpha),
+            )
+
+        buffer_fills_done += 1
         last_save_bucket = _maybe_save_checkpoint(
             actor=actor,
             actor_optimizer=actor_optimizer,
             outdir=outdir,
             name=name,
             steps_done=steps_done,
-            episodes_done=ep + 1,
-            save_every_steps=save_every_steps,
+            episodes_done=episodes_done,
+            save_every_buffer_fills=save_every_buffer_fills,
+            buffer_fills_done=buffer_fills_done,
             last_save_bucket=last_save_bucket,
             algorithm="multi_target_behavior_cloning",
             extra_metadata={
+                "buffer_fills_done": int(buffer_fills_done),
+                "buffer_capacity": int(buffer_capacity),
                 "continue_target_norm_threshold": float(loss_config.continue_target_norm_threshold),
                 "continue_weight": float(loss_config.continue_weight),
                 "norm_floor": float(loss_config.norm_floor),
                 "norm_floor_weight": float(loss_config.norm_floor_weight),
             },
-        )
-        _write_bc_log_row(
-            csv_file_path=csv_file_path,
-            episode_index=ep,
-            image_file=env.current_neuron_info["neuron_name"],
-            avg_reward=float(episode_metrics["episode_avg_reward"]),
-            avg_loss=float(episode_metrics["episode_avg_loss"]),
-            avg_step_mse=float(episode_metrics["episode_avg_step_mse"]),
-            avg_step_norm=float(episode_metrics["episode_avg_expert_step_norm"]),
-            false_stop_rate=float(episode_metrics["false_stop_rate"]),
-            false_continue_rate=float(episode_metrics["false_continue_rate"]),
-            steps_done=steps_done,
-            complexity=float(env.dataset.alpha),
         )
 
     _save_checkpoint(
@@ -1426,9 +1445,11 @@ def train(
         outdir=outdir,
         name=name,
         steps_done=steps_done,
-        episodes_done=n_episodes,
+        episodes_done=episodes_done,
         algorithm="multi_target_behavior_cloning",
         extra_metadata={
+            "buffer_fills_done": int(buffer_fills_done),
+            "buffer_capacity": int(buffer_capacity),
             "continue_target_norm_threshold": float(loss_config.continue_target_norm_threshold),
             "continue_weight": float(loss_config.continue_weight),
             "norm_floor": float(loss_config.norm_floor),
@@ -1445,14 +1466,15 @@ def train_dagger(
     logdir: Path | str,
     name: str,
     batch_size: int = 64,
-    warmstart_episodes: int = 100,
+    warmstart_steps: int = 100000,
     dagger_rounds: int = 5,
-    rollout_episodes_per_round: int = 100,
+    steps_per_round: int = 100000,
     beta_start: float = 1.0,
     beta_end: float = 0.0,
-    save_every_steps: int = 500,
+    save_every_buffer_fills: int = 1,
     dynamic_complexity: bool = True,
-    aggregate_memory_budget: int = 10000,
+    buffer_capacity: int = 100000,
+    epochs_per_buffer_fill: int = 1,
     rng: Optional[np.random.Generator] = None,
     continue_target_norm_threshold: Optional[float] = None,
     continue_weight: float = 1.0,
@@ -1470,14 +1492,20 @@ def train_dagger(
     """Train a deterministic actor with DAgger using aggregated multi-target supervision."""
     if batch_size < 1:
         raise ValueError("batch_size must be at least 1")
-    if warmstart_episodes < 0:
-        raise ValueError("warmstart_episodes must be non-negative")
+    if warmstart_steps < 0:
+        raise ValueError("warmstart_steps must be non-negative")
     if dagger_rounds < 1:
         raise ValueError("dagger_rounds must be at least 1")
-    if rollout_episodes_per_round < 1:
-        raise ValueError("rollout_episodes_per_round must be at least 1")
-    if aggregate_memory_budget < 1:
-        raise ValueError("aggregate_memory_budget must be at least 1")
+    if steps_per_round < 1:
+        raise ValueError("steps_per_round must be at least 1")
+    if buffer_capacity < 1:
+        raise ValueError("buffer_capacity must be at least 1")
+    if epochs_per_buffer_fill < 1:
+        raise ValueError("epochs_per_buffer_fill must be at least 1")
+    if warmstart_steps > 0 and warmstart_steps < buffer_capacity:
+        raise ValueError("warmstart_steps must be >= buffer_capacity to ensure full-buffer training")
+    if steps_per_round < buffer_capacity:
+        raise ValueError("steps_per_round must be >= buffer_capacity to ensure full-buffer training")
 
     outdir = Path(outdir)
     logdir = Path(logdir)
@@ -1506,114 +1534,225 @@ def train_dagger(
 
     steps_done = 0
     episodes_done = 0
+    buffer_fills_done = 0
+    buffer_epoch_index = 0
     last_save_bucket = -1
     use_progress_bar = sys.stdout.isatty()
     csv_file_path = logdir / f"{name}_{date_time}_log.csv"
-    aggregate_buffer = BehaviorCloningReplayBuffer(capacity=aggregate_memory_budget)
-    memory_budget_meta = int(aggregate_memory_budget)
+    memory_budget_meta = int(buffer_capacity)
 
-    warmstart_iter = tqdm(
-        range(warmstart_episodes),
-        desc="DAgger warmstart",
-        dynamic_ncols=True,
-        leave=True,
-        file=sys.stdout,
-        mininterval=1.0,
-        disable=not use_progress_bar,
-    )
-    for warmstart_episode in warmstart_iter:
-        if not use_progress_bar:
-            print(f"Starting DAgger warmstart episode {warmstart_episode + 1}/{warmstart_episodes}", flush=True)
+    # Persistent FIFO memory buffer used across warmstart and all DAgger rounds.
+    memory_buffer = BehaviorCloningReplayBuffer(capacity=buffer_capacity, include_z_flip=True)
+    steps_since_last_optimization = 0
+    # Round-level accumulators (not cleared between fills)
+    # We'll also maintain per-fill accumulators used for logging when an optimization runs.
 
-        try:
-            episode_metrics = _run_expert_episode(
-                env=env,
+    if warmstart_steps > 0:
+        warmstart_steps_done = 0
+        warm_rewards: List[float] = []
+        warm_step_norms: List[float] = []
+        warm_fill_rewards: List[float] = []
+        warm_fill_step_norms: List[float] = []
+
+        warm_resume_state: Optional[dict[str, object]] = None
+
+        while warmstart_steps_done < warmstart_steps:
+            try:
+                episode_metrics, warm_resume_state = _run_expert_episode(
+                    env=env,
+                    aggregate_buffer=memory_buffer,
+                    steps_budget=min(warmstart_steps - warmstart_steps_done, buffer_capacity - steps_since_last_optimization),
+                    start_obs=(None if warm_resume_state is None or warm_resume_state.get("terminated", True) else warm_resume_state.get("obs")),
+                    prev_expert_action=(None if warm_resume_state is None else warm_resume_state.get("prev_action")),
+                )
+            except Exception as exc:
+                _log_episode_exception("DAgger warmstart", episodes_done + 1, exc, env)
+                continue
+
+            episode_steps = int(episode_metrics["steps_done"])
+            if episode_steps <= 0:
+                break
+            warmstart_steps_done += episode_steps
+            steps_done += episode_steps
+            episodes_done += 1
+            warm_rewards.append(float(episode_metrics["episode_avg_reward"]))
+            warm_step_norms.append(float(episode_metrics["episode_avg_expert_step_norm"]))
+            # Clear warm_resume_state if episode terminated
+            if warm_resume_state is not None and warm_resume_state.get("terminated", False):
+                warm_resume_state = None
+            warm_fill_rewards.append(float(episode_metrics["episode_avg_reward"]))
+            warm_fill_step_norms.append(float(episode_metrics["episode_avg_expert_step_norm"]))
+            steps_since_last_optimization += episode_steps
+
+            if steps_since_last_optimization >= buffer_capacity:
+                for _epoch_idx in range(epochs_per_buffer_fill):
+                    epoch_batch_stats = _run_supervision_epoch(
+                        actor=actor,
+                        actor_optimizer=actor_optimizer,
+                        aggregate_buffer=memory_buffer,
+                        batch_size=batch_size,
+                        transform=True,
+                        loss_config=loss_config,
+                    )
+                    (
+                        true_continue_count,
+                        false_choose_stop_count,
+                        true_stop_count,
+                        false_continue_count,
+                    ) = _aggregate_supervision_stats(epoch_batch_stats)
+
+                    buffer_epoch_index += 1
+                    _write_dagger_log_row(
+                        csv_file_path=csv_file_path,
+                        phase="warmstart",
+                        round_index=0,
+                        buffer_epoch_index=buffer_epoch_index,
+                        avg_reward=float(np.mean(warm_fill_rewards)) if warm_fill_rewards else 0.0,
+                        avg_loss=float(np.mean([stat.loss for stat in epoch_batch_stats])) if epoch_batch_stats else 0.0,
+                        avg_step_mse=float(np.mean([stat.step_mse for stat in epoch_batch_stats])) if epoch_batch_stats else 0.0,
+                        avg_step_norm=float(np.mean(warm_fill_step_norms)) if warm_fill_step_norms else 0.0,
+                        policy_rollin_fraction=0.0,
+                        false_stop_rate=_safe_rate(false_choose_stop_count, true_continue_count),
+                        false_continue_rate=_safe_rate(false_continue_count, true_stop_count),
+                        steps_done=steps_done,
+                        episodes_done=episodes_done,
+                        dataset_size=len(memory_buffer),
+                        complexity=float(env.dataset.alpha),
+                        beta=1.0,
+                    )
+
+                buffer_fills_done += 1
+                last_save_bucket = _maybe_save_checkpoint(
+                    actor=actor,
+                    actor_optimizer=actor_optimizer,
+                    outdir=outdir,
+                    name=name,
+                    steps_done=steps_done,
+                    episodes_done=episodes_done,
+                    save_every_buffer_fills=save_every_buffer_fills,
+                    buffer_fills_done=buffer_fills_done,
+                    last_save_bucket=last_save_bucket,
+                    algorithm="multi_target_dagger",
+                    extra_metadata={
+                        "dagger_round": 0,
+                        "beta": 1.0,
+                        "dataset_size": len(memory_buffer),
+                        "buffer_capacity": memory_budget_meta,
+                        "buffer_fills_done": int(buffer_fills_done),
+                        "continue_target_norm_threshold": float(loss_config.continue_target_norm_threshold),
+                        "continue_weight": float(loss_config.continue_weight),
+                        "norm_floor": float(loss_config.norm_floor),
+                        "norm_floor_weight": float(loss_config.norm_floor_weight),
+                    },
+                )
+
+                steps_since_last_optimization = 0
+                warm_fill_rewards.clear()
+                warm_fill_step_norms.clear()
+
+        # Final warmstart optimization if there are leftovers
+        if steps_since_last_optimization > 0:
+            for _epoch_idx in range(epochs_per_buffer_fill):
+                epoch_batch_stats = _run_supervision_epoch(
+                    actor=actor,
+                    actor_optimizer=actor_optimizer,
+                    aggregate_buffer=memory_buffer,
+                    batch_size=batch_size,
+                    transform=True,
+                    loss_config=loss_config,
+                )
+                (
+                    true_continue_count,
+                    false_choose_stop_count,
+                    true_stop_count,
+                    false_continue_count,
+                ) = _aggregate_supervision_stats(epoch_batch_stats)
+
+                buffer_epoch_index += 1
+                _write_dagger_log_row(
+                    csv_file_path=csv_file_path,
+                    phase="warmstart",
+                    round_index=0,
+                    buffer_epoch_index=buffer_epoch_index,
+                    avg_reward=float(np.mean(warm_fill_rewards)) if warm_fill_rewards else 0.0,
+                    avg_loss=float(np.mean([stat.loss for stat in epoch_batch_stats])) if epoch_batch_stats else 0.0,
+                    avg_step_mse=float(np.mean([stat.step_mse for stat in epoch_batch_stats])) if epoch_batch_stats else 0.0,
+                    avg_step_norm=float(np.mean(warm_fill_step_norms)) if warm_fill_step_norms else 0.0,
+                    policy_rollin_fraction=0.0,
+                    false_stop_rate=_safe_rate(false_choose_stop_count, true_continue_count),
+                    false_continue_rate=_safe_rate(false_continue_count, true_stop_count),
+                    steps_done=steps_done,
+                    episodes_done=episodes_done,
+                    dataset_size=len(memory_buffer),
+                    complexity=float(env.dataset.alpha),
+                    beta=1.0,
+                )
+
+            buffer_fills_done += 1
+            last_save_bucket = _maybe_save_checkpoint(
                 actor=actor,
                 actor_optimizer=actor_optimizer,
-                batch_size=batch_size,
-                loss_config=loss_config,
-                aggregate_buffer=aggregate_buffer,
+                outdir=outdir,
+                name=name,
+                steps_done=steps_done,
+                episodes_done=episodes_done,
+                save_every_buffer_fills=save_every_buffer_fills,
+                buffer_fills_done=buffer_fills_done,
+                last_save_bucket=last_save_bucket,
+                algorithm="multi_target_dagger",
+                extra_metadata={
+                    "dagger_round": 0,
+                    "beta": 1.0,
+                    "dataset_size": len(memory_buffer),
+                    "buffer_capacity": memory_budget_meta,
+                    "buffer_fills_done": int(buffer_fills_done),
+                    "continue_target_norm_threshold": float(loss_config.continue_target_norm_threshold),
+                    "continue_weight": float(loss_config.continue_weight),
+                    "norm_floor": float(loss_config.norm_floor),
+                    "norm_floor_weight": float(loss_config.norm_floor_weight),
+                },
             )
-        except Exception as exc:
-            _log_episode_exception("DAgger warmstart", warmstart_episode + 1, exc, env)
-            continue
-        steps_done += int(episode_metrics["steps_done"])
-        episodes_done += 1
-        last_save_bucket = _maybe_save_checkpoint(
-            actor=actor,
-            actor_optimizer=actor_optimizer,
-            outdir=outdir,
-            name=name,
-            steps_done=steps_done,
-            episodes_done=episodes_done,
-            save_every_steps=save_every_steps,
-            last_save_bucket=last_save_bucket,
-            algorithm="multi_target_dagger",
-            extra_metadata={
-                "dagger_round": 0,
-                "beta": 1.0,
-                "dataset_size": len(aggregate_buffer),
-                "aggregate_memory_budget": memory_budget_meta,
-                "continue_target_norm_threshold": float(loss_config.continue_target_norm_threshold),
-                "continue_weight": float(loss_config.continue_weight),
-                "norm_floor": float(loss_config.norm_floor),
-                "norm_floor_weight": float(loss_config.norm_floor_weight),
-            },
-        )
-        _write_dagger_log_row(
-            csv_file_path=csv_file_path,
-            phase="warmstart",
-            round_index=0,
-            episode_index=episodes_done,
-            image_file=env.current_neuron_info["neuron_name"],
-            avg_reward=float(episode_metrics["episode_avg_reward"]),
-            avg_loss=float(episode_metrics["episode_avg_loss"]),
-            avg_step_mse=float(episode_metrics["episode_avg_step_mse"]),
-            avg_step_norm=float(episode_metrics["episode_avg_expert_step_norm"]),
-            policy_rollin_fraction=0.0,
-            false_stop_rate=float(episode_metrics["false_stop_rate"]),
-            false_continue_rate=float(episode_metrics["false_continue_rate"]),
-            steps_done=steps_done,
-            dataset_size=len(aggregate_buffer),
-            complexity=float(env.dataset.alpha),
-            beta=1.0,
-        )
-
+            steps_since_last_optimization = 0
+            warm_fill_rewards.clear()
+            warm_fill_step_norms.clear()
+            if warm_resume_state is not None and warm_resume_state.get("terminated", False):
+                warm_resume_state = None
 
     for round_index in range(dagger_rounds):
         beta = _compute_dagger_beta(round_index, dagger_rounds=dagger_rounds, beta_start=beta_start, beta_end=beta_end)
         if not use_progress_bar:
             print(f"Starting DAgger round {round_index + 1}/{dagger_rounds} with beta={beta:.3f}", flush=True)
 
-        rollout_rewards: List[float] = []
-        rollout_step_norms: List[float] = []
-        rollout_policy_fractions: List[float] = []
-        rollout_bidirectional_distances: List[Optional[float]] = []
-        rollout_precisions: List[Optional[float]] = []
-        rollout_coverages: List[Optional[float]] = []
-        round_collection_steps = 0
-        round_batch_stats: List[SupervisionBatchStats] = []
-        round_losses: List[float] = []
-        round_iter = tqdm(
-            range(rollout_episodes_per_round),
-            desc=f"DAgger round {round_index + 1}/{dagger_rounds}",
-            dynamic_ncols=True,
-            leave=True,
-            file=sys.stdout,
-            mininterval=1.0,
-            disable=not use_progress_bar,
-        )
-        # Track how many new samples have been pushed since the last supervision epoch.
-        pushes_since_last_opt = 0
+        # Per-round aggregators (persist across fills within the round)
+        round_rewards: List[float] = []
+        round_step_norms: List[float] = []
+        round_policy_fractions: List[float] = []
+        round_bidirectional_distances: List[Optional[float]] = []
+        round_precisions: List[Optional[float]] = []
+        round_coverages: List[Optional[float]] = []
 
-        for _round_episode in round_iter:
+        # Per-fill accumulators used when we trigger optimization
+        fill_rewards: List[float] = []
+        fill_step_norms: List[float] = []
+        fill_policy_fractions: List[float] = []
+        fill_bidirectional_distances: List[Optional[float]] = []
+        fill_precisions: List[Optional[float]] = []
+        fill_coverages: List[Optional[float]] = []
+
+        round_collection_steps = 0
+        round_resume_state: Optional[dict[str, object]] = None
+
+        while round_collection_steps < steps_per_round:
             try:
-                episode_metrics = _run_dagger_collection_episode(
+                episode_metrics, round_resume_state = _run_dagger_collection_episode(
                     env=env,
                     actor=actor,
-                    aggregate_buffer=aggregate_buffer,
+                    aggregate_buffer=memory_buffer,
                     beta=beta,
                     rng=rng,
+                    steps_budget=min(steps_per_round - round_collection_steps, buffer_capacity - steps_since_last_optimization),
+                    start_obs=(None if round_resume_state is None or round_resume_state.get("terminated", True) else round_resume_state.get("obs")),
+                    prev_rollin_action=(None if round_resume_state is None else round_resume_state.get("prev_action")),
                 )
             except Exception as exc:
                 _log_episode_exception(
@@ -1623,52 +1762,88 @@ def train_dagger(
                     env,
                 )
                 continue
-            steps_done += int(episode_metrics["steps_done"])
+
+            episode_steps = int(episode_metrics["steps_done"])
+            if episode_steps <= 0:
+                break
+            steps_done += episode_steps
             episodes_done += 1
-            round_collection_steps += int(episode_metrics["steps_done"])
-            rollout_rewards.append(float(episode_metrics["episode_avg_reward"]))
-            rollout_step_norms.append(float(episode_metrics["episode_avg_expert_step_norm"]))
-            rollout_policy_fractions.append(float(episode_metrics["policy_rollin_fraction"]))
-            rollout_bidirectional_distances.append(_safe_float(episode_metrics.get("episode_bidirectional_distance")))
-            rollout_precisions.append(_safe_float(episode_metrics.get("episode_precision")))
-            rollout_coverages.append(_safe_float(episode_metrics.get("episode_coverage")))
-            # When the buffer is full and we have collected one full-capacity turnover
-            # of new samples without any intermediate policy updates, trigger a
-            # supervision epoch (consuming the current buffer snapshot) and reset
-            # the push counter. Additionally, break the rollout loop if we've
-            # already collected enough steps for this round.
-            pushes_since_last_opt += int(episode_metrics["steps_done"])
+            round_collection_steps += episode_steps
 
-            if len(aggregate_buffer) >= aggregate_memory_budget and pushes_since_last_opt >= aggregate_memory_budget:
-                # Run one supervision epoch over the current buffer snapshot
-                epoch_batch_stats = _run_supervision_epoch(
-                    actor=actor,
-                    actor_optimizer=actor_optimizer,
-                    aggregate_buffer=aggregate_buffer,
-                    batch_size=batch_size,
-                    transform=True,
-                    loss_config=loss_config,
-                )
-                round_batch_stats.extend(epoch_batch_stats)
-                round_losses.extend(stat.loss for stat in epoch_batch_stats)
-                # Reset the push counter to measure the next turnover
-                pushes_since_last_opt = 0
+            r_reward = float(episode_metrics["episode_avg_reward"])
+            # Clear resume_state if episode terminated so next episode starts fresh
+            if round_resume_state is not None and round_resume_state.get("terminated", False):
+                round_resume_state = None
+            r_step_norm = float(episode_metrics["episode_avg_expert_step_norm"])
+            r_policy_frac = float(episode_metrics["policy_rollin_fraction"])
+            r_bidist = _safe_float(episode_metrics.get("episode_bidirectional_distance"))
+            r_prec = _safe_float(episode_metrics.get("episode_precision"))
+            r_cov = _safe_float(episode_metrics.get("episode_coverage"))
 
-        # If there are any unoptimized pushes remaining at round end, run a
-        # final supervision epoch to consume them before beta is reduced.
-        round_losses: List[float] = []
-        if pushes_since_last_opt > 0 or len(round_batch_stats) == 0:
-            try:
-                epoch_batch_stats = _run_supervision_epoch(
-                    actor=actor,
-                    actor_optimizer=actor_optimizer,
-                    aggregate_buffer=aggregate_buffer,
-                    batch_size=batch_size,
-                    transform=True,
-                    loss_config=loss_config,
-                )
-                round_batch_stats.extend(epoch_batch_stats)
-                round_losses.extend(stat.loss for stat in epoch_batch_stats)
+            round_rewards.append(r_reward)
+            round_step_norms.append(r_step_norm)
+            round_policy_fractions.append(r_policy_frac)
+            round_bidirectional_distances.append(r_bidist)
+            round_precisions.append(r_prec)
+            round_coverages.append(r_cov)
+
+            fill_rewards.append(r_reward)
+            fill_step_norms.append(r_step_norm)
+            fill_policy_fractions.append(r_policy_frac)
+            fill_bidirectional_distances.append(r_bidist)
+            fill_precisions.append(r_prec)
+            fill_coverages.append(r_cov)
+
+            steps_since_last_optimization += episode_steps
+
+            # If buffer reached the threshold of new samples, run optimization
+            if steps_since_last_optimization >= buffer_capacity:
+                for _epoch_idx in range(epochs_per_buffer_fill):
+                    epoch_batch_stats = _run_supervision_epoch(
+                        actor=actor,
+                        actor_optimizer=actor_optimizer,
+                        aggregate_buffer=memory_buffer,
+                        batch_size=batch_size,
+                        transform=True,
+                        loss_config=loss_config,
+                    )
+                    (
+                        round_true_continue_count,
+                        round_false_choose_stop_count,
+                        round_true_stop_count,
+                        round_false_continue_count,
+                    ) = _aggregate_supervision_stats(epoch_batch_stats)
+
+                    buffer_epoch_index += 1
+                    _write_dagger_log_row(
+                        csv_file_path=csv_file_path,
+                        phase="dagger",
+                        round_index=round_index + 1,
+                        buffer_epoch_index=buffer_epoch_index,
+                        avg_reward=float(np.mean(fill_rewards)) if fill_rewards else 0.0,
+                        avg_loss=float(np.mean([stat.loss for stat in epoch_batch_stats])) if epoch_batch_stats else 0.0,
+                        avg_step_mse=float(np.mean([stat.step_mse for stat in epoch_batch_stats])) if epoch_batch_stats else 0.0,
+                        avg_step_norm=float(np.mean(fill_step_norms)) if fill_step_norms else 0.0,
+                        policy_rollin_fraction=float(np.mean(fill_policy_fractions)) if fill_policy_fractions else 0.0,
+                        false_stop_rate=_safe_rate(round_false_choose_stop_count, round_true_continue_count),
+                        false_continue_rate=_safe_rate(round_false_continue_count, round_true_stop_count),
+                        steps_done=steps_done,
+                        episodes_done=episodes_done,
+                        dataset_size=len(memory_buffer),
+                        complexity=float(env.dataset.alpha),
+                        beta=float(beta),
+                        round_bidirectional_distance_avg=_safe_float(np.mean([v for v in fill_bidirectional_distances if v is not None])) if any(v is not None for v in fill_bidirectional_distances) else None,
+                        round_bidirectional_distance_min=_safe_float(np.min([v for v in fill_bidirectional_distances if v is not None])) if any(v is not None for v in fill_bidirectional_distances) else None,
+                        round_bidirectional_distance_max=_safe_float(np.max([v for v in fill_bidirectional_distances if v is not None])) if any(v is not None for v in fill_bidirectional_distances) else None,
+                        round_precision_avg=_safe_float(np.mean([v for v in fill_precisions if v is not None])) if any(v is not None for v in fill_precisions) else None,
+                        round_precision_min=_safe_float(np.min([v for v in fill_precisions if v is not None])) if any(v is not None for v in fill_precisions) else None,
+                        round_precision_max=_safe_float(np.max([v for v in fill_precisions if v is not None])) if any(v is not None for v in fill_precisions) else None,
+                        round_coverage_avg=_safe_float(np.mean([v for v in fill_coverages if v is not None])) if any(v is not None for v in fill_coverages) else None,
+                        round_coverage_min=_safe_float(np.min([v for v in fill_coverages if v is not None])) if any(v is not None for v in fill_coverages) else None,
+                        round_coverage_max=_safe_float(np.max([v for v in fill_coverages if v is not None])) if any(v is not None for v in fill_coverages) else None,
+                    )
+
+                buffer_fills_done += 1
                 last_save_bucket = _maybe_save_checkpoint(
                     actor=actor,
                     actor_optimizer=actor_optimizer,
@@ -1676,102 +1851,119 @@ def train_dagger(
                     name=name,
                     steps_done=steps_done,
                     episodes_done=episodes_done,
-                    save_every_steps=save_every_steps,
+                    save_every_buffer_fills=save_every_buffer_fills,
+                    buffer_fills_done=buffer_fills_done,
                     last_save_bucket=last_save_bucket,
                     algorithm="multi_target_dagger",
                     extra_metadata={
                         "dagger_round": int(round_index + 1),
                         "beta": float(beta),
-                        "dataset_size": len(aggregate_buffer),
-                        "aggregate_memory_budget": memory_budget_meta,
+                        "dataset_size": len(memory_buffer,
+                        ),
+                        "buffer_capacity": memory_budget_meta,
+                        "buffer_fills_done": int(buffer_fills_done),
                         "continue_target_norm_threshold": float(loss_config.continue_target_norm_threshold),
                         "continue_weight": float(loss_config.continue_weight),
                         "norm_floor": float(loss_config.norm_floor),
                         "norm_floor_weight": float(loss_config.norm_floor_weight),
                     },
                 )
-            except Exception as exc:
-                _log_episode_exception(
-                    f"DAgger update round {round_index + 1}",
-                    episodes_done,
-                    exc,
-                    env,
+
+                # Reset fill counters and continue collection on same buffer
+                steps_since_last_optimization = 0
+                fill_rewards.clear()
+                fill_step_norms.clear()
+                fill_policy_fractions.clear()
+                fill_bidirectional_distances.clear()
+                fill_precisions.clear()
+                fill_coverages.clear()
+
+        # End of round collection; run final optimization on any remaining new samples
+        if steps_since_last_optimization > 0:
+            for _epoch_idx in range(epochs_per_buffer_fill):
+                epoch_batch_stats = _run_supervision_epoch(
+                    actor=actor,
+                    actor_optimizer=actor_optimizer,
+                    aggregate_buffer=memory_buffer,
+                    batch_size=batch_size,
+                    transform=True,
+                    loss_config=loss_config,
                 )
-                # continue on; we still want to record summary metrics below
-                pass
+                (
+                    round_true_continue_count,
+                    round_false_choose_stop_count,
+                    round_true_stop_count,
+                    round_false_continue_count,
+                ) = _aggregate_supervision_stats(epoch_batch_stats)
 
-        (
-            round_true_continue_count,
-            round_false_choose_stop_count,
-            round_true_stop_count,
-            round_false_continue_count,
-        ) = _aggregate_supervision_stats(round_batch_stats)
+                buffer_epoch_index += 1
+                _write_dagger_log_row(
+                    csv_file_path=csv_file_path,
+                    phase="dagger",
+                    round_index=round_index + 1,
+                    buffer_epoch_index=buffer_epoch_index,
+                    avg_reward=float(np.mean(fill_rewards)) if fill_rewards else 0.0,
+                    avg_loss=float(np.mean([stat.loss for stat in epoch_batch_stats])) if epoch_batch_stats else 0.0,
+                    avg_step_mse=float(np.mean([stat.step_mse for stat in epoch_batch_stats])) if epoch_batch_stats else 0.0,
+                    avg_step_norm=float(np.mean(fill_step_norms)) if fill_step_norms else 0.0,
+                    policy_rollin_fraction=float(np.mean(fill_policy_fractions)) if fill_policy_fractions else 0.0,
+                    false_stop_rate=_safe_rate(round_false_choose_stop_count, round_true_continue_count),
+                    false_continue_rate=_safe_rate(round_false_continue_count, round_true_stop_count),
+                    steps_done=steps_done,
+                    episodes_done=episodes_done,
+                    dataset_size=len(memory_buffer),
+                    complexity=float(env.dataset.alpha),
+                    beta=float(beta),
+                    round_bidirectional_distance_avg=_safe_float(np.mean([v for v in fill_bidirectional_distances if v is not None])) if any(v is not None for v in fill_bidirectional_distances) else None,
+                    round_bidirectional_distance_min=_safe_float(np.min([v for v in fill_bidirectional_distances if v is not None])) if any(v is not None for v in fill_bidirectional_distances) else None,
+                    round_bidirectional_distance_max=_safe_float(np.max([v for v in fill_bidirectional_distances if v is not None])) if any(v is not None for v in fill_bidirectional_distances) else None,
+                    round_precision_avg=_safe_float(np.mean([v for v in fill_precisions if v is not None])) if any(v is not None for v in fill_precisions) else None,
+                    round_precision_min=_safe_float(np.min([v for v in fill_precisions if v is not None])) if any(v is not None for v in fill_precisions) else None,
+                    round_precision_max=_safe_float(np.max([v for v in fill_precisions if v is not None])) if any(v is not None for v in fill_precisions) else None,
+                    round_coverage_avg=_safe_float(np.mean([v for v in fill_coverages if v is not None])) if any(v is not None for v in fill_coverages) else None,
+                    round_coverage_min=_safe_float(np.min([v for v in fill_coverages if v is not None])) if any(v is not None for v in fill_coverages) else None,
+                    round_coverage_max=_safe_float(np.max([v for v in fill_coverages if v is not None])) if any(v is not None for v in fill_coverages) else None,
+                )
 
-        (
-            round_bidirectional_distance_avg,
-            round_bidirectional_distance_min,
-            round_bidirectional_distance_max,
-        ) = _summarize_round_metric(rollout_bidirectional_distances)
-        (
-            round_precision_avg,
-            round_precision_min,
-            round_precision_max,
-        ) = _summarize_round_metric(rollout_precisions)
-        (
-            round_coverage_avg,
-            round_coverage_min,
-            round_coverage_max,
-        ) = _summarize_round_metric(rollout_coverages)
+            buffer_fills_done += 1
+            last_save_bucket = _maybe_save_checkpoint(
+                actor=actor,
+                actor_optimizer=actor_optimizer,
+                outdir=outdir,
+                name=name,
+                steps_done=steps_done,
+                episodes_done=episodes_done,
+                save_every_buffer_fills=save_every_buffer_fills,
+                buffer_fills_done=buffer_fills_done,
+                last_save_bucket=last_save_bucket,
+                algorithm="multi_target_dagger",
+                extra_metadata={
+                    "dagger_round": int(round_index + 1),
+                    "beta": float(beta),
+                    "dataset_size": len(memory_buffer),
+                    "buffer_capacity": memory_budget_meta,
+                    "buffer_fills_done": int(buffer_fills_done),
+                    "continue_target_norm_threshold": float(loss_config.continue_target_norm_threshold),
+                    "continue_weight": float(loss_config.continue_weight),
+                    "norm_floor": float(loss_config.norm_floor),
+                    "norm_floor_weight": float(loss_config.norm_floor_weight),
+                },
+            )
 
-        _write_dagger_log_row(
-            csv_file_path=csv_file_path,
-            phase="dagger",
-            round_index=round_index + 1,
-            episode_index=episodes_done,
-            image_file="__round_summary__",
-            avg_reward=float(np.mean(rollout_rewards)) if rollout_rewards else 0.0,
-            avg_loss=float(np.mean(round_losses)) if round_losses else 0.0,
-            avg_step_mse=float(np.mean([stat.step_mse for stat in round_batch_stats])) if round_batch_stats else 0.0,
-            avg_step_norm=float(np.mean(rollout_step_norms)) if rollout_step_norms else 0.0,
-            policy_rollin_fraction=float(np.mean(rollout_policy_fractions)) if rollout_policy_fractions else 0.0,
-            false_stop_rate=_safe_rate(round_false_choose_stop_count, round_true_continue_count),
-            false_continue_rate=_safe_rate(round_false_continue_count, round_true_stop_count),
-            steps_done=steps_done,
-            dataset_size=len(aggregate_buffer),
-            complexity=float(env.dataset.alpha),
-            beta=float(beta),
-            round_bidirectional_distance_avg=round_bidirectional_distance_avg,
-            round_bidirectional_distance_min=round_bidirectional_distance_min,
-            round_bidirectional_distance_max=round_bidirectional_distance_max,
-            round_precision_avg=round_precision_avg,
-            round_precision_min=round_precision_min,
-            round_precision_max=round_precision_max,
-            round_coverage_avg=round_coverage_avg,
-            round_coverage_min=round_coverage_min,
-            round_coverage_max=round_coverage_max,
-        )
+            steps_since_last_optimization = 0
+            fill_rewards.clear()
+            fill_step_norms.clear()
+            fill_policy_fractions.clear()
+            fill_bidirectional_distances.clear()
+            fill_precisions.clear()
+            fill_coverages.clear()
 
-        # Save a checkpoint for this round with a unique name
-        round_ckpt_name = f"{name}_round_{round_index + 1}"
-        _save_checkpoint(
-            actor=actor,
-            actor_optimizer=actor_optimizer,
-            outdir=outdir,
-            name=round_ckpt_name,
-            steps_done=steps_done,
-            episodes_done=episodes_done,
-            algorithm="multi_target_dagger",
-            extra_metadata={
-                "dagger_round": int(round_index + 1),
-                "beta": float(beta),
-                "dataset_size": len(aggregate_buffer),
-                "aggregate_memory_budget": memory_budget_meta,
-                "continue_target_norm_threshold": float(loss_config.continue_target_norm_threshold),
-                "continue_weight": float(loss_config.continue_weight),
-                "norm_floor": float(loss_config.norm_floor),
-                "norm_floor_weight": float(loss_config.norm_floor_weight),
-            },
-        )
+        # reset env between rounds per spec, but keep memory_buffer contents
+        try:
+            env.reset(return_state=True)
+        except Exception:
+            # best-effort reset; continue regardless
+            pass
 
     final_beta = _compute_dagger_beta(dagger_rounds - 1, dagger_rounds=dagger_rounds, beta_start=beta_start, beta_end=beta_end)
     _save_checkpoint(
@@ -1785,8 +1977,9 @@ def train_dagger(
         extra_metadata={
             "dagger_round": int(dagger_rounds),
             "beta": float(final_beta),
-            "dataset_size": len(aggregate_buffer),
-            "aggregate_memory_budget": memory_budget_meta,
+            "dataset_size": int(buffer_capacity),
+            "buffer_capacity": memory_budget_meta,
+            "buffer_fills_done": int(buffer_fills_done),
             "continue_target_norm_threshold": float(loss_config.continue_target_norm_threshold),
             "continue_weight": float(loss_config.continue_weight),
             "norm_floor": float(loss_config.norm_floor),
@@ -1795,337 +1988,7 @@ def train_dagger(
     )
 
 
-def train_dagger_online(
-    env,
-    actor: torch.nn.Module,
-    actor_optimizer: torch.optim.Optimizer,
-    outdir: Path | str,
-    logdir: Path | str,
-    name: str,
-    batch_size: int = 64,
-    n_episodes: int = 600,
-    warmstart_episodes: int = 100,
-    update_after_steps: Optional[int] = None,
-    update_every: int = 64,
-    updates_per_step: int = 1,
-    beta_start: float = 1.0,
-    beta_end: float = 0.0,
-    save_every_steps: int = 500,
-    aggregate_memory_budget: int = 10000,
-    rng: Optional[np.random.Generator] = None,
-    continue_target_norm_threshold: Optional[float] = None,
-    continue_weight: float = 1.0,
-    norm_floor: float = 0.0,
-    norm_floor_weight: float = 0.0,
-    stop_violation_weight: float = 1.0,
-    objective_mode: str = "norm_floor",
-    continue_direction_weight: float = 1.0,
-    norm_cls_weight: float = 1.0,
-    norm_cls_temperature: float = 0.25,
-    norm_margin_weight: float = 1.0,
-    stop_margin: float = 0.1,
-    continue_margin: float = 0.1,
-) -> None:
-    """Train a deterministic actor with online DAgger and replay-buffer updates."""
-    if batch_size < 1:
-        raise ValueError("batch_size must be at least 1")
-    if n_episodes < 1:
-        raise ValueError("n_episodes must be at least 1")
-    if warmstart_episodes < 0:
-        raise ValueError("warmstart_episodes must be non-negative")
-    if warmstart_episodes > n_episodes:
-        raise ValueError("warmstart_episodes must be less than or equal to n_episodes")
-    if update_every < 1:
-        raise ValueError("update_every must be at least 1")
-    if updates_per_step < 1:
-        raise ValueError("updates_per_step must be at least 1")
-    if aggregate_memory_budget < 1:
-        raise ValueError("aggregate_memory_budget must be at least 1")
 
-    outdir = Path(outdir)
-    logdir = Path(logdir)
-    outdir.mkdir(parents=True, exist_ok=True)
-    logdir.mkdir(parents=True, exist_ok=True)
-
-    if rng is None:
-        rng = np.random.default_rng()
-    if update_after_steps is None:
-        update_after_steps = batch_size
-    if update_after_steps < 1:
-        raise ValueError("update_after_steps must be at least 1")
-
-    if continue_target_norm_threshold is None:
-        continue_target_norm_threshold = float(getattr(env, "stall_threshold", 1.0))
-    loss_config = _build_supervision_loss_config(
-        continue_target_norm_threshold=continue_target_norm_threshold,
-        continue_weight=continue_weight,
-        norm_floor=norm_floor,
-        norm_floor_weight=norm_floor_weight,
-        stop_violation_weight=stop_violation_weight,
-        objective_mode=objective_mode,
-        continue_direction_weight=continue_direction_weight,
-        norm_cls_weight=norm_cls_weight,
-        norm_cls_temperature=norm_cls_temperature,
-        norm_margin_weight=norm_margin_weight,
-        stop_margin=stop_margin,
-        continue_margin=continue_margin,
-    )
-
-    steps_done = 0
-    episodes_done = 0
-    last_save_bucket = -1
-    use_progress_bar = sys.stdout.isatty()
-    csv_file_path = logdir / f"{name}_{date_time}_log.csv"
-    aggregate_buffer = BehaviorCloningReplayBuffer(capacity=aggregate_memory_budget, include_z_flip=True)
-    memory_budget_meta = int(aggregate_memory_budget)
-    n_dagger_episodes = int(n_episodes - warmstart_episodes)
-
-    warmstart_iter = tqdm(
-        range(warmstart_episodes),
-        desc="DAgger warmstart",
-        dynamic_ncols=True,
-        leave=True,
-        file=sys.stdout,
-        mininterval=1.0,
-        disable=not use_progress_bar,
-    )
-    for warmstart_episode in warmstart_iter:
-        if not use_progress_bar:
-            print(f"Starting DAgger warmstart episode {warmstart_episode + 1}/{warmstart_episodes}", flush=True)
-
-        try:
-            episode_metrics = _run_expert_episode(
-                env=env,
-                actor=actor,
-                actor_optimizer=actor_optimizer,
-                batch_size=batch_size,
-                loss_config=loss_config,
-                aggregate_buffer=aggregate_buffer,
-            )
-        except Exception as exc:
-            _log_episode_exception("DAgger online warmstart", warmstart_episode + 1, exc, env)
-            continue
-        steps_done += int(episode_metrics["steps_done"])
-        episodes_done += 1
-        last_save_bucket = _maybe_save_checkpoint(
-            actor=actor,
-            actor_optimizer=actor_optimizer,
-            outdir=outdir,
-            name=name,
-            steps_done=steps_done,
-            episodes_done=episodes_done,
-            save_every_steps=save_every_steps,
-            last_save_bucket=last_save_bucket,
-            algorithm="multi_target_dagger_online",
-            extra_metadata={
-                "dagger_episode": 0,
-                "beta": 1.0,
-                "dataset_size": len(aggregate_buffer),
-                "aggregate_memory_budget": memory_budget_meta,
-                "update_after_steps": int(update_after_steps),
-                "update_every": int(update_every),
-                "updates_per_step": int(updates_per_step),
-                "continue_target_norm_threshold": float(loss_config.continue_target_norm_threshold),
-                "continue_weight": float(loss_config.continue_weight),
-                "norm_floor": float(loss_config.norm_floor),
-                "norm_floor_weight": float(loss_config.norm_floor_weight),
-            },
-        )
-        _write_dagger_log_row(
-            csv_file_path=csv_file_path,
-            phase="warmstart",
-            round_index=0,
-            episode_index=episodes_done,
-            image_file=env.current_neuron_info["neuron_name"],
-            avg_reward=float(episode_metrics["episode_avg_reward"]),
-            avg_loss=float(episode_metrics["episode_avg_loss"]),
-            avg_step_mse=float(episode_metrics["episode_avg_step_mse"]),
-            avg_step_norm=float(episode_metrics["episode_avg_expert_step_norm"]),
-            policy_rollin_fraction=0.0,
-            false_stop_rate=float(episode_metrics["false_stop_rate"]),
-            false_continue_rate=float(episode_metrics["false_continue_rate"]),
-            steps_done=steps_done,
-            dataset_size=len(aggregate_buffer),
-            complexity=float(env.dataset.alpha),
-            beta=1.0,
-        )
-
-    dagger_iter = tqdm(
-        range(n_dagger_episodes),
-        desc="DAgger online",
-        dynamic_ncols=True,
-        leave=True,
-        file=sys.stdout,
-        mininterval=1.0,
-        disable=not use_progress_bar,
-    )
-    for dagger_episode_idx in dagger_iter:
-        beta = _compute_dagger_beta(
-            dagger_episode_idx,
-            dagger_rounds=max(1, n_dagger_episodes),
-            beta_start=beta_start,
-            beta_end=beta_end,
-        )
-        if not use_progress_bar:
-            print(
-                f"Starting DAgger online episode {dagger_episode_idx + 1}/{n_dagger_episodes} with beta={beta:.3f}",
-                flush=True,
-            )
-
-        try:
-            obs = env.reset(return_state=True)
-            prev_rollin_action: Optional[torch.Tensor] = None
-            episode_rewards: List[float] = []
-            episode_step_norms: List[float] = []
-            episode_losses: List[float] = []
-            episode_step_mse: List[float] = []
-            policy_steps = 0
-            episode_steps = 0
-            correct_continue_count = 0
-            false_choose_stop_count = 0
-            correct_stop_count = 0
-            false_continue_count = 0
-
-            for _step_idx in count():
-                current_target_vectors = _current_target_vectors_from_env(env)
-                aggregate_buffer.push(obs, current_target_vectors)
-
-                action_source = _sample_rollin_source(beta=beta, rng=rng)
-                if action_source == "expert":
-                    rollin_action = select_expert_action(current_target_vectors, previous_action=prev_rollin_action)
-                else:
-                    rollin_action = _predict_policy_action(actor, obs)
-                    policy_steps += 1
-                episode_step_norms.append(float(torch.linalg.norm(rollin_action).item()))
-
-                next_obs, reward, terminated, _truncated, info = env.step(rollin_action)
-                steps_done += 1
-                episode_steps += 1
-                episode_rewards.append(_reward_to_float(reward))
-
-                current_target_distance = _min_target_norm(info.get("current_target_vectors"))
-                if action_source == "policy" and current_target_distance is not None:
-                    status = info.get("status")
-                    if current_target_distance > float(loss_config.continue_target_norm_threshold):
-                        correct_continue_count += 1
-                        if status == "choose_stop":
-                            false_choose_stop_count += 1
-                    else:
-                        correct_stop_count += 1
-                        if status == "continue":
-                            false_continue_count += 1
-
-                learning_started = len(aggregate_buffer) >= update_after_steps
-                if learning_started and steps_done % update_every == 0:
-                    for _update_idx in range(updates_per_step):
-                        maybe_loss = _optimize_from_bc_replay_buffer(
-                            actor=actor,
-                            actor_optimizer=actor_optimizer,
-                            replay_buffer=aggregate_buffer,
-                            batch_size=batch_size,
-                            transform=True,
-                            loss_config=loss_config,
-                        )
-                        if maybe_loss is not None:
-                            episode_losses.append(float(maybe_loss.loss))
-                            episode_step_mse.append(float(maybe_loss.step_mse))
-
-                    last_save_bucket = _maybe_save_checkpoint(
-                        actor=actor,
-                        actor_optimizer=actor_optimizer,
-                        outdir=outdir,
-                        name=name,
-                        steps_done=steps_done,
-                        episodes_done=episodes_done + 1,
-                        save_every_steps=save_every_steps,
-                        last_save_bucket=last_save_bucket,
-                        algorithm="multi_target_dagger_online",
-                        extra_metadata={
-                            "dagger_episode": int(dagger_episode_idx + 1),
-                            "beta": float(beta),
-                            "dataset_size": len(aggregate_buffer),
-                            "aggregate_memory_budget": memory_budget_meta,
-                            "update_after_steps": int(update_after_steps),
-                            "update_every": int(update_every),
-                            "updates_per_step": int(updates_per_step),
-                            "continue_target_norm_threshold": float(loss_config.continue_target_norm_threshold),
-                            "continue_weight": float(loss_config.continue_weight),
-                            "norm_floor": float(loss_config.norm_floor),
-                            "norm_floor_weight": float(loss_config.norm_floor_weight),
-                        },
-                    )
-
-                if info["terminate_episode"]:
-                    break
-
-                if terminated:
-                    obs = env.get_state()
-                    prev_rollin_action = None
-                else:
-                    obs = next_obs
-                    prev_rollin_action = rollin_action.detach().cpu()
-
-            episodes_done += 1
-            false_stop_rate = (
-                float(false_choose_stop_count / correct_continue_count)
-                if correct_continue_count > 0
-                else 0.0
-            )
-            false_continue_rate = (
-                float(false_continue_count / correct_stop_count)
-                if correct_stop_count > 0
-                else 0.0
-            )
-            _write_dagger_log_row(
-                csv_file_path=csv_file_path,
-                phase="dagger_online",
-                round_index=0,
-                episode_index=episodes_done,
-                image_file=env.current_neuron_info["neuron_name"],
-                avg_reward=float(np.mean(episode_rewards)) if episode_rewards else 0.0,
-                avg_loss=float(np.mean(episode_losses)) if episode_losses else 0.0,
-                avg_step_mse=float(np.mean(episode_step_mse)) if episode_step_mse else 0.0,
-                avg_step_norm=float(np.mean(episode_step_norms)) if episode_step_norms else 0.0,
-                policy_rollin_fraction=float(policy_steps / episode_steps) if episode_steps > 0 else 0.0,
-                false_stop_rate=false_stop_rate,
-                false_continue_rate=false_continue_rate,
-                steps_done=steps_done,
-                dataset_size=len(aggregate_buffer),
-                complexity=float(env.dataset.alpha),
-                beta=float(beta),
-            )
-        except Exception as exc:
-            _log_episode_exception("DAgger online", dagger_episode_idx + 1, exc, env)
-            continue
-
-    final_beta = _compute_dagger_beta(
-        max(0, n_dagger_episodes - 1),
-        dagger_rounds=max(1, n_dagger_episodes),
-        beta_start=beta_start,
-        beta_end=beta_end,
-    )
-    _save_checkpoint(
-        actor=actor,
-        actor_optimizer=actor_optimizer,
-        outdir=outdir,
-        name=name,
-        steps_done=steps_done,
-        episodes_done=episodes_done,
-        algorithm="multi_target_dagger_online",
-        extra_metadata={
-            "dagger_episode": int(n_dagger_episodes),
-            "beta": float(final_beta),
-            "dataset_size": len(aggregate_buffer),
-            "aggregate_memory_budget": memory_budget_meta,
-            "update_after_steps": int(update_after_steps),
-            "update_every": int(update_every),
-            "updates_per_step": int(updates_per_step),
-            "continue_target_norm_threshold": float(loss_config.continue_target_norm_threshold),
-            "continue_weight": float(loss_config.continue_weight),
-            "norm_floor": float(loss_config.norm_floor),
-            "norm_floor_weight": float(loss_config.norm_floor_weight),
-        },
-    )
 
 
 __all__ = [

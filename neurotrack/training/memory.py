@@ -4,6 +4,8 @@ This module implements a replay buffer and a prioritized replay buffer for stori
 Version 2 (v2) refactors the buffer to store target vectors rather than rewards so that the reward gradient can be calculated during the actor update step.
 """
 import random
+from typing import Optional, Sequence
+
 import torch
 import numpy as np
 
@@ -188,6 +190,43 @@ class BehaviorCloningReplayBuffer:
         self.idx = (self.idx + 1) % self.capacity
         self.full = self.idx == 0 or self.full
 
+    def _logical_to_physical_indices(self, logical_indices: torch.Tensor) -> torch.Tensor:
+        if self.full:
+            return (self.idx + logical_indices) % self.capacity
+        return logical_indices
+
+    def sample_indices(self, logical_indices: Sequence[int], transform: bool = True):
+        real_size = len(self)
+        if real_size == 0:
+            raise ValueError("Cannot sample from an empty BehaviorCloningReplayBuffer.")
+
+        idxs = torch.as_tensor(logical_indices, dtype=torch.long)
+        if idxs.ndim != 1:
+            raise ValueError(f"logical_indices must be a 1D sequence, got shape {tuple(idxs.shape)}")
+        if idxs.numel() == 0:
+            raise ValueError("logical_indices must contain at least one element")
+        if torch.any(idxs < 0) or torch.any(idxs >= real_size):
+            raise IndexError(
+                f"logical_indices must be within [0, {real_size - 1}], got min={int(idxs.min())}, max={int(idxs.max())}"
+            )
+
+        phys_idxs = self._logical_to_physical_indices(idxs)
+        obs = self.obs[phys_idxs].to(device=DEVICE)
+        target_vectors, target_mask = _pad_target_vector_sets(
+            [self.target_vectors[int(idx)] for idx in phys_idxs.tolist()],
+            device=DEVICE,
+        )
+
+        if transform:
+            obs, target_vectors, target_mask = _transform_bc_batch(
+                obs,
+                target_vectors,
+                target_mask,
+                include_z_flip=self.include_z_flip,
+            )
+
+        return obs, target_vectors, target_mask
+
     def sample(self, batch_size, replacement=False, transform=True):
         real_size = len(self)
         if real_size == 0:
@@ -205,22 +244,7 @@ class BehaviorCloningReplayBuffer:
             idxs = torch.randint(real_size, size=(batch_size,))
         else:
             idxs = torch.randperm(real_size)[:batch_size]
-
-        obs = self.obs[idxs].to(device=DEVICE)
-        target_vectors, target_mask = _pad_target_vector_sets(
-            [self.target_vectors[int(idx)] for idx in idxs.tolist()],
-            device=DEVICE,
-        )
-
-        if transform:
-            obs, target_vectors, target_mask = _transform_bc_batch(
-                obs,
-                target_vectors,
-                target_mask,
-                include_z_flip=self.include_z_flip,
-            )
-
-        return obs, target_vectors, target_mask
+        return self.sample_indices(idxs.tolist(), transform=transform)
 
     def __len__(self):
         return self.capacity if self.full else self.idx

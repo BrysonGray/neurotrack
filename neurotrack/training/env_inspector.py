@@ -438,12 +438,12 @@ def run_policy(env, actor, stochastic=False):
                 loss_config=loss_config,
             )
             loss_value = float(loss_tensor.item())
-            step_mse_value = float(context.step_mse)
+            # step_mse_value = float(context.step_mse)
         step_len_value = float(torch.linalg.norm(direction_t).item())
 
         return {
             'avg_loss': loss_value,
-            'step_mse': step_mse_value,
+            # 'step_mse': step_mse_value,
             'false_stop_rate': float(pred_stop and not true_stop),
             'false_continue_rate': float((not pred_stop) and true_stop),
             'avg_step_length': step_len_value,
@@ -455,7 +455,7 @@ def run_policy(env, actor, stochastic=False):
         n = float(len(metrics_list))
         return {
             'avg_loss': sum(m['avg_loss'] for m in metrics_list) / n,
-            'step_mse': sum(m['step_mse'] for m in metrics_list) / n,
+            # 'step_mse': sum(m['step_mse'] for m in metrics_list) / n,
             'false_stop_rate': sum(m['false_stop_rate'] for m in metrics_list) / n,
             'false_continue_rate': sum(m['false_continue_rate'] for m in metrics_list) / n,
             'avg_step_length': sum(m['avg_step_length'] for m in metrics_list) / n,
@@ -525,7 +525,7 @@ def run_policy(env, actor, stochastic=False):
         else:
             lines.extend([
                 f"avg_loss: {step_metrics['avg_loss']:.6f}",
-                f"avg_step_mse: {step_metrics['step_mse']:.6f}",
+                # f"avg_step_mse: {step_metrics['step_mse']:.6f}",
                 f"false_stop_rate: {step_metrics['false_stop_rate']:.6f}",
                 f"false_continue_rate: {step_metrics['false_continue_rate']:.6f}",
                 f"avg_step_length: {step_metrics['avg_step_length']:.6f}",

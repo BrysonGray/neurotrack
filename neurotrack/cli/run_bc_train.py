@@ -121,7 +121,7 @@ class BCTrainConfig:
     start_idx: int = 0
     crop_size: int = 128
     patches_per_image: int = 10
-    save_every_buffer_fills: int = 1
+    save_every_updates: int = 1
     policy_weights: Optional[str] = None
     seeds_path: Optional[str] = None
     root_sampling_probability: Optional[float] = None
@@ -130,12 +130,15 @@ class BCTrainConfig:
     crop_patches: bool = True
     dagger_rounds: int = 0
     steps_per_round: int = 100000
-    epochs_per_buffer_fill: int = 1
+    epochs_per_update: int = 1
+    steps_per_update: int = 100000
     warmstart_steps: int = 100000
+    beta_schedule: str = "linear"
     beta_start: float = 1.0
     beta_end: float = 0.0
+    beta_decay: float = 0.5
+    beta_step: float = 0.1
     buffer_capacity: int = 100000
-    save_every_steps: int = 500
     continue_target_norm_threshold: Optional[float] = None
     continue_weight: float = 1.0
     norm_floor: float = 0.0
@@ -181,11 +184,11 @@ class BCTrainConfig:
             repeat_starts=bool(_get_param(params, "repeat_starts", default=True)),
             branching=bool(_get_param(params, "branching", default=False)),
             rng_seed=int(_get_param(params, "rng_seed", default=1)),
-            start_complexity=float(_get_param(params, "start_complexity", default=0.0)),
+            start_complexity=float(_get_param(params, "start_complexity", default=1.0)),
             start_idx=int(_get_param(params, "start_idx", default=0)),
             crop_size=int(_get_param(params, "crop_size", default=128)),
             patches_per_image=int(_get_param(params, "patches_per_image", default=10)),
-            save_every_buffer_fills=int(_get_param(params, "save_every_buffer_fills", default=1)),
+            save_every_updates=int(_get_param(params, "save_every_updates", "save_every_buffer_fills", default=1)),
             policy_weights=_get_param(params, "policy_weights"),
             seeds_path=_get_param(params, "seeds_path"),
             root_sampling_probability=_get_param(params, "root_sampling_probability"),
@@ -194,12 +197,15 @@ class BCTrainConfig:
             crop_patches=bool(_get_param(params, "crop_patches", default=True)),
             dagger_rounds=int(_get_param(params, "dagger_rounds", default=0)),
             steps_per_round=steps_per_round,
-            epochs_per_buffer_fill=int(_get_param(params, "epochs_per_buffer_fill", default=1)),
+            epochs_per_update=int(_get_param(params, "epochs_per_update", "epochs_per_buffer_fill", default=1)),
+            steps_per_update=int(_get_param(params, "steps_per_update", "save_every_steps", default=100000)),
             warmstart_steps=int(_get_param(params, "warmstart_steps", default=100000)),
+            beta_schedule=str(_get_param(params, "beta_schedule", default="linear")),
             beta_start=float(_get_param(params, "beta_start", default=1.0)),
             beta_end=float(_get_param(params, "beta_end", default=0.0)),
+            beta_decay=float(_get_param(params, "beta_decay", default=0.8)),
+            beta_step=float(_get_param(params, "beta_step", default=0.5)),
             buffer_capacity=int(_get_param(params, "buffer_capacity", default=100000)),
-            save_every_steps=int(_get_param(params, "save_every_steps", default=500)),
             continue_target_norm_threshold=None if continue_target_norm_threshold_raw is None else float(continue_target_norm_threshold_raw),
             continue_weight=float(_get_param(params, "continue_weight", default=1.0)),
             norm_floor=float(_get_param(params, "norm_floor", default=0.0)),
@@ -231,18 +237,18 @@ class BCTrainConfig:
             raise ValueError("crop_size must be > 0.")
         if self.patches_per_image <= 0:
             raise ValueError("patches_per_image must be > 0.")
-        if self.save_every_buffer_fills <= 0:
-            raise ValueError("save_every_buffer_fills must be > 0.")
+        if self.save_every_updates <= 0:
+            raise ValueError("save_every_updates must be > 0.")
         if self.steps_per_round <= 0:
             raise ValueError("steps_per_round must be > 0.")
-        if self.epochs_per_buffer_fill <= 0:
-            raise ValueError("epochs_per_buffer_fill must be > 0.")
+        if self.epochs_per_update <= 0:
+            raise ValueError("epochs_per_update must be > 0.")
+        if self.steps_per_update <= 0:
+            raise ValueError("steps_per_update must be > 0.")
         if self.warmstart_steps < 0:
             raise ValueError("warmstart_steps must be >= 0.")
         if self.buffer_capacity <= 0:
             raise ValueError("buffer_capacity must be > 0.")
-        if self.save_every_steps <= 0:
-            raise ValueError("save_every_steps must be > 0.")
         if self.max_len <= 0 or self.max_paths <= 0:
             raise ValueError("max_len and max_paths must be > 0.")
         if self.start_idx < 0:
@@ -326,65 +332,41 @@ def _run_single_experiment(params: Dict, config_path: Path) -> None:
     with open(logdir / f"training_params_{date_time}.json", "w", encoding="utf-8") as handle:
         json.dump(params_to_save, handle, indent=4)
 
-    # check for offline params first, if zero dagger rounds
-    # then check for online params, if update_every is set, otherwise default to regular BC training
-    if config.dagger_rounds > 0:
-        behavior_cloning.train_dagger(
-            env=env,
-            actor=actor,
-            actor_optimizer=actor_optimizer,
-            outdir=config.outdir,
-            logdir=logdir,
-            name=config.name,
-            batch_size=config.batch_size,
-            warmstart_steps=config.warmstart_steps,
-            dagger_rounds=config.dagger_rounds,
-            steps_per_round=config.steps_per_round,
-            beta_start=config.beta_start,
-            beta_end=config.beta_end,
-            save_every_buffer_fills=config.save_every_buffer_fills,
-            buffer_capacity=config.buffer_capacity,
-            epochs_per_buffer_fill=config.epochs_per_buffer_fill,
-            rng=rng,
-            continue_target_norm_threshold=config.continue_target_norm_threshold,
-            continue_weight=config.continue_weight,
-            norm_floor=config.norm_floor,
-            norm_floor_weight=config.norm_floor_weight,
-            stop_violation_weight=config.stop_violation_weight,
-            objective_mode=config.objective_mode,
-            continue_direction_weight=config.continue_direction_weight,
-            norm_cls_weight=config.norm_cls_weight,
-            norm_cls_temperature=config.norm_cls_temperature,
-            norm_margin_weight=config.norm_margin_weight,
-            stop_margin=config.stop_margin,
-            continue_margin=config.continue_margin,
-        )
-    else:
-        behavior_cloning.train(
-            env=env,
-            actor=actor,
-            actor_optimizer=actor_optimizer,
-            outdir=config.outdir,
-            logdir=logdir,
-            name=config.name,
-            batch_size=config.batch_size,
-            total_steps=config.total_steps,
-            buffer_capacity=config.buffer_capacity,
-            epochs_per_buffer_fill=config.epochs_per_buffer_fill,
-            save_every_buffer_fills=config.save_every_buffer_fills,
-            continue_target_norm_threshold=config.continue_target_norm_threshold,
-            continue_weight=config.continue_weight,
-            norm_floor=config.norm_floor,
-            norm_floor_weight=config.norm_floor_weight,
-            stop_violation_weight=config.stop_violation_weight,
-            objective_mode=config.objective_mode,
-            continue_direction_weight=config.continue_direction_weight,
-            norm_cls_weight=config.norm_cls_weight,
-            norm_cls_temperature=config.norm_cls_temperature,
-            norm_margin_weight=config.norm_margin_weight,
-            stop_margin=config.stop_margin,
-            continue_margin=config.continue_margin,
-        )
+    warmstart_steps = config.warmstart_steps if config.dagger_rounds > 0 else config.total_steps
+    behavior_cloning.train(
+        env=env,
+        actor=actor,
+        actor_optimizer=actor_optimizer,
+        outdir=config.outdir,
+        logdir=logdir,
+        name=config.name,
+        batch_size=config.batch_size,
+        warmstart_steps=warmstart_steps,
+        dagger_rounds=config.dagger_rounds,
+        steps_per_round=config.steps_per_round,
+        steps_per_update=config.steps_per_update,
+        beta_start=config.beta_start,
+        beta_end=config.beta_end,
+        beta_schedule=config.beta_schedule,
+        beta_decay=config.beta_decay,
+        beta_step=config.beta_step,
+        save_every_updates=config.save_every_updates,
+        buffer_capacity=config.buffer_capacity,
+        epochs_per_update=config.epochs_per_update,
+        rng=rng if config.dagger_rounds > 0 else None,
+        continue_target_norm_threshold=config.continue_target_norm_threshold,
+        continue_weight=config.continue_weight,
+        norm_floor=config.norm_floor,
+        norm_floor_weight=config.norm_floor_weight,
+        stop_violation_weight=config.stop_violation_weight,
+        objective_mode=config.objective_mode,
+        continue_direction_weight=config.continue_direction_weight,
+        norm_cls_weight=config.norm_cls_weight,
+        norm_cls_temperature=config.norm_cls_temperature,
+        norm_margin_weight=config.norm_margin_weight,
+        stop_margin=config.stop_margin,
+        continue_margin=config.continue_margin,
+    )
 
 
 def main():

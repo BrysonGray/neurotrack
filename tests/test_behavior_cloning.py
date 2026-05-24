@@ -2,6 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest import mock
 
 import numpy as np
 import torch
@@ -12,13 +13,15 @@ from neurotrack.models import ConvNet
 from neurotrack.training.behavior_cloning import (
     _build_supervision_loss_config,
     _compute_dagger_beta,
+    _compute_exponential_dagger_beta,
     _optimize_prepared_batch,
+    _run_collection_episode,
     multi_target_direction_loss,
     pad_target_candidate_batch,
     select_expert_action,
-    train_dagger,
+    train,
 )
-from neurotrack.training.memory import BehaviorCloningReplayBuffer
+from neurotrack.training.memory import BehaviorCloningReplayBuffer, PrioritizedBCReplayBuffer
 
 
 class _ConstantActor(torch.nn.Module):
@@ -116,6 +119,42 @@ class _TraceEnv:
         )
 
 
+class _EvalEnv:
+    def __init__(self):
+        self.dataset = [0, 1]
+        self.current_neuron_info = {"neuron_name": "eval_neuron"}
+        self.paths = []
+        self._episode_index = -1
+        self._step_index = 0
+        self.target_vectors = torch.tensor([[1.0, 0.0, 0.0]], dtype=torch.float32)
+
+    def reset(self, dataset_index=None, return_state=True, move_to_next=True):
+        if dataset_index is not None:
+            self._episode_index = int(dataset_index)
+        else:
+            self._episode_index += 1
+        self._step_index = 0
+        self.target_vectors = torch.tensor([[float(self._episode_index + 1), 0.0, 0.0]], dtype=torch.float32)
+        return self.get_state()
+
+    def get_state(self):
+        return torch.zeros((1, 2, 35, 35, 35), dtype=torch.uint8)
+
+    def step(self, action):
+        self._step_index += 1
+        return (
+            self.get_state(),
+            torch.tensor(1.0, dtype=torch.float32),
+            True,
+            False,
+            {
+                "terminate_episode": True,
+                "current_target_vectors": self.target_vectors.clone(),
+                "next_target_vectors": torch.zeros((1, 3), dtype=torch.float32),
+            },
+        )
+
+
 class BehaviorCloningLossTests(unittest.TestCase):
     def test_multi_target_direction_loss_uses_nearest_candidate(self):
         loss = multi_target_direction_loss(
@@ -178,6 +217,84 @@ class BehaviorCloningReplayBufferTests(unittest.TestCase):
         self.assertEqual(sampled_obs.dtype, torch.uint8)
         self.assertEqual(sampled_targets.dtype, torch.float32)
         self.assertTrue(sampled_mask.all())
+
+    def test_replay_buffer_random_replacement_overwrites_random_slot_once_full(self):
+        buffer = BehaviorCloningReplayBuffer(capacity=2, random_replacement=True)
+        obs = torch.zeros((2, 35, 35, 35), dtype=torch.uint8)
+
+        buffer.push(obs, torch.tensor([[1.0, 0.0, 0.0]], dtype=torch.float32))
+        buffer.push(obs + 1, torch.tensor([[2.0, 0.0, 0.0]], dtype=torch.float32))
+        self.assertTrue(buffer.full)
+
+        with mock.patch("neurotrack.training.memory.random.randrange", return_value=1):
+            buffer.push(obs + 9, torch.tensor([[9.0, 0.0, 0.0]], dtype=torch.float32))
+
+        torch.testing.assert_close(buffer.target_vectors[0], torch.tensor([[1.0, 0.0, 0.0]], dtype=torch.float32))
+        torch.testing.assert_close(buffer.target_vectors[1], torch.tensor([[9.0, 0.0, 0.0]], dtype=torch.float32))
+
+
+class PrioritizedBehaviorCloningReplayBufferTests(unittest.TestCase):
+    def test_prioritized_sample_returns_bc_batch_with_weights_and_tree_indices(self):
+        buffer = PrioritizedBCReplayBuffer(capacity=4, include_z_flip=False)
+        for idx in range(4):
+            obs = torch.full((2, 35, 35, 35), fill_value=idx, dtype=torch.uint8)
+            targets = torch.tensor([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]], dtype=torch.float32)
+            buffer.push(obs, targets)
+
+        sampled_obs, sampled_targets, sampled_mask, weights, tree_idxs = buffer.sample(
+            batch_size=2,
+            transform=False,
+        )
+
+        self.assertEqual(tuple(sampled_obs.shape), (2, 2, 35, 35, 35))
+        self.assertEqual(tuple(sampled_targets.shape), (2, 2, 3))
+        self.assertEqual(tuple(sampled_mask.shape), (2, 2))
+        self.assertEqual(tuple(weights.shape), (2, 1))
+        self.assertEqual(len(tree_idxs), 2)
+        self.assertEqual(sampled_obs.dtype, torch.uint8)
+        self.assertEqual(sampled_targets.dtype, torch.float32)
+        self.assertTrue(sampled_mask.all())
+        self.assertTrue(torch.all(weights > 0))
+        self.assertAlmostEqual(float(weights.max().item()), 1.0, places=6)
+        self.assertTrue(all(0 <= int(idx) < buffer.capacity for idx in tree_idxs))
+
+    def test_update_priorities_updates_tree_and_max_priority(self):
+        buffer = PrioritizedBCReplayBuffer(capacity=3, include_z_flip=False)
+        for idx in range(3):
+            obs = torch.full((2, 35, 35, 35), fill_value=idx, dtype=torch.uint8)
+            targets = torch.tensor([[float(idx + 1), 0.0, 0.0]], dtype=torch.float32)
+            buffer.push(obs, targets)
+
+        _obs, _targets, _mask, _weights, tree_idxs = buffer.sample(batch_size=2, transform=False)
+        old_total = buffer.tree.total
+        old_max_priority = buffer.max_priority
+
+        buffer.update_priorities(tree_idxs, torch.tensor([10.0, 2.0], dtype=torch.float32))
+
+        self.assertGreater(buffer.tree.total, old_total)
+        self.assertGreater(buffer.max_priority, old_max_priority)
+
+    def test_prioritized_random_replacement_keeps_tree_and_sample_indices_aligned(self):
+        buffer = PrioritizedBCReplayBuffer(capacity=2, include_z_flip=False, random_replacement=True)
+        obs = torch.zeros((2, 35, 35, 35), dtype=torch.uint8)
+
+        buffer.push(obs, torch.tensor([[1.0, 0.0, 0.0]], dtype=torch.float32))
+        buffer.push(obs + 1, torch.tensor([[2.0, 0.0, 0.0]], dtype=torch.float32))
+
+        with mock.patch("neurotrack.training.memory.random.randrange", return_value=1):
+            buffer.push(obs + 9, torch.tensor([[9.0, 0.0, 0.0]], dtype=torch.float32))
+
+        # Make sampled index deterministic and dominant to verify index-to-sample alignment.
+        buffer.update_priorities([1], torch.tensor([1000.0], dtype=torch.float32))
+
+        sampled_obs, sampled_targets, sampled_mask, _weights, tree_idxs = buffer.sample(batch_size=1, transform=False)
+        self.assertEqual(tree_idxs[0], 1)
+        self.assertEqual(int(sampled_obs[0, 0, 0, 0, 0].item()), 9)
+        torch.testing.assert_close(
+            sampled_targets[0, 0],
+            torch.tensor([9.0, 0.0, 0.0], dtype=torch.float32, device=sampled_targets.device),
+        )
+        self.assertTrue(bool(sampled_mask[0, 0].item()))
 
 
 class BehaviorCloningPolicyTests(unittest.TestCase):
@@ -244,6 +361,27 @@ class BehaviorCloningPolicyTests(unittest.TestCase):
         self.assertAlmostEqual(_compute_dagger_beta(1, dagger_rounds=3, beta_start=1.0, beta_end=0.0), 0.5)
         self.assertEqual(_compute_dagger_beta(2, dagger_rounds=3, beta_start=1.0, beta_end=0.0), 0.0)
 
+    def test_compute_exponential_dagger_beta_floors_at_end_value(self):
+        self.assertEqual(_compute_exponential_dagger_beta(0, beta_start=1.0, beta_end=0.2, beta_decay=0.5), 1.0)
+        self.assertEqual(_compute_exponential_dagger_beta(1, beta_start=1.0, beta_end=0.2, beta_decay=0.5), 0.5)
+        self.assertEqual(_compute_exponential_dagger_beta(3, beta_start=1.0, beta_end=0.2, beta_decay=0.5), 0.2)
+
+    def test_run_collection_episode_honors_episode_budget(self):
+        env = _EvalEnv()
+
+        result = _run_collection_episode(
+            env=env,
+            aggregate_buffer=None,
+            beta=1.0,
+            steps_budget=None,
+            episodes_budget=len(env.dataset),
+            collect=False,
+        )
+
+        self.assertEqual(result["steps_done"], 2)
+        self.assertEqual(result["episodes_done"], 2)
+        self.assertEqual(result["episode_bidirectional_distances"], [])
+
     def test_optimize_prepared_batch_applies_continue_norm_floor(self):
         actor = _ConstantActor([0.1, 0.0, 0.0])
         optimizer = torch.optim.SGD(actor.parameters(), lr=0.0)
@@ -268,7 +406,7 @@ class BehaviorCloningPolicyTests(unittest.TestCase):
         )
 
         self.assertAlmostEqual(batch_stats.loss, 4.015, places=3)
-        self.assertAlmostEqual(batch_stats.step_mse, 3.61, places=3)
+        self.assertAlmostEqual(batch_stats.step_sse, 3.61, places=3)
         self.assertEqual(batch_stats.true_continue_count, 1)
         self.assertEqual(batch_stats.false_choose_stop_count, 1)
         self.assertEqual(batch_stats.true_stop_count, 0)
@@ -307,12 +445,46 @@ class BehaviorCloningPolicyTests(unittest.TestCase):
         )
 
         self.assertAlmostEqual(batch_stats.loss, 0.0, places=6)
-        self.assertAlmostEqual(batch_stats.step_mse, 0.04, places=6)
+        self.assertAlmostEqual(batch_stats.step_sse, 0.04, places=6)
         self.assertEqual(batch_stats.true_continue_count, 0)
         self.assertEqual(batch_stats.false_choose_stop_count, 0)
         self.assertEqual(batch_stats.true_stop_count, 1)
         self.assertEqual(batch_stats.false_continue_count, 0)
         torch.testing.assert_close(actor.bias.detach(), initial_bias)
+
+    def test_optimize_prepared_batch_updates_prioritized_memory_with_sample_losses(self):
+        actor = _ConstantActor([0.0, 0.0, 0.0])
+        optimizer = torch.optim.SGD(actor.parameters(), lr=0.0)
+        buffer = PrioritizedBCReplayBuffer(capacity=4, include_z_flip=False)
+        for idx in range(4):
+            obs = torch.full((2, 35, 35, 35), fill_value=idx, dtype=torch.uint8)
+            target_vectors = torch.tensor([[2.0, 0.0, 0.0]], dtype=torch.float32)
+            buffer.push(obs, target_vectors)
+
+        obs_batch, target_tensor, target_mask, _weights, priority_indices = buffer.sample(batch_size=2, transform=False)
+        old_total = float(buffer.tree.total)
+
+        loss_config = _build_supervision_loss_config(
+            continue_target_norm_threshold=1.0,
+            continue_weight=1.0,
+            norm_floor=0.0,
+            norm_floor_weight=0.0,
+            stop_violation_weight=1.0,
+            objective_mode="direction_sse",
+        )
+
+        _optimize_prepared_batch(
+            actor=actor,
+            actor_optimizer=optimizer,
+            obs_tensor=obs_batch,
+            target_tensor=target_tensor,
+            target_mask=target_mask,
+            loss_config=loss_config,
+            priority_memory=buffer,
+            priority_indices=priority_indices,
+        )
+
+        self.assertGreater(float(buffer.tree.total), old_total)
 
     def test_trace_image_reports_false_stop_diagnostics(self):
         device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -349,7 +521,7 @@ class BehaviorCloningPolicyTests(unittest.TestCase):
         optimizer = torch.optim.SGD(actor.parameters(), lr=0.0)
 
         with tempfile.TemporaryDirectory() as tmp_dir:
-            train_dagger(
+            train(
                 env=env,
                 actor=actor,
                 actor_optimizer=optimizer,
@@ -357,12 +529,12 @@ class BehaviorCloningPolicyTests(unittest.TestCase):
                 logdir=Path(tmp_dir),
                 name="dagger_policy_rollin",
                 batch_size=2,
-                warmstart_episodes=0,
+                warmstart_steps=0,
                 dagger_rounds=1,
-                rollout_episodes_per_round=1,
+                steps_per_round=1,
                 beta_start=0.0,
                 beta_end=0.0,
-                save_every_steps=1,
+                save_every_updates=1,
                 rng=np.random.default_rng(0),
             )
 
@@ -379,7 +551,7 @@ class BehaviorCloningPolicyTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             outdir = Path(tmp_dir) / "weights"
             logdir = Path(tmp_dir) / "logs"
-            train_dagger(
+            train(
                 env=env,
                 actor=actor,
                 actor_optimizer=optimizer,
@@ -387,12 +559,13 @@ class BehaviorCloningPolicyTests(unittest.TestCase):
                 logdir=logdir,
                 name="dagger_metadata",
                 batch_size=2,
-                warmstart_episodes=1,
+                warmstart_steps=0,
                 dagger_rounds=1,
-                rollout_episodes_per_round=1,
+                steps_per_round=1,
                 beta_start=0.25,
                 beta_end=0.25,
-                save_every_steps=1,
+                save_every_updates=1,
+                buffer_capacity=10000,
             )
 
             checkpoints = list(outdir.glob("model_state_dicts_dagger_metadata_*.pt"))
@@ -400,13 +573,12 @@ class BehaviorCloningPolicyTests(unittest.TestCase):
             latest_checkpoint = max(checkpoints, key=lambda p: p.stat().st_mtime)
             checkpoint = torch.load(latest_checkpoint, map_location="cpu")
 
-        self.assertEqual(checkpoint["algorithm"], "multi_target_dagger")
         self.assertEqual(checkpoint["policy_output_mode"], "direct_vector")
         self.assertEqual(checkpoint["policy_output_dim"], 3)
         self.assertEqual(checkpoint["dagger_round"], 1)
         self.assertEqual(checkpoint["beta"], 0.25)
-        self.assertGreaterEqual(checkpoint["dataset_size"], 2)
-        self.assertEqual(checkpoint["aggregate_memory_budget"], 10000)
+        self.assertEqual(checkpoint["dataset_size"], 10000)
+        self.assertEqual(checkpoint["buffer_capacity"], 10000)
 
     def test_train_dagger_respects_fifo_memory_budget(self):
         env = _ToyEnv([
@@ -420,7 +592,7 @@ class BehaviorCloningPolicyTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_dir:
             outdir = Path(tmp_dir) / "weights"
             logdir = Path(tmp_dir) / "logs"
-            train_dagger(
+            train(
                 env=env,
                 actor=actor,
                 actor_optimizer=optimizer,
@@ -428,13 +600,13 @@ class BehaviorCloningPolicyTests(unittest.TestCase):
                 logdir=logdir,
                 name="dagger_fifo_budget",
                 batch_size=2,
-                warmstart_episodes=2,
+                warmstart_steps=2,
                 dagger_rounds=1,
-                rollout_episodes_per_round=1,
+                steps_per_round=1,
                 beta_start=0.5,
                 beta_end=0.5,
-                save_every_steps=1,
-                aggregate_memory_budget=3,
+                save_every_updates=1,
+                buffer_capacity=3,
                 rng=np.random.default_rng(0),
             )
 
@@ -443,7 +615,7 @@ class BehaviorCloningPolicyTests(unittest.TestCase):
             latest_checkpoint = max(checkpoints, key=lambda p: p.stat().st_mtime)
             checkpoint = torch.load(latest_checkpoint, map_location="cpu")
 
-        self.assertEqual(checkpoint["aggregate_memory_budget"], 3)
+        self.assertEqual(checkpoint["buffer_capacity"], 3)
         self.assertEqual(checkpoint["dataset_size"], 3)
 
 

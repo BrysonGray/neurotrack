@@ -161,11 +161,12 @@ def _transform_bc_batch(obs, target_vectors, target_mask, include_z_flip):
 class BehaviorCloningReplayBuffer:
     """FIFO replay buffer for behavior-cloning supervision with optional augmentation on sampling."""
 
-    def __init__(self, capacity, include_z_flip=True):
+    def __init__(self, capacity, include_z_flip=True, random_replacement=False):
         if int(capacity) < 1:
             raise ValueError("capacity must be at least 1")
         self.capacity = int(capacity)
         self.include_z_flip = bool(include_z_flip)
+        self.random_replacement = bool(random_replacement)
         self.obs = None
         self.target_vectors = [None] * self.capacity
         self.idx = 0
@@ -184,11 +185,16 @@ class BehaviorCloningReplayBuffer:
     def push(self, obs, target_vectors):
         obs_t = _normalize_bc_observation(obs)
         self._ensure_obs_storage(tuple(obs_t.shape))
-        self.obs[self.idx] = obs_t
-        self.target_vectors[self.idx] = _normalize_target_vectors(target_vectors)
+        insert_idx = self.idx
+        if self.full and self.random_replacement:
+            insert_idx = random.randrange(self.capacity)
 
-        self.idx = (self.idx + 1) % self.capacity
-        self.full = self.idx == 0 or self.full
+        self.obs[insert_idx] = obs_t
+        self.target_vectors[insert_idx] = _normalize_target_vectors(target_vectors)
+
+        if not (self.full and self.random_replacement):
+            self.idx = (self.idx + 1) % self.capacity
+            self.full = self.idx == 0 or self.full
 
     def _logical_to_physical_indices(self, logical_indices: torch.Tensor) -> torch.Tensor:
         if self.full:
@@ -245,6 +251,135 @@ class BehaviorCloningReplayBuffer:
         else:
             idxs = torch.randperm(real_size)[:batch_size]
         return self.sample_indices(idxs.tolist(), transform=transform)
+
+    def __len__(self):
+        return self.capacity if self.full else self.idx
+
+
+class PrioritizedBCReplayBuffer:
+    """Prioritized replay buffer for behavior-cloning supervision."""
+
+    def __init__(self, capacity, include_z_flip=True, eps=1e-2, alpha=0.1, beta=0.1, random_replacement=False):
+        if int(capacity) < 1:
+            raise ValueError("capacity must be at least 1")
+
+        self.capacity = int(capacity)
+        self.include_z_flip = bool(include_z_flip)
+        self.random_replacement = bool(random_replacement)
+        self.eps = eps
+        self.alpha = alpha
+        self.beta = beta
+        self.max_priority = eps
+        self.tree = SumTree(size=self.capacity)
+
+        self.obs = None
+        self.target_vectors = [None] * self.capacity
+        self.idx = 0
+        self.full = False
+
+    def _ensure_obs_storage(self, obs_shape):
+        if self.obs is None:
+            self.obs = torch.empty((self.capacity, *obs_shape), dtype=torch.uint8, device="cpu")
+            return
+        if tuple(self.obs.shape[1:]) != tuple(obs_shape):
+            raise ValueError(
+                f"All observations in PrioritizedBCReplayBuffer must share one shape. "
+                f"Expected {tuple(self.obs.shape[1:])}, got {tuple(obs_shape)}."
+            )
+
+    def push(self, obs, target_vectors):
+        """Save a BC example and assign current maximum priority for initial sampling."""
+        obs_t = _normalize_bc_observation(obs)
+        self._ensure_obs_storage(tuple(obs_t.shape))
+
+        insert_idx = self.idx
+        if self.full and self.random_replacement:
+            insert_idx = random.randrange(self.capacity)
+            self.tree.data[insert_idx] = insert_idx
+            self.tree.update(insert_idx, self.max_priority)
+        else:
+            self.tree.add(self.max_priority, self.idx)
+
+        self.obs[insert_idx] = obs_t
+        self.target_vectors[insert_idx] = _normalize_target_vectors(target_vectors)
+
+        if not (self.full and self.random_replacement):
+            self.idx = (self.idx + 1) % self.capacity
+            self.full = self.idx == 0 or self.full
+
+    def sample(self, batch_size, transform=True):
+        """Sample BC examples according to priority and return IS weights + tree indices."""
+        real_size = len(self)
+        if real_size == 0:
+            raise ValueError("Cannot sample from an empty PrioritizedBCReplayBuffer.")
+        if int(batch_size) < 1:
+            raise ValueError("batch_size must be at least 1")
+
+        batch_size = int(batch_size)
+        if real_size < batch_size:
+            raise ValueError(
+                f"buffer contains less samples than batch size: real_size={real_size}, batch_size={batch_size}"
+            )
+        if self.tree.total <= 0:
+            raise ValueError(
+                f"Tree total is {self.tree.total}, which should not happen. Buffer may be corrupted."
+            )
+
+        sample_idxs, tree_idxs = [], []
+        priorities = torch.empty((batch_size, 1), dtype=torch.float32)
+
+        segment = self.tree.total / batch_size
+        for i in range(batch_size):
+            a, b = segment * i, segment * (i + 1)
+            cumsum = random.uniform(a, b)
+            cumsum = min(cumsum, self.tree.total)
+
+            tree_idx, priority, sample_idx = self.tree.get(cumsum)
+            priorities[i] = priority
+            tree_idxs.append(tree_idx)
+            sample_idxs.append(sample_idx)
+
+        probs = priorities / self.tree.total
+        weights = (real_size * probs) ** -self.beta
+        weights = weights / weights.max()
+
+        obs = self.obs[sample_idxs].to(device=DEVICE)
+        target_vectors, target_mask = _pad_target_vector_sets(
+            [self.target_vectors[int(idx)] for idx in sample_idxs],
+            device=DEVICE,
+        )
+
+        if transform:
+            obs, target_vectors, target_mask = _transform_bc_batch(
+                obs,
+                target_vectors,
+                target_mask,
+                include_z_flip=self.include_z_flip,
+            )
+
+        return obs, target_vectors, target_mask, weights, tree_idxs
+
+    def update_priorities(self, data_idxs, priorities):
+        """Update PER priorities using sampled tree leaf indices."""
+        if isinstance(priorities, torch.Tensor):
+            priorities = priorities.detach().cpu().numpy()
+
+        for data_idx, priority in zip(data_idxs, priorities):
+            priority = priority.item()
+
+            if not isinstance(priority, (int, float)) or np.isnan(priority) or np.isinf(priority):
+                print(f"Warning: Invalid priority {priority} detected, using eps instead")
+                priority = self.eps
+
+            priority = abs(priority) + self.eps
+            priority = priority ** self.alpha
+
+            if np.isnan(priority) or np.isinf(priority):
+                print(f"Warning: Priority became invalid after transformation, using eps instead")
+                priority = self.eps
+
+            self.tree.update(data_idx, priority)
+            self.max_priority = max(self.max_priority, priority)
 
     def __len__(self):
         return self.capacity if self.full else self.idx

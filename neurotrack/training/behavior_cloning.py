@@ -457,48 +457,98 @@ def _build_supervision_batch_context(
     )
 
 
+def _weighted_mean(values: torch.Tensor, weights: Optional[torch.Tensor] = None, mask: Optional[torch.Tensor] = None, eps: float = 1e-12) -> torch.Tensor:
+    """Compute a weighted mean over `values` with optional boolean `mask` and 1-D `weights`.
+
+    - `values` is a 1-D tensor of per-sample scalars.
+    - `weights` is either None or a 1-D tensor of same length as `values`.
+    - `mask` is a boolean mask of same length; if provided, the mean is taken only over masked entries.
+    Returns a scalar tensor.
+    """
+    if mask is not None:
+        values = values[mask]
+        if weights is not None:
+            weights = weights[mask]
+
+    if values.numel() == 0:
+        # return zero scalar on empty selection with same dtype/device as values
+        return torch.zeros((), dtype=values.dtype, device=values.device)
+
+    if weights is None:
+        return values.mean()
+
+    w = weights.view(-1).to(values.device)
+    w_sum = w.sum()
+    if w_sum <= 0:
+        return values.mean()
+    return (w * values).sum() / (w_sum + eps)
+
+
 def _norm_classifier_margin_loss(
     loss_config: SupervisionLossConfig,
     context: SupervisionBatchContext,
+    sample_weights: Optional[torch.Tensor] = None,
 ) -> torch.Tensor:
     direction_loss_per_sample = context.direction_loss_per_sample
     continue_mask = context.continue_mask
     stop_mask = context.stop_mask
     pred_norms = context.pred_norms
 
+    if sample_weights is not None:
+        sample_weights = sample_weights.view(-1).to(direction_loss_per_sample.device)
+
     zero = torch.zeros((), dtype=direction_loss_per_sample.dtype, device=direction_loss_per_sample.device)
 
     continue_direction_loss = zero
     if loss_config.continue_direction_weight > 0.0 and torch.any(continue_mask):
-        continue_direction_loss = direction_loss_per_sample[continue_mask].mean()
+        continue_direction_loss = _weighted_mean(
+            direction_loss_per_sample, weights=sample_weights, mask=continue_mask
+        )
 
     norm_cls_loss = zero
     if loss_config.norm_cls_weight > 0.0:
         logits = (
             pred_norms - loss_config.continue_target_norm_threshold
         ) / max(loss_config.norm_cls_temperature, torch.finfo(pred_norms.dtype).eps)
+
         if torch.any(continue_mask) and torch.any(stop_mask):
-            cls_continue = F.binary_cross_entropy_with_logits(
-                logits[continue_mask],
-                torch.ones_like(logits[continue_mask]),
+            # compute masked BCE with optional per-sample weighting
+            cont_logits = logits[continue_mask]
+            stop_logits = logits[stop_mask]
+            cont_targets = torch.ones_like(cont_logits)
+            stop_targets = torch.zeros_like(stop_logits)
+
+            cont_loss = F.binary_cross_entropy_with_logits(cont_logits, cont_targets, reduction="none")
+            stop_loss = F.binary_cross_entropy_with_logits(stop_logits, stop_targets, reduction="none")
+
+            if sample_weights is not None:
+                cont_w = sample_weights[continue_mask]
+                stop_w = sample_weights[stop_mask]
+                cls_continue = (cont_w * cont_loss).sum() / (cont_w.sum() + 1e-12)
+                cls_stop = (stop_w * stop_loss).sum() / (stop_w.sum() + 1e-12)
+            else:
+                cls_continue = cont_loss.mean()
+                cls_stop = stop_loss.mean()
+
+            norm_cls_loss = ((loss_config.continue_weight * cls_continue) + cls_stop) / (
+                loss_config.continue_weight + 1.0
             )
-            cls_stop = F.binary_cross_entropy_with_logits(
-                logits[stop_mask],
-                torch.zeros_like(logits[stop_mask]),
-            )
-            norm_cls_loss = (
-                (loss_config.continue_weight * cls_continue) + cls_stop
-            ) / (loss_config.continue_weight + 1.0)
         elif torch.any(continue_mask):
-            norm_cls_loss = F.binary_cross_entropy_with_logits(
-                logits[continue_mask],
-                torch.ones_like(logits[continue_mask]),
-            )
+            logits_sel = logits[continue_mask]
+            loss_sel = F.binary_cross_entropy_with_logits(logits_sel, torch.ones_like(logits_sel), reduction="none")
+            if sample_weights is not None:
+                w_sel = sample_weights[continue_mask]
+                norm_cls_loss = (w_sel * loss_sel).sum() / (w_sel.sum() + 1e-12)
+            else:
+                norm_cls_loss = loss_sel.mean()
         elif torch.any(stop_mask):
-            norm_cls_loss = F.binary_cross_entropy_with_logits(
-                logits[stop_mask],
-                torch.zeros_like(logits[stop_mask]),
-            )
+            logits_sel = logits[stop_mask]
+            loss_sel = F.binary_cross_entropy_with_logits(logits_sel, torch.zeros_like(logits_sel), reduction="none")
+            if sample_weights is not None:
+                w_sel = sample_weights[stop_mask]
+                norm_cls_loss = (w_sel * loss_sel).sum() / (w_sel.sum() + 1e-12)
+            else:
+                norm_cls_loss = loss_sel.mean()
 
     norm_margin_loss = zero
     if loss_config.norm_margin_weight > 0.0:
@@ -506,19 +556,16 @@ def _norm_classifier_margin_loss(
         stop_margin_loss = zero
 
         if torch.any(continue_mask):
-            continue_floor = (
-                loss_config.continue_target_norm_threshold + loss_config.continue_margin
+            continue_floor = loss_config.continue_target_norm_threshold + loss_config.continue_margin
+            continue_shortfall_full = torch.relu(continue_floor - pred_norms)
+            continue_margin_loss = _weighted_mean(
+                continue_shortfall_full ** 2, weights=sample_weights, mask=continue_mask
             )
-            continue_shortfall = torch.relu(continue_floor - pred_norms[continue_mask])
-            continue_margin_loss = (continue_shortfall ** 2).mean()
 
         if torch.any(stop_mask):
-            stop_ceiling = max(
-                0.0,
-                loss_config.continue_target_norm_threshold - loss_config.stop_margin,
-            )
-            stop_overshoot = torch.relu(pred_norms[stop_mask] - stop_ceiling)
-            stop_margin_loss = (stop_overshoot ** 2).mean()
+            stop_ceiling = max(0.0, loss_config.continue_target_norm_threshold - loss_config.stop_margin)
+            stop_overshoot_full = torch.relu(pred_norms - stop_ceiling)
+            stop_margin_loss = _weighted_mean(stop_overshoot_full ** 2, weights=sample_weights, mask=stop_mask)
 
         if torch.any(continue_mask) and torch.any(stop_mask):
             norm_margin_loss = (
@@ -529,16 +576,10 @@ def _norm_classifier_margin_loss(
         elif torch.any(stop_mask):
             norm_margin_loss = stop_margin_loss
 
-    # norm_floor_loss = zero
-    # if loss_config.norm_floor > 0.0 and loss_config.norm_floor_weight > 0.0 and torch.any(continue_mask):
-    #     norm_gap = torch.relu(loss_config.norm_floor - pred_norms[continue_mask])
-    #     norm_floor_loss = (norm_gap ** 2).mean()
-
     loss = (
         (loss_config.continue_direction_weight * continue_direction_loss)
         + (loss_config.norm_cls_weight * norm_cls_loss)
         + (loss_config.norm_margin_weight * norm_margin_loss)
-        # + (loss_config.norm_floor_weight * norm_floor_loss)
     )
 
     return loss
@@ -546,24 +587,36 @@ def _norm_classifier_margin_loss(
 def _norm_floor_loss(
     loss_config: SupervisionLossConfig,
     context: SupervisionBatchContext,
+    sample_weights: Optional[torch.Tensor] = None,
 ) -> torch.Tensor:
     direction_loss_per_sample = context.direction_loss_per_sample
     continue_mask = context.continue_mask
     stop_mask = context.stop_mask
     pred_norms = context.pred_norms
 
+    if sample_weights is not None:
+        sample_weights = sample_weights.view(-1).to(direction_loss_per_sample.device)
+
     if torch.any(continue_mask) and torch.any(stop_mask):
-        continue_direction_loss = direction_loss_per_sample[continue_mask].mean()
-        stop_direction_loss = direction_loss_per_sample[stop_mask].mean()
+        continue_direction_loss = _weighted_mean(
+            direction_loss_per_sample, weights=sample_weights, mask=continue_mask
+        )
+        stop_direction_loss = _weighted_mean(
+            direction_loss_per_sample, weights=sample_weights, mask=stop_mask
+        )
         direction_loss = (
             (loss_config.continue_weight * continue_direction_loss) + stop_direction_loss
         ) / (loss_config.continue_weight + 1.0)
     elif torch.any(continue_mask):
-        direction_loss = direction_loss_per_sample[continue_mask].mean()
+        direction_loss = _weighted_mean(
+            direction_loss_per_sample, weights=sample_weights, mask=continue_mask
+        )
     elif torch.any(stop_mask):
-        direction_loss = direction_loss_per_sample[stop_mask].mean()
+        direction_loss = _weighted_mean(
+            direction_loss_per_sample, weights=sample_weights, mask=stop_mask
+        )
     else:
-        direction_loss = direction_loss_per_sample.mean()
+        direction_loss = _weighted_mean(direction_loss_per_sample, weights=sample_weights)
 
     norm_floor_loss = torch.zeros((), dtype=direction_loss.dtype, device=direction_loss.device)
     norm_stop_loss = torch.zeros((), dtype=direction_loss.dtype, device=direction_loss.device)
@@ -571,13 +624,16 @@ def _norm_floor_loss(
     if loss_config.norm_floor > 0.0 and loss_config.norm_floor_weight > 0.0:
         if torch.any(continue_mask):
             norm_gap = torch.relu(loss_config.norm_floor - pred_norms)
-            norm_floor_loss = (norm_gap[continue_mask] ** 2).mean()
+            norm_floor_loss = _weighted_mean(norm_gap ** 2, weights=sample_weights, mask=continue_mask)
 
         if torch.any(stop_mask):
-            stop_violation = torch.relu(
-                pred_norms[stop_mask] - loss_config.continue_target_norm_threshold
+            stop_violation = torch.relu(pred_norms[stop_mask] - loss_config.continue_target_norm_threshold)
+            # stop_violation is already masked; compute weighted mean using full-mask helper
+            norm_stop_loss = _weighted_mean(
+                torch.relu(pred_norms - loss_config.continue_target_norm_threshold) ** 2,
+                weights=sample_weights,
+                mask=stop_mask,
             )
-            norm_stop_loss = (stop_violation ** 2).mean()
 
     stop_regularization_weight = loss_config.norm_floor_weight * max(1.0, loss_config.stop_violation_weight)
     loss = (
@@ -588,9 +644,9 @@ def _norm_floor_loss(
     return loss
 
 
-def _direction_sse_loss(context: SupervisionBatchContext) -> torch.Tensor:
+def _direction_sse_loss(context: SupervisionBatchContext, sample_weights: Optional[torch.Tensor] = None) -> torch.Tensor:
     """Pure min-SSE supervision objective without auxiliary norm terms."""
-    return context.direction_loss_per_sample.mean()
+    return _weighted_mean(context.direction_loss_per_sample, weights=sample_weights)
 
 
 def _compute_supervision_loss(
@@ -598,6 +654,7 @@ def _compute_supervision_loss(
     target_tensor: torch.Tensor,
     target_mask: torch.Tensor,
     loss_config: SupervisionLossConfig,
+    sample_weights: Optional[torch.Tensor] = None,
 ) -> Tuple[torch.Tensor, SupervisionBatchContext]:
     """Pure loss path used by both optimization and loss-only testing."""
     context = _build_supervision_batch_context(
@@ -608,11 +665,11 @@ def _compute_supervision_loss(
     )
 
     if loss_config.objective_mode == "norm_classifier_margin":
-        loss = _norm_classifier_margin_loss(loss_config=loss_config, context=context)
+        loss = _norm_classifier_margin_loss(loss_config=loss_config, context=context, sample_weights=sample_weights)
     elif loss_config.objective_mode == "norm_floor":
-        loss = _norm_floor_loss(loss_config=loss_config, context=context)
+        loss = _norm_floor_loss(loss_config=loss_config, context=context, sample_weights=sample_weights)
     elif loss_config.objective_mode == "direction_sse":
-        loss = _direction_sse_loss(context=context)
+        loss = _direction_sse_loss(context=context, sample_weights=sample_weights)
     else:
         raise ValueError(
             f"Unsupported objective_mode '{loss_config.objective_mode}'. "
@@ -705,6 +762,7 @@ def _optimize_prepared_batch(
     target_tensor: torch.Tensor,
     target_mask: torch.Tensor,
     loss_config: SupervisionLossConfig,
+    sample_weights: Optional[torch.Tensor] = None,
     priority_memory: Optional[PrioritizedBCReplayBuffer] = None,
     priority_indices: Optional[Sequence[int]] = None,
 ) -> SupervisionBatchStats:
@@ -715,12 +773,15 @@ def _optimize_prepared_batch(
     pred_actions = actor(obs_model)
     target_tensor = target_tensor.to(device=model_device, dtype=dtype)
     target_mask = target_mask.to(device=model_device)
+    if sample_weights is not None:
+        sample_weights = sample_weights.to(device=model_device, dtype=dtype).view(-1)
 
     loss, context = _compute_supervision_loss(
         pred_actions=pred_actions,
         target_tensor=target_tensor,
         target_mask=target_mask,
         loss_config=loss_config,
+        sample_weights=sample_weights,
     )
 
     (
@@ -801,7 +862,7 @@ def _run_supervision_epoch(
         for _start in range(0, real_size, batch_size):
             this_batch_size = min(batch_size, real_size)
             try:
-                obs_batch, target_tensor, target_mask, _weights, priority_indices = aggregate_buffer.sample(
+                obs_batch, target_tensor, target_mask, weights, priority_indices = aggregate_buffer.sample(
                     batch_size=this_batch_size,
                     transform=transform,
                 )
@@ -815,6 +876,7 @@ def _run_supervision_epoch(
                 target_tensor=target_tensor,
                 target_mask=target_mask,
                 loss_config=loss_config,
+                sample_weights=weights,
                 priority_memory=aggregate_buffer,
                 priority_indices=priority_indices,
             )

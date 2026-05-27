@@ -1041,7 +1041,7 @@ def _run_collection_episode(
         steps_done += 1
         episode_rewards.append(_reward_to_float(reward))
 
-        episode_terminated = bool(terminated or info["terminate_episode"])
+        episode_terminated = info["terminate_episode"]
         if episode_terminated:
             _record_tracing_metrics()
             episodes_done += 1
@@ -1069,13 +1069,13 @@ def _write_dagger_log_row(
     phase: str,
     round_index: int,
     buffer_epoch_index: int,
-    avg_reward: float,
-    avg_loss: float,
-    avg_step_sse: float,
-    avg_step_norm: float,
-    policy_rollin_fraction: float,
-    false_stop_rate: float,
-    false_continue_rate: float,
+    avg_reward: Optional[float],
+    avg_loss: Optional[float],
+    avg_step_sse: Optional[float],
+    avg_step_norm: Optional[float],
+    policy_rollin_fraction: Optional[float],
+    false_stop_rate: Optional[float],
+    false_continue_rate: Optional[float],
     steps_done: int,
     episodes_done: int,
     dataset_size: int,
@@ -1123,13 +1123,13 @@ def _write_dagger_log_row(
             phase,
             int(round_index),
             int(buffer_epoch_index),
-            avg_reward,
-            avg_loss,
-            avg_step_sse,
-            avg_step_norm,
-            policy_rollin_fraction,
-            false_stop_rate,
-            false_continue_rate,
+            _csv_optional_float(avg_reward),
+            _csv_optional_float(avg_loss),
+            _csv_optional_float(avg_step_sse),
+            _csv_optional_float(avg_step_norm),
+            _csv_optional_float(policy_rollin_fraction),
+            _csv_optional_float(false_stop_rate),
+            _csv_optional_float(false_continue_rate),
             int(steps_done),
             int(episodes_done),
             int(dataset_size),
@@ -1300,7 +1300,8 @@ def train(
     csv_file_path = logdir / f"{name}_{date_time}_log.csv"
 
     # Persistent prioritized replay buffer used across warmstart and all DAgger rounds.
-    memory_buffer = PrioritizedBCReplayBuffer(capacity=buffer_capacity, include_z_flip=True, random_replacement=True)
+    # memory_buffer = PrioritizedBCReplayBuffer(capacity=buffer_capacity, include_z_flip=True, random_replacement=True)
+    memory_buffer = BehaviorCloningReplayBuffer(capacity=buffer_capacity, include_z_flip=True, random_replacement=True)
     steps_since_last_update = 0
     current_beta = float(beta_start)
     previous_adaptive_score: Optional[float] = None
@@ -1393,7 +1394,7 @@ def train(
                         actor=actor,
                         rng=rng,
                         steps_budget=steps_budget,
-                        compute_tracing_metrics=not is_warmstart,
+                        compute_tracing_metrics=False,
                     )
             except Exception as exc:
                 _log_episode_exception(
@@ -1467,15 +1468,6 @@ def train(
                         beta=1.0,
                     )
                 else:
-                    round_bidirectional_distance_avg, round_bidirectional_distance_min, round_bidirectional_distance_max = _summarize_round_metric(
-                        fill_bidirectional_distances,
-                    )
-                    round_precision_avg, round_precision_min, round_precision_max = _summarize_round_metric(
-                        fill_precisions,
-                    )
-                    round_coverage_avg, round_coverage_min, round_coverage_max = _summarize_round_metric(
-                        fill_coverages,
-                    )
                     _write_dagger_log_row(
                         csv_file_path=csv_file_path,
                         phase="dagger",
@@ -1492,38 +1484,7 @@ def train(
                         episodes_done=episodes_done,
                         dataset_size=len(memory_buffer),
                         beta=beta,
-                        round_bidirectional_distance_avg=round_bidirectional_distance_avg,
-                        round_bidirectional_distance_min=round_bidirectional_distance_min,
-                        round_bidirectional_distance_max=round_bidirectional_distance_max,
-                        round_precision_avg=round_precision_avg,
-                        round_precision_min=round_precision_min,
-                        round_precision_max=round_precision_max,
-                        round_coverage_avg=round_coverage_avg,
-                        round_coverage_min=round_coverage_min,
-                        round_coverage_max=round_coverage_max,
                     )
-
-            if not is_warmstart and beta_schedule_s == "adaptive":
-                evaluation_metrics = _run_collection_episode(
-                    env=env,
-                    aggregate_buffer=None,
-                    beta=0.0,
-                    actor=actor,
-                    rng=rng,
-                    steps_budget=None,
-                    episodes_budget=len(env.dataset),
-                    compute_tracing_metrics=True,
-                    collect=False,
-                )
-                eval_bidirectional_distances = evaluation_metrics.get("episode_bidirectional_distances", [])
-                eval_avg_bidirectional_distance, _, _ = _summarize_round_metric(eval_bidirectional_distances)
-                if eval_avg_bidirectional_distance is not None:
-                    if previous_adaptive_score is not None and eval_avg_bidirectional_distance < previous_adaptive_score:
-                        current_beta = max(float(beta_end), current_beta - float(beta_step))
-                    previous_adaptive_score = eval_avg_bidirectional_distance
-                    for future_stage in stage_specs[stage_idx + 1 :]:
-                        if future_stage.get("phase") == "dagger" and beta_schedule_s == "adaptive":
-                            future_stage["beta"] = current_beta
 
             updates_done += 1
             last_save_bucket = _maybe_save_checkpoint(
@@ -1554,6 +1515,67 @@ def train(
             fill_bidirectional_distances.clear()
             fill_precisions.clear()
             fill_coverages.clear()
+
+        # After each round, run a full evaluation pass with tracing metrics enabled, but without collecting into the replay buffer.
+        evaluation_metrics = _run_collection_episode(
+            env=env,
+            aggregate_buffer=None,
+            beta=0.0,
+            actor=actor,
+            rng=rng,
+            steps_budget=None,
+            episodes_budget=len(env.dataset),
+            compute_tracing_metrics=True,
+            collect=False,
+        )
+        eval_bidirectional_distances = evaluation_metrics.get("episode_bidirectional_distances", [])
+        eval_avg_bidirectional_distance, eval_bidirectional_distance_min, eval_bidirectional_distance_max = _summarize_round_metric(
+            eval_bidirectional_distances,
+        )
+        eval_precision_avg, eval_precision_min, eval_precision_max = _summarize_round_metric(
+            evaluation_metrics.get("episode_precisions", []),
+        )
+        eval_coverage_avg, eval_coverage_min, eval_coverage_max = _summarize_round_metric(
+            evaluation_metrics.get("episode_coverages", []),
+        )
+
+        _write_dagger_log_row(
+            csv_file_path=csv_file_path,
+            phase="evaluation",
+            round_index=round_index,
+            buffer_epoch_index=buffer_epoch_index,
+            avg_reward=None,
+            avg_loss=None,
+            avg_step_sse=None,
+            avg_step_norm=None,
+            policy_rollin_fraction=None,
+            false_stop_rate=None,
+            false_continue_rate=None,
+            steps_done=steps_done,
+            episodes_done=episodes_done,
+            dataset_size=len(memory_buffer),
+            beta=beta,
+            round_bidirectional_distance_avg=eval_avg_bidirectional_distance,
+            round_bidirectional_distance_min=eval_bidirectional_distance_min,
+            round_bidirectional_distance_max=eval_bidirectional_distance_max,
+            round_precision_avg=eval_precision_avg,
+            round_precision_min=eval_precision_min,
+            round_precision_max=eval_precision_max,
+            round_coverage_avg=eval_coverage_avg,
+            round_coverage_min=eval_coverage_min,
+            round_coverage_max=eval_coverage_max,
+        )
+        
+        if beta_schedule_s == "adaptive":
+            if eval_avg_bidirectional_distance is not None:
+                if previous_adaptive_score is None or eval_avg_bidirectional_distance < previous_adaptive_score:
+                    if previous_adaptive_score is not None:
+                        current_beta = max(float(beta_end), current_beta - float(beta_step))
+                    previous_adaptive_score = eval_avg_bidirectional_distance
+
+            for future_stage in stage_specs[stage_idx + 1 :]:
+                if future_stage.get("phase") == "dagger":
+                    future_stage["beta"] = current_beta
 
         if stage_progress is not None:
             stage_progress.close()

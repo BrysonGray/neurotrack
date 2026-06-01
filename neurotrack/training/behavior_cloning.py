@@ -1516,6 +1516,8 @@ def train(
             fill_precisions.clear()
             fill_coverages.clear()
 
+        current_index = env.current_patch_idx
+        env.reset(dataset_index=0) # Reset environment to a known state before evaluation, to reduce variance in tracing metrics.
         # After each round, run a full evaluation pass with tracing metrics enabled, but without collecting into the replay buffer.
         evaluation_metrics = _run_collection_episode(
             env=env,
@@ -1524,10 +1526,11 @@ def train(
             actor=actor,
             rng=rng,
             steps_budget=None,
-            episodes_budget=len(env.dataset),
+            episodes_budget=20,
             compute_tracing_metrics=True,
             collect=False,
         )
+        env.reset(dataset_index=current_index) # Restore environment state after evaluation
         eval_bidirectional_distances = evaluation_metrics.get("episode_bidirectional_distances", [])
         eval_avg_bidirectional_distance, eval_bidirectional_distance_min, eval_bidirectional_distance_max = _summarize_round_metric(
             eval_bidirectional_distances,

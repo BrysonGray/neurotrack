@@ -445,8 +445,8 @@ class NeuronPatchDataset(TorchDataset):
         
         img = tf.imread(img_path)
         img = img.squeeze()
-        if img.dtype != np.uint8:
-            print(f"Warning: Image {img_path} has dtype {img.dtype}, converting to uint8")
+        # if img.dtype != np.uint8:
+        #     print(f"Warning: Image {img_path} has dtype {img.dtype}, converting to uint8")
 
         img = torch.from_numpy(to_uint8(img))
         

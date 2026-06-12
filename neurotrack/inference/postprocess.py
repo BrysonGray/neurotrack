@@ -14,13 +14,20 @@ from neurotrack.data import save, tree
 
 
 def remove_short_paths(paths: List[np.ndarray], min_length: float) -> List[np.ndarray]:
-    filtered_paths: List[np.ndarray] = []
+    normalized_paths: List[np.ndarray] = []
 
     for path in paths:
         if isinstance(path, torch.Tensor):
             path = path.cpu().numpy()
 
+        path = np.asarray(path)
+
+        if len(path) == 0:
+            continue
+
         if len(path) < 2:
+            # Treat single-point or empty paths as short; do not keep them
+            # unless they are the only path in the neuron (handled below).
             continue
 
         deltas = np.diff(path, axis=0)
@@ -28,12 +35,40 @@ def remove_short_paths(paths: List[np.ndarray], min_length: float) -> List[np.nd
         total_length = np.sum(distances)
 
         if total_length >= min_length:
-            filtered_paths.append(path)
+            normalized_paths.append(path)
 
-    n_removed = len(paths) - len(filtered_paths)
+    if not normalized_paths and len(paths) > 0:
+        longest_idx = None
+        longest_score = (-1.0, -1)
+        for idx, path in enumerate(paths):
+            if isinstance(path, torch.Tensor):
+                path = path.cpu().numpy()
+
+            path = np.asarray(path)
+            if len(path) == 0:
+                continue
+
+            if len(path) < 2:
+                score = (0.0, len(path))
+            else:
+                deltas = np.diff(path, axis=0)
+                distances = np.linalg.norm(deltas, axis=1)
+                score = (float(np.sum(distances)), len(path))
+
+            if score > longest_score:
+                longest_score = score
+                longest_idx = idx
+
+        if longest_idx is not None:
+            fallback_path = paths[longest_idx]
+            if isinstance(fallback_path, torch.Tensor):
+                fallback_path = fallback_path.cpu().numpy()
+            normalized_paths.append(np.asarray(fallback_path))
+
+    n_removed = len(paths) - len(normalized_paths)
     print(f"    Removed {n_removed} paths shorter than {min_length:.1f} units")
 
-    return filtered_paths
+    return normalized_paths
 
 
 def smooth_paths(paths: List[np.ndarray], window_size: int = 5) -> List[np.ndarray]:
@@ -260,7 +295,7 @@ def process_results(results: List[Dict[str, Any]], params: Dict[str, Any]) -> Li
                 if isinstance(path, np.ndarray)
                 else path
                 for path in paths
-                if len(path) > 1
+                if len(path) > 0
             ]
             swc_list = save.paths_to_swc(post_paths)
 

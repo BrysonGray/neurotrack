@@ -92,15 +92,16 @@ def draw_2d_panel(ax, environment, cropped=False, sections=None,
                 ax.plot([x0, x1], [y0, y1], color=skeleton_color, linewidth=2.0 * size_scale, alpha=1.0, zorder=line_zorder)
 
     if len(env.paths) > 0 and len(env.paths[0]) > 0:
-        ys = [-float(pt[i]) for pt in env.paths[0]]
-        xs = [float(pt[j]) for pt in env.paths[0]]
-        if not cropped:
-            ax.plot(xs, ys, color=path_color, linewidth=2.0 * size_scale, zorder=line_zorder)
-        else:
-            filt = [in_crop(y, x) for y, x in zip(ys, xs)]
-            for k in range(1, len(xs)):
-                if filt[k - 1] or filt[k]:
-                    ax.plot([xs[k - 1], xs[k]], [ys[k - 1], ys[k]], color=path_color, linewidth=1.0 * size_scale, zorder=line_zorder)
+        for path in list(env.finished_paths) + list(env.paths):
+            ys = [-float(pt[i]) for pt in path]
+            xs = [float(pt[j]) for pt in path]
+            if not cropped:
+                ax.plot(xs, ys, color=path_color, linewidth=2.0 * size_scale, zorder=line_zorder)
+            else:
+                filt = [in_crop(y, x) for y, x in zip(ys, xs)]
+                for k in range(1, len(xs)):
+                    if filt[k - 1] or filt[k]:
+                        ax.plot([xs[k - 1], xs[k]], [ys[k - 1], ys[k]], color=path_color, linewidth=1.0 * size_scale, zorder=line_zorder)
 
     try:
         if len(env.paths) > 0 and len(env.paths[0]) > 0:
@@ -728,6 +729,7 @@ def manual_step(env, step_size=4.0, display_mode='all'):
         - z: zero direction (debug no-op)
         - x: use expert direction
                 - e: run expert action burst for N steps, then pause for input
+                - f: save the current figure to disk
                 - g: enter an action scale hint for manual probing
       - r: reset environment
       - b: branch at current point
@@ -792,6 +794,15 @@ def manual_step(env, step_size=4.0, display_mode='all'):
     last_stats_text = None
     last_info_snapshot = None
 
+    def _save_current_figure():
+        neuron_name = str(getattr(env, 'current_neuron_info', {}).get('neuron_name', 'neuron'))
+        safe_neuron_name = ''.join(ch if ch.isalnum() or ch in ('-', '_') else '_' for ch in neuron_name).strip('_') or 'neuron'
+        default_path = f'{safe_neuron_name}_manual_step_{total_steps:05d}.png'
+        figure_path = input(f'Save figure path [default={default_path}]: ').strip() or default_path
+        fig.canvas.draw()
+        fig.savefig(figure_path, bbox_inches='tight')
+        print(f'Saved figure to {figure_path}')
+
     def _get_expert_action_and_stop():
         from neurotrack.training.behavior_cloning import select_expert_action
 
@@ -844,29 +855,31 @@ def manual_step(env, step_size=4.0, display_mode='all'):
                 skeleton_color=skeleton_color,
                 path_color=path_color,
                 target_color=target_color,
-                size_scale=3.0,
+                size_scale=8.0,
             )
             ax_main.set_title('')
             legend_handles = [
+                Line2D([0], [0], color=skeleton_color, lw=6, label='Unvisited neuron'),
+                Line2D([0], [0], color=path_color, lw=6, label='Traced path'),
                 Line2D([0], [0], marker='x', color='none', markeredgecolor=target_color, markersize=10, markeredgewidth=4, label='Target points'),
                 Line2D([0], [0], marker='o', color='none', markeredgecolor='red', markerfacecolor='none', markersize=9, markeredgewidth=4, label='Terminal points'),
-                Line2D([0], [0], marker='o', color='none', markeredgecolor='blue', markerfacecolor='blue', alpha=0.5, markersize=8, label='Section nodes'),
+                Line2D([0], [0], marker='o', color='none', markeredgecolor='blue', markerfacecolor='blue', alpha=0.5, markersize=8, label='Active nodes'),
                 Line2D([0], [0], marker='*', color='none', markeredgecolor='cyan', markerfacecolor='cyan', markersize=10, label='Nearest point'),
                 Line2D([0], [0], marker='o', color='none', markeredgecolor='lime', markerfacecolor='none', markersize=9, markeredgewidth=4, label='Branch roots'),
                 Line2D([0], [0], marker='D', color='none', markeredgecolor='purple', markerfacecolor='none', markersize=8, markeredgewidth=4, label='Cut ends'),
             ]
             # Add vertical breathing room without hard-coding absolute limits.
-            ax_main.margins(y=0.2)
-            # ax_main.legend(
-            # handles=legend_handles,
-            # loc='center right',
-            # framealpha=0.85,
-            # fontsize=24,
-            # markerscale=4.0,
-            # borderpad=0.8,
-            # labelspacing=1.0,
-            # handletextpad=0.7,
-            # )
+            ax_main.margins(y=0.1)
+            ax_main.legend(
+            handles=legend_handles,
+            loc='center right',
+            framealpha=0.85,
+            fontsize=20,
+            markerscale=3.0,
+            borderpad=0.8,
+            labelspacing=1.0,
+            handletextpad=0.7,
+            )
             ax_main.set_position([0.0, 0.0, 1.0, 1.0])
         else:
             img = env.img.data[0].amax(dim=0)
@@ -911,7 +924,7 @@ def manual_step(env, step_size=4.0, display_mode='all'):
     _render(env.get_state(), reward=None, info=None, action=None)
 
     while True:
-        action_key = input('Choose an action [w/a/s/d, p/l, x, e, t, z, g, r, b, q]: ').strip().lower()
+        action_key = input('Choose an action [w/a/s/d, p/l, x, e, f, t, z, g, r, b, q]: ').strip().lower()
         reward = None
 
         if action_key == 'q':
@@ -919,6 +932,9 @@ def manual_step(env, step_size=4.0, display_mode='all'):
         elif action_key == 'r':
             observation = env.reset(return_state=True)
             _render(observation, reward=None, info=None, action=None)
+        elif action_key == 'f':
+            _save_current_figure()
+            continue
         elif action_key == 'b':
             point = env.paths[0][-1]
             env.paths.append([point])
@@ -929,7 +945,7 @@ def manual_step(env, step_size=4.0, display_mode='all'):
         else:
 
             if action_key not in user_input_dict and action_key not in {'x', 'e', 't', 'g'}:
-                print(f"Unrecognized action '{action_key}'. Valid: w/a/s/d, p/l, x, e, t, z, g, r, b, q")
+                print(f"Unrecognized action '{action_key}'. Valid: w/a/s/d, p/l, x, e, f, t, z, g, r, b, q")
                 continue
 
             if action_key == 'x': # select expert action

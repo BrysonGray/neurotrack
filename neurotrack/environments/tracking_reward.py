@@ -1009,11 +1009,12 @@ def _compute_target_action(
         )
 
         # If no points are found at step_size, use the farthest node from the current position that is within step_size.
-        # This should never happen since the farthest node should be a terminal if there are nodes within
-        # step_size but no edges cross the step_size boundary.
+        # This should rarely happen since the farthest node should be a terminal if there are nodes within
+        # step_size but no edges cross the step_size boundary. 
+        # Exceptions occur if the neuron is very tortuous and the geodesic distance along the neuron up to the step distance is much longer than the euclidean distance.
         if targets.numel() == 0:
-            warnings.warn(f"Step {step_count}: No target points found at the specified step_size. Falling back to farthest node within step_size. \n\
-                          This fallback should be rare and may indicate an unusual neuron geometry or a bug in the target point computation. Please investigate if you see this warning frequently.")
+            # warnings.warn(f"Step {step_count}: No target points found at the specified step_size. Falling back to farthest node within step_size. \n\
+            #               This fallback should be rare and may indicate an unusual neuron geometry or a bug in the target point computation. Please investigate if you see this warning frequently.")
             if valid_nodes is None:
                 node_coords = swc_t[:, 2:5]
             else:

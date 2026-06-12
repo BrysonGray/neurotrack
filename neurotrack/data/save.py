@@ -22,7 +22,19 @@ def paths_to_swc(paths):
     coord_to_id = {}
     
     for path in paths:
-        if len(path) < 2:
+        if len(path) == 0:
+            continue
+
+        if len(path) == 1:
+            point = path[0]
+            point_tuple = (float(point[0]), float(point[1]), float(point[2]))
+
+            if point_tuple in coord_to_id:
+                continue
+
+            swc_list.append([id, 0, point[0].item(), point[1].item(), point[2].item(), 1.0, -1])
+            coord_to_id[point_tuple] = id
+            id += 1
             continue
         
         point = path[0]

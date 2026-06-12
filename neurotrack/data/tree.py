@@ -328,7 +328,7 @@ def resample_tree(paths, step_size=1.0):
     # Resample each path, preserving fixed points
     new_paths = []
     for path_idx, path in enumerate(paths_np):
-        if len(path) == 0:
+        if len(path) <= 1:
             new_paths.append(path)
             continue
             

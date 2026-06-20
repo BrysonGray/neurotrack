@@ -75,6 +75,7 @@ class _OrthoViewDialog:
         get_trace_status: Optional[Callable[[], Dict[str, object]]] = None,
         on_save_trace: Optional[Callable[[], None]] = None,
         on_save_all_traces: Optional[Callable[[], None]] = None,
+        on_discard_trace: Optional[Callable[[], None]] = None,
         seeds_output_path: Optional[str] = None,
         trace_output_path: Optional[str] = None,
         on_select_seeds_output_path: Optional[Callable[[], Optional[str]]] = None,
@@ -203,6 +204,7 @@ class _OrthoViewDialog:
         self._get_trace_status = get_trace_status
         self._on_save_trace = on_save_trace
         self._on_save_all_traces = on_save_all_traces
+        self._on_discard_trace = on_discard_trace
         self._on_select_seeds_output_path = on_select_seeds_output_path
         self._on_select_trace_output_path = on_select_trace_output_path
         self._on_clear_seeds_output_path = on_clear_seeds_output_path
@@ -263,6 +265,7 @@ class _OrthoViewDialog:
             "child_xyz": np.empty((0, 3), dtype=np.float32),
             "parent_xyz": np.empty((0, 3), dtype=np.float32),
         }
+        self.selected_seed_index: Optional[int] = None
 
         self._trace_status_token = None
         self._trace_overlay_token = None
@@ -321,8 +324,12 @@ class _OrthoViewDialog:
         self.btn_cancel_trace = QPushButton("Cancel Trace")
         self.btn_save_trace = QPushButton("Save Trace")
         self.btn_save_all_traces = QPushButton("Save All Traces")
-        self.btn_toggle_trace_overlay = QPushButton("Toggle Trace Overlay")
-        self.btn_toggle_gt_overlay = QPushButton("Toggle GT Overlay")
+        self.btn_discard_trace = QPushButton("Discard Trace")
+        _qt_w = importlib.import_module("qtpy.QtWidgets")
+        self.chk_trace_overlay = _qt_w.QCheckBox("Show Predicted Overlay")
+        self.chk_gt_overlay = _qt_w.QCheckBox("Show GT Overlay")
+        self.chk_trace_overlay.setChecked(self.trace_overlay_visible)
+        self.chk_gt_overlay.setChecked(self.gt_overlay_visible)
         self.btn_trace_revision_mode = QPushButton("Trace Revision Mode")
         self.btn_trace_revision_mode.setCheckable(True)
         self.btn_trace_revision_preview = QPushButton("Preview")
@@ -332,9 +339,11 @@ class _OrthoViewDialog:
         self.btn_run_evaluation = QPushButton("Run Evaluation")
         self.btn_save_postprocessed = QPushButton("Save Processed SWC")
         self.btn_save_eval_report = QPushButton("Save Eval Report")
-        self.btn_toggle_post_overlay = QPushButton("Toggle Processed Overlay")
+        self.chk_post_overlay = _qt_w.QCheckBox("Show Processed Overlay")
+        self.chk_post_overlay.setChecked(self.post_overlay_visible)
         if mode == "seed":
             self.btn_undo = QPushButton("Undo Last Seed")
+            self.btn_remove_selected_seed = QPushButton("Remove Selected Seed")
             self.btn_clear = QPushButton("Clear Seeds")
             self.btn_save_seeds = QPushButton("Save Seeds")
             self.btn_set_seeds_output = QPushButton("Set Seeds Output")
@@ -528,6 +537,7 @@ class _OrthoViewDialog:
             left_layout.addWidget(self._sidebar_separator())
             left_layout.addWidget(QLabel("Seed Controls:"))
             left_layout.addWidget(self.btn_undo)
+            left_layout.addWidget(self.btn_remove_selected_seed)
             left_layout.addWidget(self.btn_clear)
             if show_save_buttons:
                 left_layout.addWidget(self.btn_save_seeds)
@@ -542,8 +552,9 @@ class _OrthoViewDialog:
                 left_layout.addWidget(self.btn_cancel_trace)
                 left_layout.addWidget(self.btn_save_trace)
                 left_layout.addWidget(self.btn_save_all_traces)
-                left_layout.addWidget(self.btn_toggle_trace_overlay)
-                left_layout.addWidget(self.btn_toggle_gt_overlay)
+                left_layout.addWidget(self.btn_discard_trace)
+                left_layout.addWidget(self.chk_trace_overlay)
+                left_layout.addWidget(self.chk_gt_overlay)
                 left_layout.addWidget(self.btn_trace_revision_mode)
                 left_layout.addWidget(self.btn_trace_revision_preview)
                 left_layout.addWidget(self.btn_trace_revision_launch)
@@ -697,7 +708,7 @@ class _OrthoViewDialog:
                 _pp_lay.addWidget(self._sidebar_separator())
                 _pp_lay.addWidget(self.btn_run_postprocess)
                 _pp_lay.addWidget(self.btn_save_postprocessed)
-                _pp_lay.addWidget(self.btn_toggle_post_overlay)
+                _pp_lay.addWidget(self.chk_post_overlay)
             _pp_lay.addStretch(1)
             _tab_widget.addTab(_pp_sa, "Post-Processing")
 
@@ -786,7 +797,7 @@ class _OrthoViewDialog:
             self.btn_home,
         ]
         if mode == "seed":
-            button_list.extend([self.btn_undo, self.btn_clear])
+            button_list.extend([self.btn_undo, self.btn_remove_selected_seed, self.btn_clear])
             button_list.extend([self.btn_set_seeds_output, self.btn_set_trace_output, self.btn_set_model_weights])
             button_list.extend([self.btn_clear_seeds_output, self.btn_clear_trace_output, self.btn_clear_model_weights])
             button_list.extend([self.btn_set_image_dir, self.btn_set_seeds_input])
@@ -812,8 +823,7 @@ class _OrthoViewDialog:
                     self.btn_cancel_trace,
                     self.btn_save_trace,
                     self.btn_save_all_traces,
-                    self.btn_toggle_trace_overlay,
-                    self.btn_toggle_gt_overlay,
+                    self.btn_discard_trace,
                     self.btn_trace_revision_mode,
                     self.btn_trace_revision_preview,
                     self.btn_trace_revision_launch,
@@ -824,7 +834,6 @@ class _OrthoViewDialog:
                     self.btn_run_evaluation,
                     self.btn_save_postprocessed,
                     self.btn_save_eval_report,
-                    self.btn_toggle_post_overlay,
                 ])
         for button in button_list:
             button.setAutoDefault(False)
@@ -846,6 +855,7 @@ class _OrthoViewDialog:
 
         if mode == "seed":
             self.btn_undo.clicked.connect(self._undo_seed)
+            self.btn_remove_selected_seed.clicked.connect(self._remove_selected_seed)
             self.btn_clear.clicked.connect(self._clear_seeds)
             self.radio_tool_zoom.toggled.connect(self._on_tool_toggled)
             self.btn_approve_crop.clicked.connect(self._approve_crop_box)
@@ -894,8 +904,9 @@ class _OrthoViewDialog:
                 self.btn_cancel_trace.clicked.connect(self._cancel_trace)
                 self.btn_save_trace.clicked.connect(self._save_trace)
                 self.btn_save_all_traces.clicked.connect(self._save_all_traces)
-                self.btn_toggle_trace_overlay.clicked.connect(self._toggle_trace_overlay)
-                self.btn_toggle_gt_overlay.clicked.connect(self._toggle_gt_overlay)
+                self.btn_discard_trace.clicked.connect(self._discard_trace)
+                self.chk_trace_overlay.toggled.connect(self._toggle_trace_overlay)
+                self.chk_gt_overlay.toggled.connect(self._toggle_gt_overlay)
                 self.btn_trace_revision_mode.toggled.connect(self._toggle_trace_revision_mode)
                 self.btn_trace_revision_preview.clicked.connect(self._preview_trace_revision)
                 self.btn_trace_revision_launch.clicked.connect(self._launch_trace_revision)
@@ -908,7 +919,7 @@ class _OrthoViewDialog:
                 self.btn_run_evaluation.clicked.connect(self._run_evaluation)
                 self.btn_save_postprocessed.clicked.connect(self._save_postprocessed)
                 self.btn_save_eval_report.clicked.connect(self._save_eval_report)
-                self.btn_toggle_post_overlay.clicked.connect(self._toggle_post_overlay)
+                self.chk_post_overlay.toggled.connect(self._toggle_post_overlay)
 
         if self._show_trace_controls and self._get_trace_status is not None:
             qt_core = importlib.import_module("qtpy.QtCore")
@@ -983,7 +994,10 @@ class _OrthoViewDialog:
                 self._add_current_seed()
                 return
             if self.mode == "seed" and event.key() in (self.Qt.Key_Backspace, self.Qt.Key_Delete):
-                self._undo_seed()
+                if self.selected_seed_index is not None:
+                    self._remove_selected_seed()
+                else:
+                    self._undo_seed()
                 return
             if event.key() in (self.Qt.Key_Return, self.Qt.Key_Enter):
                 self.dialog.accept()
@@ -1022,10 +1036,23 @@ class _OrthoViewDialog:
     def _undo_seed(self):
         if self.seeds:
             self.seeds.pop()
+            self.selected_seed_index = None
             self._redraw()
+
+    def _remove_selected_seed(self):
+        if self.selected_seed_index is None:
+            return
+        idx = int(self.selected_seed_index)
+        if idx < 0 or idx >= len(self.seeds):
+            self.selected_seed_index = None
+            return
+        self.seeds.pop(idx)
+        self.selected_seed_index = None
+        self._redraw()
 
     def _clear_seeds(self):
         self.seeds.clear()
+        self.selected_seed_index = None
         self._redraw()
 
     def _on_tool_toggled(self, checked: bool):
@@ -1200,6 +1227,7 @@ class _OrthoViewDialog:
             )
             for z, y, x in seed_points
         ]
+        self.selected_seed_index = None
 
         if self._on_filtered_swc_changed is not None:
             self._on_filtered_swc_changed(self._current_image_key, self._tree_swc_committed.tolist())
@@ -1271,6 +1299,7 @@ class _OrthoViewDialog:
             )
             for z, y, x in seed_points
         ]
+        self.selected_seed_index = None
 
         if self._on_filtered_swc_changed is not None:
             self._on_filtered_swc_changed(self._current_image_key, self._tree_swc_committed.tolist())
@@ -1323,6 +1352,7 @@ class _OrthoViewDialog:
 
     def _set_seeds_from_array(self, seed_array: Optional[np.ndarray]):
         self.seeds = []
+        self.selected_seed_index = None
         if seed_array is None:
             return
         arr = np.asarray(seed_array, dtype=np.float32)
@@ -1414,8 +1444,13 @@ class _OrthoViewDialog:
             title = f"{title}: {neuron_name}"
         self.dialog.setWindowTitle(title)
 
-        # clear per-image post-processing and evaluation state
+        postprocess_paths = context.get("postprocess_paths", None)
         self.post_paths = []
+        if postprocess_paths is not None:
+            for path in postprocess_paths:
+                path_np = np.asarray(path, dtype=np.float32)
+                if path_np.ndim == 2 and path_np.shape[1] >= 3 and path_np.shape[0] >= 2:
+                    self.post_paths.append(path_np[:, :3])
         self.trace_revision_selected_node_xyz = None
         self.trace_revision_selected_point_xyz = None
         self.trace_revision_preview_paths = []
@@ -1423,7 +1458,10 @@ class _OrthoViewDialog:
         self.trace_revision_mode_enabled = False
         self._update_trace_revision_controls()
         if self.eval_report_widget is not None:
+            eval_report_text = context.get("eval_report_text", None)
             self.eval_report_widget.setPlainText("")
+            if eval_report_text is not None:
+                self.eval_report_widget.setPlainText(str(eval_report_text))
 
         self._update_slider_bounds()
         self._sync_sliders_from_cursor()
@@ -1468,12 +1506,12 @@ class _OrthoViewDialog:
             return
         self._on_cancel_trace()
 
-    def _toggle_trace_overlay(self):
-        self.trace_overlay_visible = not self.trace_overlay_visible
+    def _toggle_trace_overlay(self, checked: bool):
+        self.trace_overlay_visible = bool(checked)
         self._redraw()
 
-    def _toggle_gt_overlay(self):
-        self.gt_overlay_visible = not self.gt_overlay_visible
+    def _toggle_gt_overlay(self, checked: bool):
+        self.gt_overlay_visible = bool(checked)
         self._redraw()
 
     def _has_trace_revision_callbacks(self) -> bool:
@@ -1619,6 +1657,17 @@ class _OrthoViewDialog:
             return
         self._on_save_all_traces()
 
+    def _discard_trace(self):
+        if self._on_discard_trace is not None:
+            self._on_discard_trace()
+        self.finished_paths = []
+        self.trace_revision_selected_node_xyz = None
+        self.trace_revision_selected_point_xyz = None
+        self.trace_revision_preview_paths = []
+        self.trace_revision_preview_active = False
+        self._update_trace_revision_controls()
+        self._redraw()
+
     def _run_postprocess(self):
         if self._on_run_postprocess is None:
             return
@@ -1639,8 +1688,8 @@ class _OrthoViewDialog:
             return
         self._on_save_eval_report()
 
-    def _toggle_post_overlay(self):
-        self.post_overlay_visible = not self.post_overlay_visible
+    def _toggle_post_overlay(self, checked: bool):
+        self.post_overlay_visible = bool(checked)
         self._redraw()
 
     def _select_gt_swc_path(self):
@@ -1953,6 +2002,9 @@ class _OrthoViewDialog:
         self.btn_trace_all.setEnabled(not running)
         self.btn_save_trace.setEnabled(not running)
         self.btn_save_all_traces.setEnabled(not running)
+        self.btn_discard_trace.setEnabled(not running)
+        self.chk_trace_overlay.setEnabled(not running)
+        self.chk_gt_overlay.setEnabled(not running)
         self.btn_approve_crop.setEnabled(not running)
         self.btn_apply_component_filter.setEnabled(not running)
         self.btn_save_filtered_swc.setEnabled(not running)
@@ -1967,6 +2019,7 @@ class _OrthoViewDialog:
         if self._show_postprocess_controls:
             self.btn_run_postprocess.setEnabled(not running)
             self.btn_run_evaluation.setEnabled(not running)
+            self.chk_post_overlay.setEnabled(not running)
 
     def _invalidate_mip_cache(self):
         self._mip_cache_by_view = {"xy": None, "xz": None, "yz": None}
@@ -2227,7 +2280,7 @@ class _OrthoViewDialog:
                 else:
                     collection = LineCollection(
                         segments,
-                        colors="lime",
+                        colors="tomato",
                         linewidths=1.2,
                         alpha=0.85,
                     )
@@ -2241,12 +2294,55 @@ class _OrthoViewDialog:
             roots = roots_source[roots_source[:, 6] == -1]
             if roots.size > 0:
                 if view == "xy":
-                    artists.append(ax.scatter(roots[:, 2], roots[:, 3], c="red", s=16, alpha=0.9))
+                    artists.append(ax.scatter(roots[:, 2], roots[:, 3], c="darkorange", s=16, alpha=0.9))
                 elif view == "xz":
-                    artists.append(ax.scatter(roots[:, 2], roots[:, 4], c="red", s=16, alpha=0.9))
+                    artists.append(ax.scatter(roots[:, 2], roots[:, 4], c="darkorange", s=16, alpha=0.9))
                 else:
-                    artists.append(ax.scatter(roots[:, 3], roots[:, 4], c="red", s=16, alpha=0.9))
+                    artists.append(ax.scatter(roots[:, 3], roots[:, 4], c="darkorange", s=16, alpha=0.9))
         return artists
+
+    def _seed_visible_in_view(self, seed: Tuple[int, int, int], view: str) -> bool:
+        if self.projection_mode == "mip":
+            return True
+        z, y, x = seed
+        if view == "xy":
+            return z == self.current_z
+        if view == "xz":
+            return y == self.current_y
+        return x == self.current_x
+
+    def _seed_plot_coords(self, seed: Tuple[int, int, int], view: str) -> Tuple[float, float]:
+        z, y, x = seed
+        if view == "xy":
+            return float(x), float(y)
+        if view == "xz":
+            return float(x), float(z)
+        return float(y), float(z)
+
+    def _select_seed_at_view_coords(self, view: str, xdata: float, ydata: float, tolerance: float = 4.0) -> Optional[int]:
+        if not self.seeds:
+            self.selected_seed_index = None
+            return None
+        best_idx: Optional[int] = None
+        best_dist_sq = tolerance * tolerance
+        # In MIP mode, all seeds are candidates regardless of current slice cursor.
+        if self.projection_mode == "mip":
+            candidate_indices = range(len(self.seeds))
+        else:
+            candidate_indices = [
+                idx for idx, seed in enumerate(self.seeds)
+                if self._seed_visible_in_view(seed, view)
+            ]
+
+        for idx in candidate_indices:
+            seed = self.seeds[idx]
+            sx, sy = self._seed_plot_coords(seed, view)
+            dist_sq = (sx - xdata) ** 2 + (sy - ydata) ** 2
+            if dist_sq <= best_dist_sq:
+                best_idx = idx
+                best_dist_sq = dist_sq
+        self.selected_seed_index = best_idx
+        return best_idx
 
     def _draw_overlay(self, ax, view: str):
         artists = []
@@ -2258,17 +2354,24 @@ class _OrthoViewDialog:
         artists.extend(self._draw_crop_box_overlay(ax=ax, view=view))
 
         if self.seeds:
-            seeds_np = np.asarray(self.seeds, dtype=np.float32)
-            if view == "xy":
-                artists.append(ax.scatter(seeds_np[:, 2], seeds_np[:, 1], s=35, c="lime", edgecolors="black"))
-            elif view == "xz":
-                artists.append(ax.scatter(seeds_np[:, 2], seeds_np[:, 0], s=35, c="lime", edgecolors="black"))
-            else:
-                artists.append(ax.scatter(seeds_np[:, 1], seeds_np[:, 0], s=35, c="lime", edgecolors="black"))
+            visible_indices = [idx for idx, seed in enumerate(self.seeds) if self._seed_visible_in_view(seed, view)]
+            if visible_indices:
+                xs = []
+                ys = []
+                colors = []
+                sizes = []
+                for idx in visible_indices:
+                    sx, sy = self._seed_plot_coords(self.seeds[idx], view)
+                    xs.append(sx)
+                    ys.append(sy)
+                    is_selected = self.selected_seed_index == idx
+                    colors.append("yellow" if is_selected else "lime")
+                    sizes.append(65 if is_selected else 35)
+                artists.append(ax.scatter(xs, ys, s=sizes, c=colors, edgecolors="black"))
 
         if self.trace_overlay_visible:
             trace_paths = self.finished_paths
-            trace_color = "lime"
+            trace_color = "deepskyblue"
             if self.trace_revision_preview_active and self.trace_revision_preview_paths:
                 trace_paths = self.trace_revision_preview_paths
                 trace_color = "gold"
@@ -2493,8 +2596,9 @@ class _OrthoViewDialog:
 
         if dx <= drag_threshold and dy <= drag_threshold:
             if self.mode == "seed":
+                selected_seed_idx = self._select_seed_at_view_coords(view, end_x, end_y)
                 self._set_cursor_from_view_coords(view, end_x, end_y)
-                if self._active_tool != "crop":
+                if self._active_tool != "crop" and selected_seed_idx is None:
                     self._select_trace_revision_point()
             else:
                 self.canvas.draw_idle()
@@ -2521,6 +2625,7 @@ class _OrthoViewDialog:
         if not self._has_image_dir():
             return
         self.seeds.append((self.current_z, self.current_y, self.current_x))
+        self.selected_seed_index = len(self.seeds) - 1
         self._redraw()
 
     def _on_mpl_keypress(self, event):
@@ -2532,7 +2637,10 @@ class _OrthoViewDialog:
         if event.key in (" ", "space"):
             self._add_current_seed()
         elif event.key in ("backspace", "delete"):
-            self._undo_seed()
+            if self.selected_seed_index is not None:
+                self._remove_selected_seed()
+            else:
+                self._undo_seed()
 
     def _on_mpl_keyrelease(self, event):
         if event.key == "shift":
@@ -2662,6 +2770,7 @@ def interactive_seed_selection_step(
     finished_paths: Optional[List[np.ndarray]] = None,
     on_save_trace: Optional[Callable[[], None]] = None,
     on_save_all_traces: Optional[Callable[[], None]] = None,
+    on_discard_trace: Optional[Callable[[], None]] = None,
     seeds_output_path: Optional[str] = None,
     trace_output_path: Optional[str] = None,
     on_select_seeds_output_path: Optional[Callable[[], Optional[str]]] = None,
@@ -2697,6 +2806,7 @@ def interactive_seed_selection_step(
         get_trace_status=get_trace_status,
         on_save_trace=on_save_trace,
         on_save_all_traces=on_save_all_traces,
+        on_discard_trace=on_discard_trace,
         seeds_output_path=seeds_output_path,
         trace_output_path=trace_output_path,
         on_select_seeds_output_path=on_select_seeds_output_path,
@@ -2733,6 +2843,7 @@ def interactive_seed_selection_session(
     get_trace_status: Optional[Callable[[], Dict[str, object]]] = None,
     on_save_trace: Optional[Callable[[], None]] = None,
     on_save_all_traces: Optional[Callable[[], None]] = None,
+    on_discard_trace: Optional[Callable[[], None]] = None,
     on_select_seeds_output_path: Optional[Callable[[], Optional[str]]] = None,
     on_select_trace_output_path: Optional[Callable[[], Optional[str]]] = None,
     on_clear_seeds_output_path: Optional[Callable[[], Optional[str]]] = None,
@@ -2814,6 +2925,7 @@ def interactive_seed_selection_session(
         get_trace_status=get_trace_status,
         on_save_trace=on_save_trace,
         on_save_all_traces=on_save_all_traces,
+        on_discard_trace=on_discard_trace,
         seeds_output_path=initial_context.get("seeds_output_path"),
         trace_output_path=initial_context.get("trace_output_path"),
         on_select_seeds_output_path=on_select_seeds_output_path,

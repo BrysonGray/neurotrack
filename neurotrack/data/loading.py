@@ -293,6 +293,10 @@ def adjacency_dict(swc_list):
                 adj_dict.setdefault(node_id, [])
         else:
             adj_dict.setdefault(node_id, [])  # Ensure the root node is in the adjacency dict
+    # Deduplicate neighbors and sort them for consistency
+    for node_id in adj_dict:
+        adj_dict[node_id] = sorted(set(adj_dict[node_id]))
+        
     return adj_dict
 
 
@@ -459,7 +463,101 @@ def parse_swc(swc_list, transpose=True, verbose=False):
                 sections_graph[section].append(other_section)
 
     return sections, sections_graph
-    
+
+
+def parse_swc_into_segments(swc_list):
+    """
+    Make a list of segments where each segment is a list of consecutive points 
+    between critical points (branching points or terminal points) and including the critical points at the ends of each segment.
+    """
+
+    # Assumes SWC roots use parent == -1.
+    adj_dict = adjacency_dict(swc_list)
+    # root_nodes = [node[0] for node in swc_list if node[6] == -1]
+    root_nodes = [node_id for node_id, neighbors in adj_dict.items() if (len(neighbors) == 1 or len(neighbors) == 0)]
+    if not root_nodes and adj_dict:
+        # Cycle-only components (all degree-2) have no leaf seed. Start one
+        # traversal per connected component to guarantee coverage.
+        remaining = set(adj_dict.keys())
+        component_seeds = []
+        while remaining:
+            seed = next(iter(remaining))
+            component_seeds.append(seed)
+            stack = [seed]
+            while stack:
+                node_id = stack.pop()
+                if node_id not in remaining:
+                    continue
+                remaining.remove(node_id)
+                stack.extend(adj_dict.get(node_id, []))
+        root_nodes = component_seeds
+    segment_queue = [[root_id] for root_id in root_nodes]
+
+
+    # Track edges instead of nodes so branch points can be revisited from
+    # different directions without suppressing valid child traversals.
+    visited_edges = set()
+
+    def edge_key(a, b):
+        return tuple(sorted((a, b)))
+
+    segments = []
+    while segment_queue:
+        segment = segment_queue.pop()
+
+        while True:
+            current_node = segment[-1]
+            neighbors = adj_dict.get(current_node, [])
+            came_from = segment[-2] if len(segment) > 1 else None
+            forward_neighbors = [n for n in neighbors if n != came_from]
+
+            if len(forward_neighbors) == 0:  # terminal point
+                segments.append(segment)
+                break
+
+            if len(forward_neighbors) > 1:  # branching point
+                segments.append(segment)
+                for neighbor in forward_neighbors:
+                    ek = edge_key(current_node, neighbor)
+                    if ek not in visited_edges:
+                        visited_edges.add(ek)
+                        segment_queue.append([current_node, neighbor])
+                break
+
+            # Exactly one forward neighbor: continue this segment.
+            next_node = forward_neighbors[0]
+            ek = edge_key(current_node, next_node)
+            if ek in visited_edges:
+                segments.append(segment)
+                break
+            visited_edges.add(ek)
+            segment.append(next_node)
+
+    # make sure all nodes are included in the segments
+    all_segment_nodes = set(node for segment in segments for node in segment)
+    all_nodes = set(node[0] for node in swc_list)
+    missing_nodes = all_nodes - all_segment_nodes
+    if missing_nodes:
+        # Workaround for irregular components: force each missing node to
+        # appear in at least one segment.
+        for node_id in missing_nodes:
+            neighbors = adj_dict.get(node_id, [])
+            if neighbors:
+                segments.append([node_id, neighbors[0]])
+            else:
+                segments.append([node_id])
+
+        all_segment_nodes = set(node for segment in segments for node in segment)
+        still_missing_nodes = all_nodes - all_segment_nodes
+        if still_missing_nodes:
+            print(f"Warning: The following nodes are missing from the segments: {still_missing_nodes}")
+
+    id_to_idx = {row[0]: idx for idx, row in enumerate(swc_list)}
+    # Filter out missing nodes when building swc_parsed
+    swc_parsed = [[swc_list[id_to_idx[node_id]] for node_id in segment if node_id in id_to_idx] for segment in segments]
+
+    return swc_parsed
+
 
 def get_critical_points(swc_list, sections, transpose=True):
     # filter branches

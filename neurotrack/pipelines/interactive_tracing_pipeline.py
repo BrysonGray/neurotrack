@@ -1290,6 +1290,7 @@ class _SessionState:
         self.current_volume_shape = tuple(np.asarray(image_array).shape[-3:])
         initial_rows = flexible_image_key_lookup(self.selected_seeds, relative_key, default=[])
         initial_seeds = np.asarray(initial_rows, dtype=np.float32) if initial_rows else None
+        trace_status = trace_manager.get_status(current_key=relative_key)
         return {
             "image_data": image_array,
             "neuron_name": relative_key,
@@ -1298,6 +1299,8 @@ class _SessionState:
             "show_next_button": index < len(self.image_paths) - 1,
             "finished_paths": trace_manager.trace_results_by_key.get(relative_key, []),
             "tree_swc_rows": trace_manager.get_tree_swc_rows(relative_key),
+            "postprocess_paths": trace_status.get("postprocess_paths", None),
+            "eval_report_text": trace_status.get("eval_report_text", None),
             "seeds_output_path": self.seeds_output_path,
             "trace_output_path": trace_manager.get_trace_output_dir(),
             "model_weights_path": trace_manager.get_model_weights_path(),

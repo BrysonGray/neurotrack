@@ -6,7 +6,8 @@ from typing import Any, Dict, Optional, Tuple
 import numpy as np
 from scipy.spatial import KDTree
 
-from neurotrack.data import loading as load
+from neurotrack.data import loading as load, save
+from neurotrack.data import tree
 
 
 def _as_swc_array(swc_list: list) -> np.ndarray:
@@ -130,6 +131,121 @@ def _path_length_and_component_root(
     return path_length_by_id, component_root_by_id
 
 
+def _adjacency_dict(swc_list):
+    # First, build set of valid node IDs to detect orphaned parents
+    valid_node_ids = set(node[0] for node in swc_list)
+    
+    adj_dict = {}
+    for node in swc_list:
+        node_id = node[0]
+        parent_id = node[6]
+        if parent_id > 0:  # Ignore the root node which has no parent
+            if parent_id not in valid_node_ids:
+                # Parent node doesn't exist in swc_list, treat this node as a root
+                adj_dict.setdefault(node_id, [])
+            else:
+                adj_dict.setdefault(node_id, []).append(parent_id)
+                adj_dict.setdefault(parent_id, []).append(node_id)
+        else:
+            adj_dict.setdefault(node_id, [])  # Ensure the root node is in the adjacency dict
+    # deduplicate neighbors and sort them for consistency
+    for node_id in adj_dict:
+        adj_dict[node_id] = sorted(set(adj_dict[node_id]))
+    return adj_dict
+
+def _parse_swc_into_segments(swc_list):
+    """
+    Make a list of segments where each segment is a list of consecutive points 
+    between critical points (branching points or terminal points) and including the critical points at the ends of each segment.
+    """
+    # Assumes SWC roots use parent == -1.
+    adj_dict = _adjacency_dict(swc_list)
+    # root_nodes = [node[0] for node in swc_list if node[6] == -1]
+    root_nodes = [node_id for node_id, neighbors in adj_dict.items() if (len(neighbors) == 1 or len(neighbors) == 0)]
+    if not root_nodes and adj_dict:
+        # Cycle-only components (all degree-2) have no leaf seed. Start one
+        # traversal per connected component to guarantee coverage.
+        remaining = set(adj_dict.keys())
+        component_seeds = []
+        while remaining:
+            seed = next(iter(remaining))
+            component_seeds.append(seed)
+            stack = [seed]
+            while stack:
+                node_id = stack.pop()
+                if node_id not in remaining:
+                    continue
+                remaining.remove(node_id)
+                stack.extend(adj_dict.get(node_id, []))
+        root_nodes = component_seeds
+    segment_queue = [[root_id] for root_id in root_nodes]
+
+
+    # Track edges instead of nodes so branch points can be revisited from
+    # different directions without suppressing valid child traversals.
+    visited_edges = set()
+
+    def edge_key(a, b):
+        return tuple(sorted((a, b)))
+
+    segments = []
+    while segment_queue:
+        segment = segment_queue.pop()
+
+        while True:
+            current_node = segment[-1]
+            neighbors = adj_dict.get(current_node, [])
+            came_from = segment[-2] if len(segment) > 1 else None
+            forward_neighbors = [n for n in neighbors if n != came_from]
+
+            if len(forward_neighbors) == 0:  # terminal point
+                segments.append(segment)
+                break
+
+            if len(forward_neighbors) > 1:  # branching point
+                segments.append(segment)
+                for neighbor in forward_neighbors:
+                    ek = edge_key(current_node, neighbor)
+                    if ek not in visited_edges:
+                        visited_edges.add(ek)
+                        segment_queue.append([current_node, neighbor])
+                break
+
+            # Exactly one forward neighbor: continue this segment.
+            next_node = forward_neighbors[0]
+            ek = edge_key(current_node, next_node)
+            if ek in visited_edges:
+                segments.append(segment)
+                break
+            visited_edges.add(ek)
+            segment.append(next_node)
+
+    # make sure all nodes are included in the segments
+    all_segment_nodes = set(node for segment in segments for node in segment)
+    all_nodes = set(node[0] for node in swc_list)
+    missing_nodes = all_nodes - all_segment_nodes
+    if missing_nodes:
+        # Workaround for irregular components: force each missing node to
+        # appear in at least one segment.
+        for node_id in missing_nodes:
+            neighbors = adj_dict.get(node_id, [])
+            if neighbors:
+                segments.append([node_id, neighbors[0]])
+            else:
+                segments.append([node_id])
+
+        all_segment_nodes = set(node for segment in segments for node in segment)
+        still_missing_nodes = all_nodes - all_segment_nodes
+        if still_missing_nodes:
+            print(f"Warning: The following nodes are missing from the segments: {still_missing_nodes}")
+
+    id_to_idx = {row[0]: idx for idx, row in enumerate(swc_list)}
+    # Filter out missing nodes when building swc_parsed
+    swc_parsed = [[swc_list[id_to_idx[node_id]] for node_id in segment if node_id in id_to_idx] for segment in segments]
+
+    return swc_parsed
+
+
 def _directed_divergence_stats(tree_a, tree_b, threshold: float = 4.0) -> Dict[str, Any]:
     """Compute directed nearest-neighbor stats used by multiple metrics."""
     swc_a = _as_swc_array(tree_a)
@@ -185,7 +301,7 @@ def _directed_divergence_stats(tree_a, tree_b, threshold: float = 4.0) -> Dict[s
     }
 
 
-def directed_divergence(tree_a, tree_b, threshold=4.0, return_details: bool = False):
+def directed_divergence(tree_a, tree_b, threshold=2.0, return_details: bool = False, sample_spacing: float = None) -> Tuple[float, int, Optional[Dict[str, Any]]]:
     """
     Calculate the directed divergence from tree_a to tree_b.
     For each point in tree_a, find the nearest point in tree_b and compute the average distance.
@@ -198,7 +314,8 @@ def directed_divergence(tree_a, tree_b, threshold=4.0, return_details: bool = Fa
         Mx7 SWC formatted list or array of points representing the second tree.
     threshold : float
         Distance threshold to consider for divergence calculation.
-
+    sample_spacing : float, optional
+        If provided, resample both trees to have points approximately every `sample_spacing` units apart before computing divergence.
     Returns
     -------
     avg_distance : float
@@ -210,6 +327,18 @@ def directed_divergence(tree_a, tree_b, threshold=4.0, return_details: bool = Fa
         ``n_far``, ``different_structure_average``,
         and ``percentage_different_structure``.
     """
+    if sample_spacing is not None:
+        neuron_trees = []
+        for neuron_tree in (tree_a, tree_b):
+            tree_segments = _parse_swc_into_segments(neuron_tree)
+            paths = [
+                np.array([[node[2], node[3], node[4]] for node in segment], dtype=float)
+                for segment in tree_segments
+            ]
+            tree_paths_resampled = tree.resample_tree(paths, step_size=sample_spacing)
+            neuron_trees.append(save.paths_to_swc(tree_paths_resampled))
+        tree_a, tree_b = neuron_trees  
+
     stats = _directed_divergence_stats(tree_a, tree_b, threshold=float(threshold))
     if return_details:
         return float(stats["avg_distance"]), int(stats["n_close"]), stats
@@ -539,13 +668,15 @@ def percent_different_structure_average(tree1, tree2, distance_threshold: float 
 def evaluate_reconstruction(
     pred_swc: list,
     gt_swc: list,
-    threshold: float = 4.0,
+    threshold: float = 2.0,
     return_l_measures: bool = False,
+    sample_spacing: Optional[float] = None,
 ) -> Dict[str, Any]:
     div_pred_to_gt, _, pred_to_gt_details = directed_divergence(
         pred_swc,
         gt_swc,
         threshold=threshold,
+        sample_spacing=sample_spacing,
         return_details=True,
     )
 
@@ -553,6 +684,7 @@ def evaluate_reconstruction(
         gt_swc,
         pred_swc,
         threshold=threshold,
+        sample_spacing=sample_spacing,
         return_details=True,
     )
 

@@ -35,7 +35,7 @@ class NeuronTrackingEnvironment:
     def __init__(self, dataset,
                  radius: int = 17, target_step_len: float = 4.0, step_width: float = 4.0,
                  stall_threshold: float = 1.0,
-                 max_len: int = 10000, max_paths: int = 10000, gamma=0.99, branching: bool = False,
+                 max_len: int = 9999999, max_paths: int = 9999999, gamma=0.99, branching: bool = False,
                  repeat_starts: bool = False, start_idx: int = 0,
                  inference_mode: bool = False,
                  clear_path_history_between_seeds: Optional[bool] = None):
@@ -95,6 +95,7 @@ class NeuronTrackingEnvironment:
             else bool(clear_path_history_between_seeds)
         )
         self.close_dist2 = 9.0 ** 2  # distance threshold for cut end assignment and neuron end point assignment when removing visited edges
+        self.min_path_steps = 3  # minimum number of steps before a path is considered valid and added to finished_paths
         
         # Initialize other attributes that will be set when neuron data is loaded
         self.img = None
@@ -498,7 +499,8 @@ class NeuronTrackingEnvironment:
         terminate_episode = False
         # Convert list of points to stacked tensor once when finalizing the path
         finished_path = torch.stack(self.paths.pop(0), dim=0)
-        self.finished_paths.append(finished_path)
+        if len(finished_path) > self.min_path_steps+1:
+            self.finished_paths.append(finished_path)
 
         # Track whether the just-finished path was the first path of the current seed group.
         first_path_of_group = self._group_first_path_pending
@@ -507,7 +509,7 @@ class NeuronTrackingEnvironment:
         # Check for max branches
         if len(self.finished_paths) > self.max_paths:
             terminate_episode = True
-        elif self.repeat_starts and len(self.finished_paths[-1]) > 4:
+        elif self.repeat_starts and len(self.finished_paths) > self.min_path_steps+1:
             # If the path took more than three steps, add a new path at the same root
             self.paths.append([finished_path[0]])
             self._append_branch_root(finished_path[0])

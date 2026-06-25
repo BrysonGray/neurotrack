@@ -50,6 +50,8 @@ class NeuronPatchDataset(TorchDataset):
         root_sampling_probability: Optional[float] = None,
         soma_sample_radius: float = 0.0,
         random_offset: float = 0.0,
+        seed_jitter_count: int = 0,
+        seed_jitter_radius: float = 0.0,
     ):
         """
         Initialize the dataset.
@@ -87,6 +89,16 @@ class NeuronPatchDataset(TorchDataset):
             Radius within which to sample soma points.
         random_offset : float
             Random offset to add to sampled points.
+        seed_jitter_count : int
+            Number of additional randomized seed points to place around each
+            configured seed (from ``seeds_path`` / ``seed_points_by_image``).
+            ``0`` disables jitter and uses only the configured seeds. Only
+            applies to configured seeds; it does not affect the soma-biased
+            patch sampling used when ``crop_patches=True``.
+        seed_jitter_radius : float
+            Radius (in voxels) of the ball around each configured seed within
+            which the additional jittered seeds are placed. Must be > 0 when
+            ``seed_jitter_count > 0``.
 
         """
         self.rng = rng or np.random.default_rng(0)
@@ -131,6 +143,8 @@ class NeuronPatchDataset(TorchDataset):
         self.root_sampling_probability = None if root_sampling_probability is None else float(root_sampling_probability)
         self.soma_sample_radius = float(soma_sample_radius)
         self.random_offset = float(random_offset)
+        self.seed_jitter_count = int(seed_jitter_count)
+        self.seed_jitter_radius = float(seed_jitter_radius)
         self.seeds_path = str(seeds_path) if seeds_path is not None else None
         if seed_points_by_image is not None:
             self.seed_points_by_image = dict(seed_points_by_image)
@@ -146,6 +160,10 @@ class NeuronPatchDataset(TorchDataset):
             raise ValueError("Alpha must be between 0.0 and 1.0")
         if self.root_sampling_probability is not None and not (0.0 <= self.root_sampling_probability <= 1.0):
             raise ValueError("root_sampling_probability must be between 0.0 and 1.0")
+        if self.seed_jitter_count < 0:
+            raise ValueError("seed_jitter_count must be a non-negative integer")
+        if self.seed_jitter_count > 0 and self.seed_jitter_radius <= 0.0:
+            raise ValueError("seed_jitter_radius must be > 0 when seed_jitter_count > 0")
         
         # Cache for currently loaded image
         self._cached_image_idx: Optional[int] = None
@@ -185,6 +203,43 @@ class NeuronPatchDataset(TorchDataset):
         if seeds.shape[0] == 0:
             return None
         return seeds
+
+    def _augment_seeds_with_jitter(
+        self,
+        seeds_zyx: torch.Tensor,
+        rng: np.random.Generator,
+        spatial_shape_zyx: torch.Size,
+    ) -> torch.Tensor:
+        """Add ``seed_jitter_count`` randomized seeds within ``seed_jitter_radius`` of each seed.
+
+        The configured seeds are preserved; each is followed by its jittered
+        copies. Jittered points are sampled uniformly inside a sphere of radius
+        ``seed_jitter_radius`` and clamped to valid image coordinates. Sampling
+        is driven by ``rng`` so output is deterministic per dataset index.
+        """
+        if self.seed_jitter_count <= 0 or seeds_zyx.shape[0] == 0:
+            return seeds_zyx
+
+        max_coords = torch.as_tensor(
+            [float(dim) - 1.0 for dim in spatial_shape_zyx], dtype=torch.float32
+        )
+        augmented: List[torch.Tensor] = []
+        for seed in seeds_zyx:
+            augmented.append(seed.unsqueeze(0))
+            # Uniform sampling inside a ball: random direction * radius * U^(1/3).
+            directions = rng.normal(size=(self.seed_jitter_count, 3))
+            norms = np.linalg.norm(directions, axis=1, keepdims=True)
+            norms[norms == 0.0] = 1.0
+            directions = directions / norms
+            radii = self.seed_jitter_radius * np.cbrt(
+                rng.random(size=(self.seed_jitter_count, 1))
+            )
+            offsets = torch.as_tensor(directions * radii, dtype=torch.float32)
+            jittered = seed.unsqueeze(0) + offsets
+            jittered = torch.clamp(jittered, min=torch.zeros(3), max=max_coords)
+            augmented.append(jittered)
+
+        return torch.cat(augmented, dim=0)
 
     @staticmethod
     def _get_root_seed_points_from_swc(swc_data: List) -> Optional[torch.Tensor]:
@@ -901,6 +956,13 @@ class NeuronPatchDataset(TorchDataset):
 
             if configured_seeds is not None:
                 seed_points = configured_seeds
+                if self.seed_jitter_count > 0:
+                    jitter_rng = np.random.default_rng(self._base_seed + idx)
+                    seed_points = self._augment_seeds_with_jitter(
+                        seed_points,
+                        jitter_rng,
+                        self._cached_image.shape[-3:],
+                    )
             elif self.has_swc and self._cached_swc_data is not None and not has_configured_seed_key:
                 # Sample a deterministic seed and build the path channel for full images.
                 patch_seed = self._base_seed + idx

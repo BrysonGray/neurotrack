@@ -539,7 +539,7 @@ def merge_redundant_paths(
                     distances <= distance_threshold, mask_smoothing_size
                 )
 
-                if float(np.mean(overlap_mask)) < overlap_threshold:
+                if not np.any(overlap_mask):
                     finalized[oi] = [path]
                     pending_points.append(path)
                     continue
@@ -567,7 +567,6 @@ def merge_redundant_paths(
     else:
         print(
             f"    Merged {n_merge_modified} overlapping path(s) onto longer paths "
-            f"(threshold={overlap_threshold:.2f})"
         )
 
     return merged_paths

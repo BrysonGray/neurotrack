@@ -60,6 +60,7 @@ class _OrthoViewDialog:
         tree_swc_rows: Optional[object] = None,
         neuron_name: str = "",
         initial_seeds: Optional[np.ndarray] = None,
+        effective_seed_overlay: Optional[np.ndarray] = None,
         show_prev_button: bool = False,
         show_next_button: bool = False,
         show_save_buttons: bool = False,
@@ -87,6 +88,7 @@ class _OrthoViewDialog:
         on_clear_model_weights_path: Optional[Callable[[], Optional[str]]] = None,
         on_prev_image: Optional[Callable[[np.ndarray], Optional[Dict[str, object]]]] = None,
         on_next_image: Optional[Callable[[np.ndarray], Optional[Dict[str, object]]]] = None,
+        on_get_effective_seed_overlay: Optional[Callable[[np.ndarray], Optional[np.ndarray]]] = None,
         show_postprocess_controls: bool = False,
         on_run_postprocess: Optional[Callable[[], None]] = None,
         on_run_postprocess_all: Optional[Callable[[], None]] = None,
@@ -187,6 +189,17 @@ class _OrthoViewDialog:
                     (int(round(z)), int(round(y)), int(round(x)))
                     for z, y, x in seed_arr
                 ]
+        self.effective_seed_overlay: List[Tuple[int, int, int]] = []
+        if effective_seed_overlay is not None:
+            overlay_arr = np.asarray(effective_seed_overlay, dtype=np.float32)
+            if overlay_arr.ndim == 2 and overlay_arr.shape[1] == 3:
+                overlay_arr[:, 0] = np.clip(overlay_arr[:, 0], 0, self.shape[0] - 1)
+                overlay_arr[:, 1] = np.clip(overlay_arr[:, 1], 0, self.shape[1] - 1)
+                overlay_arr[:, 2] = np.clip(overlay_arr[:, 2], 0, self.shape[2] - 1)
+                self.effective_seed_overlay = [
+                    (int(round(z)), int(round(y)), int(round(x)))
+                    for z, y, x in overlay_arr
+                ]
         self.zoom_limits = {}
         self.zoom_history = {"xy": [], "xz": [], "yz": []}
         self._active_view = "xy"
@@ -225,6 +238,7 @@ class _OrthoViewDialog:
         self._on_clear_model_weights_path = on_clear_model_weights_path
         self._on_prev_image = on_prev_image
         self._on_next_image = on_next_image
+        self._on_get_effective_seed_overlay = on_get_effective_seed_overlay
         self._show_postprocess_controls = bool(show_postprocess_controls and mode == "seed")
         self._on_run_postprocess = on_run_postprocess
         self._on_run_postprocess_all = on_run_postprocess_all
@@ -1184,6 +1198,7 @@ class _OrthoViewDialog:
             self.seeds.pop()
             self.selected_seed_index = None
             self._refresh_seed_order_controls()
+            self._refresh_effective_seed_overlay()
             self._redraw()
 
     def _remove_selected_seed(self):
@@ -1197,12 +1212,14 @@ class _OrthoViewDialog:
         self.seeds.pop(idx)
         self.selected_seed_index = None
         self._refresh_seed_order_controls()
+        self._refresh_effective_seed_overlay()
         self._redraw()
 
     def _clear_seeds(self):
         self.seeds.clear()
         self.selected_seed_index = None
         self._refresh_seed_order_controls()
+        self._refresh_effective_seed_overlay()
         self._redraw()
 
     def _refresh_seed_order_controls(self):
@@ -1257,6 +1274,7 @@ class _OrthoViewDialog:
         self.seeds.insert(new_index, selected_seed)
         self.selected_seed_index = new_index
         self._refresh_seed_order_controls()
+        self._refresh_effective_seed_overlay()
         self._redraw()
 
     def _move_selected_seed_up(self):
@@ -1446,6 +1464,7 @@ class _OrthoViewDialog:
         ]
         self.selected_seed_index = None
         self._refresh_seed_order_controls()
+        self._refresh_effective_seed_overlay()
 
         if self._on_filtered_swc_changed is not None:
             self._on_filtered_swc_changed(self._current_image_key, self._tree_swc_committed.tolist())
@@ -1574,16 +1593,43 @@ class _OrthoViewDialog:
         self.selected_seed_index = None
         if seed_array is None:
             self._refresh_seed_order_controls()
+            self._refresh_effective_seed_overlay()
             return
         arr = np.asarray(seed_array, dtype=np.float32)
         if arr.ndim != 2 or arr.shape[1] != 3:
             self._refresh_seed_order_controls()
+            self._refresh_effective_seed_overlay()
             return
         arr[:, 0] = np.clip(arr[:, 0], 0, self.shape[0] - 1)
         arr[:, 1] = np.clip(arr[:, 1], 0, self.shape[1] - 1)
         arr[:, 2] = np.clip(arr[:, 2], 0, self.shape[2] - 1)
         self.seeds = [(int(round(z)), int(round(y)), int(round(x))) for z, y, x in arr]
         self._refresh_seed_order_controls()
+
+    def _set_effective_seed_overlay_from_array(self, seed_array: Optional[np.ndarray]):
+        self.effective_seed_overlay = []
+        if seed_array is None:
+            return
+        arr = np.asarray(seed_array, dtype=np.float32)
+        if arr.ndim != 2 or arr.shape[1] != 3:
+            return
+        arr[:, 0] = np.clip(arr[:, 0], 0, self.shape[0] - 1)
+        arr[:, 1] = np.clip(arr[:, 1], 0, self.shape[1] - 1)
+        arr[:, 2] = np.clip(arr[:, 2], 0, self.shape[2] - 1)
+        self.effective_seed_overlay = [
+            (int(round(z)), int(round(y)), int(round(x))) for z, y, x in arr
+        ]
+
+    def _refresh_effective_seed_overlay(self):
+        if self.mode != "seed" or self._on_get_effective_seed_overlay is None:
+            return
+        try:
+            seed_array = np.asarray(self.seeds, dtype=np.float32)
+            overlay = self._on_get_effective_seed_overlay(seed_array)
+            self._set_effective_seed_overlay_from_array(overlay)
+        except Exception:
+            # Keep UI responsive even if the optional overlay callback fails.
+            self.effective_seed_overlay = []
 
     def _set_finished_paths(self, finished_paths):
         self.finished_paths = []
@@ -1625,6 +1671,7 @@ class _OrthoViewDialog:
         self._layout_dirty = True
 
         self._set_seeds_from_array(context.get("initial_seeds"))
+        self._set_effective_seed_overlay_from_array(context.get("effective_seed_overlay"))
         self._set_finished_paths(context.get("finished_paths"))
         self._current_image_key = str(context.get("neuron_name", ""))
         self._tree_swc_committed = _normalize_swc_rows(context.get("tree_swc_rows"))
@@ -2418,7 +2465,8 @@ class _OrthoViewDialog:
         if self.mode == "seed":
             crop_state = "preview" if self._has_crop_preview else "none"
             self.info_label.setText(
-                f"Tool: {self._active_tool} | Crop: {crop_state} | Seeds: {len(self.seeds)} | "
+                f"Tool: {self._active_tool} | Crop: {crop_state} | Seeds: {len(self.seeds)}"
+                f" | Effective: {len(self.effective_seed_overlay)} | "
                 f"Cursor (z,y,x)=({self.current_z}, {self.current_y}, {self.current_x})"
             )
 
@@ -2598,6 +2646,22 @@ class _OrthoViewDialog:
         artists.extend(self._draw_crop_box_overlay(ax=ax, view=view))
 
         if self.seeds:
+            if self.effective_seed_overlay:
+                effective_visible_indices = [
+                    idx for idx, seed in enumerate(self.effective_seed_overlay)
+                    if self._seed_visible_in_view(seed, view)
+                ]
+                if effective_visible_indices:
+                    xs_eff = []
+                    ys_eff = []
+                    for idx in effective_visible_indices:
+                        sx, sy = self._seed_plot_coords(self.effective_seed_overlay[idx], view)
+                        xs_eff.append(sx)
+                        ys_eff.append(sy)
+                    artists.append(
+                        ax.scatter(xs_eff, ys_eff, s=22, c="deepskyblue", alpha=0.45, edgecolors="none")
+                    )
+
             visible_indices = [idx for idx, seed in enumerate(self.seeds) if self._seed_visible_in_view(seed, view)]
             if visible_indices:
                 xs = []
@@ -2867,6 +2931,7 @@ class _OrthoViewDialog:
         self.seeds.append((self.current_z, self.current_y, self.current_x))
         self.selected_seed_index = len(self.seeds) - 1
         self._refresh_seed_order_controls()
+        self._refresh_effective_seed_overlay()
         self._redraw()
 
     def _on_mpl_keypress(self, event):
@@ -3072,6 +3137,7 @@ def interactive_seed_selection_session(
     initial_context: Dict[str, object],
     on_prev_image: Callable[[np.ndarray], Optional[Dict[str, object]]],
     on_next_image: Callable[[np.ndarray], Optional[Dict[str, object]]],
+    on_get_effective_seed_overlay: Optional[Callable[[np.ndarray], Optional[np.ndarray]]] = None,
     on_save_current: Optional[Callable[[np.ndarray], None]] = None,
     on_save_all: Optional[Callable[[], None]] = None,
     show_trace_controls: bool = False,
@@ -3160,6 +3226,7 @@ def interactive_seed_selection_session(
         tree_swc_rows=initial_context.get("tree_swc_rows"),
         neuron_name=str(initial_context.get("neuron_name", "")),
         initial_seeds=initial_context.get("initial_seeds"),
+        effective_seed_overlay=initial_context.get("effective_seed_overlay"),
         show_prev_button=bool(initial_context.get("show_prev_button", False)),
         show_next_button=bool(initial_context.get("show_next_button", False)),
         show_save_buttons=True,
@@ -3202,6 +3269,7 @@ def interactive_seed_selection_session(
         on_trace_params_changed=on_trace_params_changed,
         on_prev_image=on_prev_image,
         on_next_image=on_next_image,
+        on_get_effective_seed_overlay=on_get_effective_seed_overlay,
         show_postprocess_controls=show_postprocess_controls,
         on_run_postprocess=on_run_postprocess,
         on_run_postprocess_all=on_run_postprocess_all,

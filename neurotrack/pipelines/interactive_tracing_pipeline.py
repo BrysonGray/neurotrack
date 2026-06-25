@@ -343,6 +343,8 @@ class _TraceRuntime:
             seed_points_by_image={},
             soma_sample_radius=float(trace_params.get("soma_sample_radius", 0.0)),
             random_offset=float(trace_params.get("random_offset", 0.0)),
+            seed_jitter_count=int(trace_params.get("seed_jitter_count", 0)),
+            seed_jitter_radius=float(trace_params.get("seed_jitter_radius", 0.0)),
             inference_mode=True,
         )
 
@@ -351,8 +353,8 @@ class _TraceRuntime:
             radius=17,
             step_width=float(trace_params.get("step_width", 4.0)),
             stall_threshold=float(trace_params.get("stall_threshold", 1.0)),
-            max_len=int(trace_params.get("max_len", 10000)),
-            max_paths=int(trace_params.get("max_paths", 1000)),
+            max_len=int(trace_params.get("max_len", 9999999)),
+            max_paths=int(trace_params.get("max_paths", 9999999)),
             branching=bool(trace_params.get("branching", True)),
             repeat_starts=bool(trace_params.get("repeat_starts", False)),
             start_idx=0,
@@ -423,6 +425,29 @@ class _TraceRuntime:
                 "labeled_neuron": labeled_neuron,
                 "timing_ms": result.get("timing_ms", None),
             }
+
+    def get_effective_seed_points(
+        self,
+        image_index: int,
+        image_relative_key: str,
+        seed_rows: List[List[float]],
+    ) -> Optional[np.ndarray]:
+        """Return the exact seed points consumed by the dataset for this image/index."""
+        with self._lock:
+            dataset_index, resolved_key = self._resolve_dataset_index(
+                image_index=image_index,
+                image_relative_key=image_relative_key,
+            )
+            normalized_seed_rows = [[float(coord) for coord in row] for row in seed_rows]
+            self._dataset.seed_points_by_image[image_relative_key] = normalized_seed_rows
+            self._dataset.seed_points_by_image[resolved_key] = normalized_seed_rows
+            sample = self._dataset[dataset_index]
+            seed_points = sample.get("seed_points", None)
+            if seed_points is None:
+                return None
+            if hasattr(seed_points, "detach"):
+                return seed_points.detach().cpu().numpy()
+            return np.asarray(seed_points, dtype=np.float32)
 
 
 class _TraceSessionManager:
@@ -1389,6 +1414,28 @@ class _TraceSessionManager:
             self._cancel_event.set()
             self._set_state("Cancelling Trace All...", increment_token=False)
 
+    def get_effective_seed_overlay(
+        self,
+        image_index: int,
+        image_key: str,
+        seed_rows: List[List[float]],
+    ) -> Optional[np.ndarray]:
+        """Compute display-only effective seeds (including configured jitter) for the viewer."""
+        if self._runtime is None:
+            if len(seed_rows) == 0:
+                return None
+            return np.asarray(seed_rows, dtype=np.float32)
+        try:
+            return self._runtime.get_effective_seed_points(
+                image_index=image_index,
+                image_relative_key=image_key,
+                seed_rows=seed_rows,
+            )
+        except Exception:
+            if len(seed_rows) == 0:
+                return None
+            return np.asarray(seed_rows, dtype=np.float32)
+
 
 class _SessionState:
     """Mutable navigation and seed-management state for the interactive tracing session.
@@ -1432,11 +1479,17 @@ class _SessionState:
         self.current_volume_shape = tuple(np.asarray(image_array).shape[-3:])
         initial_rows = flexible_image_key_lookup(self.selected_seeds, relative_key, default=[])
         initial_seeds = np.asarray(initial_rows, dtype=np.float32) if initial_rows else None
+        effective_seed_overlay = trace_manager.get_effective_seed_overlay(
+            image_index=index,
+            image_key=relative_key,
+            seed_rows=initial_rows,
+        )
         trace_status = trace_manager.get_status(current_key=relative_key)
         return {
             "image_data": image_array,
             "neuron_name": relative_key,
             "initial_seeds": initial_seeds,
+            "effective_seed_overlay": effective_seed_overlay,
             "show_prev_button": index > 0,
             "show_next_button": index < len(self.image_paths) - 1,
             "finished_paths": trace_manager.trace_results_by_key.get(relative_key, []),
@@ -1706,6 +1759,8 @@ def run_interactive_tracing_session(
         "stall_threshold": config.get("stall_threshold", 1.0),
         "soma_sample_radius": config.get("soma_sample_radius", 0.0),
         "random_offset": config.get("random_offset", 0.0),
+        "seed_jitter_count": config.get("seed_jitter_count", 0),
+        "seed_jitter_radius": config.get("seed_jitter_radius", 0.0),
         "max_len": config.get("max_len", 10000),
         "max_paths": config.get("max_paths", 1000),
         "branching": config.get("branching", True),
@@ -1824,6 +1879,11 @@ def run_interactive_tracing_session(
             initial_context=initial_context,
             on_prev_image=lambda arr: session.on_prev_image(arr, trace_manager),
             on_next_image=lambda arr: session.on_next_image(arr, trace_manager),
+            on_get_effective_seed_overlay=lambda arr: trace_manager.get_effective_seed_overlay(
+                image_index=session.current_index,
+                image_key=session.current_relative_key(),
+                seed_rows=session.rows_from_seed_array(arr),
+            ),
             on_save_current=session.save_current,
             on_save_all=session.save_all,
             show_trace_controls=True,

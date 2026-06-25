@@ -27,6 +27,8 @@ def build_env(params: Dict[str, Any]) -> NeuronTrackingEnvironment:
         root_sampling_probability=params.get("root_sampling_probability", None),
         soma_sample_radius=float(params.get("soma_sample_radius", 0.0)),
         random_offset=float(params.get("random_offset", 0.0)),
+        seed_jitter_count=int(params.get("seed_jitter_count", 0)),
+        seed_jitter_radius=float(params.get("seed_jitter_radius", 0.0)),
         inference_mode=True,
     )
 
@@ -35,8 +37,8 @@ def build_env(params: Dict[str, Any]) -> NeuronTrackingEnvironment:
         radius=17,
         step_width=params.get("step_width", 2.0),
         stall_threshold=float(params.get("stall_threshold", 1.0)),
-        max_len=params.get("max_len", 10000),
-        max_paths=params.get("max_paths", 1000),
+        max_len=params.get("max_len", 9999999),
+        max_paths=params.get("max_paths", 9999999),
         branching=params.get("branching", True),
         repeat_starts=params.get("repeat_starts", False),
         start_idx=0,

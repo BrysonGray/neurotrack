@@ -73,6 +73,38 @@ def flexible_image_key_lookup(mapping: Dict, query_key: str, default=None):
     return default
 
 
+def _compute_enable_flag_for_step(config: Dict[str, object], raw_config: Dict[str, object], step_name: str) -> bool:
+    """Compute the default enable flag for a postprocessing step based on parameter presence.
+
+    If the enable flag is explicitly set in the raw (pre-default) config, use that value.
+    Otherwise, return True if any of the step's parameters are present in the raw config, False otherwise.
+    """
+    enable_key = None
+    parameter_keys = []
+
+    if step_name == "filter_branches_by_length":
+        enable_key = "filter_branches_by_length"
+        parameter_keys = ["min_branch_length", "max_branch_length"]
+    elif step_name == "resample":
+        enable_key = "resample"
+        parameter_keys = ["resampling_step_size"]
+    elif step_name == "smooth_paths":
+        enable_key = "smooth_paths"
+        parameter_keys = ["smoothing_window"]
+    elif step_name == "remove_overlapping_paths":
+        enable_key = "remove_overlapping_paths"
+        parameter_keys = ["overlap_threshold", "overlap_distance_threshold", "redundancy_action", "mask_smoothing_size"]
+    else:
+        return False  # Unknown step; default to disabled
+
+    # If the enable flag is explicitly in the raw config, use it.
+    if enable_key in raw_config:
+        return bool(raw_config[enable_key])
+
+    # Otherwise, enable if any of the parameters are present in the raw config.
+    return any(key in raw_config for key in parameter_keys)
+
+
 @dataclass
 class PostprocessConfig:
     """Parameters controlling post-processing and evaluation steps.
@@ -91,12 +123,26 @@ class PostprocessConfig:
     voxels.
     """
 
-    # --- smoothing / merging ---
+    # --- per-step enable flags (computed on-the-fly if not in config) ---
+    filter_branches_by_length: bool = False
+    resample: bool = False
+    smooth_paths: bool = False
+    remove_overlapping_paths: bool = False
+    # --- branch length filtering ---
     min_branch_length: float = 5.0
+    max_branch_length: float = float("inf")
+    # --- resampling ---
     resampling_step_size: float = 4.0
+    # --- smoothing / merging ---
+    enable_length_filter: bool = True
+    enable_resample: bool = True
     smoothing_window: int = 5
+    enable_smooth_paths: bool = True
+    enable_remove_overlaps: bool = True
     overlap_threshold: float = 0.5
     overlap_distance_threshold: float = 1.0
+    redundancy_action: str = "remove" # "remove" | "clip" | "merge"
+    mask_smoothing_size: int = 0  # binary close/open of the merge overlap mask; <=1 disables
     # --- evaluation ---
     distance_threshold: float = 1.0
     # --- optional per-image scale lookup ---
@@ -108,17 +154,47 @@ class PostprocessConfig:
     )
 
     @classmethod
-    def from_config(cls, config: Dict[str, object]) -> "PostprocessConfig":
-        """Build a ``PostprocessConfig`` from a flat config dict."""
+    def from_config(cls, config: Dict[str, object], raw_config: Optional[Dict[str, object]] = None) -> "PostprocessConfig":
+        """Build a ``PostprocessConfig`` from a flat config dict.
+
+        If raw_config is provided (the original JSON before defaults), it is used
+        to compute default values for per-step enable flags. If a step's enable flag
+        is explicitly set, it is used; otherwise, the step is enabled if any of its
+        parameters are present in the raw config.
+        """
+        if raw_config is None:
+            raw_config = config.get("_raw_config", config)
+
         eval_distance_threshold = config.get("distance_threshold", None)
         if eval_distance_threshold is None:
             eval_distance_threshold = config.get("eval_distance_threshold", 1.0)
+
+        filter_branches_by_length = _compute_enable_flag_for_step(
+            config, raw_config, "filter_branches_by_length"
+        )
+        resample = _compute_enable_flag_for_step(config, raw_config, "resample")
+        smooth_paths = _compute_enable_flag_for_step(config, raw_config, "smooth_paths")
+        remove_overlapping_paths = _compute_enable_flag_for_step(
+            config, raw_config, "remove_overlapping_paths"
+        )
+
         return cls(
+            filter_branches_by_length=filter_branches_by_length,
+            resample=resample,
+            smooth_paths=smooth_paths,
+            remove_overlapping_paths=remove_overlapping_paths,
             min_branch_length=float(config.get("min_branch_length", 5.0)),
+            max_branch_length=float(config.get("max_branch_length", float("inf"))),
             resampling_step_size=float(config.get("resampling_step_size", 4.0)),
+            enable_length_filter=bool(config.get("enable_length_filter", filter_branches_by_length)),
+            enable_resample=bool(config.get("enable_resample", resample)),
             smoothing_window=int(config.get("smoothing_window", 5)),
+            enable_smooth_paths=bool(config.get("enable_smooth_paths", smooth_paths)),
+            enable_remove_overlaps=bool(config.get("enable_remove_overlaps", remove_overlapping_paths)),
             overlap_threshold=float(config.get("overlap_threshold", 0.5)),
             overlap_distance_threshold=float(config.get("overlap_distance_threshold", 1.0)),
+            redundancy_action=str(config.get("redundancy_action", "remove")),
+            mask_smoothing_size=int(config.get("mask_smoothing_size", 0)),
             distance_threshold=float(eval_distance_threshold),
             scales_path=config.get("scales_path", None),
         )
@@ -126,11 +202,18 @@ class PostprocessConfig:
     def to_dict(self) -> Dict[str, object]:
         """Return the postprocess parameters as a plain dict for ``process_results``."""
         return {
+            "enable_length_filter": self.enable_length_filter,
             "min_branch_length": self.min_branch_length,
+            "max_branch_length": self.max_branch_length,
+            "enable_resample": self.enable_resample,
             "resampling_step_size": self.resampling_step_size,
+            "enable_smooth_paths": self.enable_smooth_paths,
             "smoothing_window": self.smoothing_window,
+            "enable_remove_overlaps": self.enable_remove_overlaps,
             "overlap_threshold": self.overlap_threshold,
             "overlap_distance_threshold": self.overlap_distance_threshold,
+            "redundancy_action": self.redundancy_action,
+            "mask_smoothing_size": self.mask_smoothing_size,
         }
 
     def _load_scales(self) -> Dict[str, float]:
@@ -179,12 +262,22 @@ class PostprocessConfig:
         scale = self.get_scale_for_image(image_key)
         if scale == 1.0:
             return self.to_dict()
+        scaled_max_branch_length = self.max_branch_length
+        if scaled_max_branch_length != float("inf"):
+            scaled_max_branch_length = self.max_branch_length / scale
         return {
+            "enable_length_filter": self.enable_length_filter,
             "min_branch_length": self.min_branch_length / scale,
+            "max_branch_length": scaled_max_branch_length,
+            "enable_resample": self.enable_resample,
             "resampling_step_size": self.resampling_step_size,
+            "enable_smooth_paths": self.enable_smooth_paths,
             "smoothing_window": max(1, round(self.smoothing_window)),
+            "enable_remove_overlaps": self.enable_remove_overlaps,
             "overlap_threshold": self.overlap_threshold,
             "overlap_distance_threshold": self.overlap_distance_threshold / scale,
+            "redundancy_action": self.redundancy_action,
+            "mask_smoothing_size": self.mask_smoothing_size,
         }
 
 
@@ -222,6 +315,9 @@ def load_pipeline_config(
     if not isinstance(config, dict):
         raise ValueError("Config file must contain a JSON object.")
 
+    # Save the raw config before applying defaults (needed for per-step enable flag computation).
+    raw_config = dict(config)
+
     # Apply defaults for absent keys.
     for key, value in defaults.items():
         if key not in config:
@@ -235,5 +331,8 @@ def load_pipeline_config(
     for key in _NULL_STRING_PATH_KEYS:
         if key in config:
             config[key] = normalize_null_string(config[key])
+
+    # Store raw config in a special key so PostprocessConfig can access it.
+    config["_raw_config"] = raw_config
 
     return config

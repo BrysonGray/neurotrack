@@ -17,13 +17,12 @@ def main():
 
     result = run_inference_eval_pipeline(
         config_path=args.json,
-        run_postprocessing=None,
         run_evaluation=None,
     )
 
     print("Inference complete.")
     print(f"Outputs saved to: {result['run_out_dir']}")
-    if result["mode"]["run_postprocessing"]:
+    if result["postprocess"] is not None:
         print(f"Processed SWC files saved to: {result['postprocess']['swc_out_dir']}")
     if result["mode"]["run_evaluation"]:
         print(f"Summary: {result['summary_path']}")

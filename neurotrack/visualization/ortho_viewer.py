@@ -1,10 +1,10 @@
 #!/usr/bin/env python
 
 """
-Interactive orthoview-based seed selection and inference overlay UI.
+Interactive orthoview-based tracing UI.
 
 Provides a Qt dialog with synchronized XY / XZ / YZ orthoviews for manual
-seed placement and inference overlay review.
+seed placement, tracing inference overlay review, trace post-processing, evaluating, and editing.
 
 Author: Bryson Gray
 2024
@@ -89,8 +89,10 @@ class _OrthoViewDialog:
         on_next_image: Optional[Callable[[np.ndarray], Optional[Dict[str, object]]]] = None,
         show_postprocess_controls: bool = False,
         on_run_postprocess: Optional[Callable[[], None]] = None,
+        on_run_postprocess_all: Optional[Callable[[], None]] = None,
+        on_undo_postprocess: Optional[Callable[[], None]] = None,
         on_run_evaluation: Optional[Callable[[], None]] = None,
-        on_save_postprocessed: Optional[Callable[[], None]] = None,
+        on_run_evaluation_all: Optional[Callable[[], None]] = None,
         on_save_eval_report: Optional[Callable[[], None]] = None,
         gt_swc_path: Optional[str] = None,
         on_select_gt_swc_path: Optional[Callable[[], Optional[str]]] = None,
@@ -114,11 +116,18 @@ class _OrthoViewDialog:
         trace_auto_seed_mode: str = "remote_endnode",
         on_trace_params_changed: Optional[Callable[[Dict[str, object]], None]] = None,
         postprocess_output_dir: Optional[str] = None,
+        postprocess_enable_length_filter: bool = True,
         postprocess_min_branch_length: float = 5.0,
+        postprocess_max_branch_length: float = 1e9,
+        postprocess_enable_resample: bool = True,
         postprocess_resampling_step_size: float = 4.0,
+        postprocess_enable_smooth_paths: bool = True,
         postprocess_smoothing_window: int = 5,
+        postprocess_enable_remove_overlaps: bool = True,
         postprocess_overlap_threshold: float = 0.5,
         postprocess_overlap_distance_threshold: float = 1.0,
+        postprocess_redundancy_action: str = "remove",
+        postprocess_mask_smoothing_size: int = 0,
         on_select_postprocess_output_dir: Optional[Callable[[], Optional[str]]] = None,
         on_clear_postprocess_output_dir: Optional[Callable[[], Optional[str]]] = None,
         on_postprocess_params_changed: Optional[Callable[[Dict[str, object]], None]] = None,
@@ -218,8 +227,10 @@ class _OrthoViewDialog:
         self._on_next_image = on_next_image
         self._show_postprocess_controls = bool(show_postprocess_controls and mode == "seed")
         self._on_run_postprocess = on_run_postprocess
+        self._on_run_postprocess_all = on_run_postprocess_all
+        self._on_undo_postprocess = on_undo_postprocess
         self._on_run_evaluation = on_run_evaluation
-        self._on_save_postprocessed = on_save_postprocessed
+        self._on_run_evaluation_all = on_run_evaluation_all
         self._on_save_eval_report = on_save_eval_report
         self._gt_swc_path = gt_swc_path
         self._on_select_gt_swc_path = on_select_gt_swc_path
@@ -266,6 +277,9 @@ class _OrthoViewDialog:
             "parent_xyz": np.empty((0, 3), dtype=np.float32),
         }
         self.selected_seed_index: Optional[int] = None
+        self._seed_order_spin = None
+        self._seed_order_up_btn = None
+        self._seed_order_down_btn = None
 
         self._trace_status_token = None
         self._trace_overlay_token = None
@@ -281,14 +295,13 @@ class _OrthoViewDialog:
         self.trace_revision_selected_point_xyz: Optional[np.ndarray] = None
         self.trace_revision_preview_paths: List[np.ndarray] = []
         self.trace_revision_preview_active = False
-        self.post_paths: List[np.ndarray] = []
-        self.post_overlay_visible = True
         self._qt_timer = None
         self._show_prev_button = bool(show_prev_button)
         self._show_next_button = bool(show_next_button)
+        self._can_undo_postprocess = False
 
         self.dialog = QDialog()
-        title = "Manual Seed Selection" if mode == "seed" else "Inference Overlay"
+        title = "Viewing Image" if mode == "seed" else "Inference Overlay"
         if neuron_name:
             title = f"{title}: {neuron_name}"
         self.dialog.setWindowTitle(title)
@@ -336,11 +349,11 @@ class _OrthoViewDialog:
         self.btn_trace_revision_launch = QPushButton("Launch Retrace")
         self.trace_progress_label = QLabel("")
         self.btn_run_postprocess = QPushButton("Run Post-Processing")
+        self.btn_run_postprocess_all = QPushButton("Post-Process All")
+        self.btn_undo_postprocess = QPushButton("Undo Post-Process")
         self.btn_run_evaluation = QPushButton("Run Evaluation")
-        self.btn_save_postprocessed = QPushButton("Save Processed SWC")
+        self.btn_run_evaluation_all = QPushButton("Evaluate All")
         self.btn_save_eval_report = QPushButton("Save Eval Report")
-        self.chk_post_overlay = _qt_w.QCheckBox("Show Processed Overlay")
-        self.chk_post_overlay.setChecked(self.post_overlay_visible)
         if mode == "seed":
             self.btn_undo = QPushButton("Undo Last Seed")
             self.btn_remove_selected_seed = QPushButton("Remove Selected Seed")
@@ -354,18 +367,33 @@ class _OrthoViewDialog:
             self.btn_clear_model_weights = QPushButton("Unset Model Weights")
             self.seeds_output_value_label = QLabel("")
             self.seeds_output_value_label.setWordWrap(True)
+            self.seeds_output_value_label.setMinimumWidth(0)
             self.trace_output_value_label = QLabel("")
             self.trace_output_value_label.setWordWrap(True)
+            self.trace_output_value_label.setMinimumWidth(0)
             self.model_weights_value_label = QLabel("")
             self.model_weights_value_label.setWordWrap(True)
+            self.model_weights_value_label.setMinimumWidth(0)
             self.btn_set_image_dir = QPushButton("Set Image Dir")
             self.btn_clear_image_dir = QPushButton("Unset Image Dir")
             self.image_dir_value_label = QLabel("")
             self.image_dir_value_label.setWordWrap(True)
+            self.image_dir_value_label.setMinimumWidth(0)
             self.btn_set_seeds_input = QPushButton("Set Seeds Input")
             self.btn_clear_seeds_input = QPushButton("Unset Seeds Input")
             self.seeds_input_value_label = QLabel("")
             self.seeds_input_value_label.setWordWrap(True)
+            self.seeds_input_value_label.setMinimumWidth(0)
+            self._seed_order_spin = _qt_w.QSpinBox()
+            self._seed_order_spin.setRange(1, 1)
+            self._seed_order_spin.setValue(1)
+            self._seed_order_spin.setEnabled(False)
+            self._seed_order_up_btn = QPushButton("↑")
+            self._seed_order_up_btn.setFixedWidth(28)
+            self._seed_order_up_btn.setEnabled(False)
+            self._seed_order_down_btn = QPushButton("↓")
+            self._seed_order_down_btn.setFixedWidth(28)
+            self._seed_order_down_btn.setEnabled(False)
             # Advanced trace parameter widgets
             _qt_w = importlib.import_module("qtpy.QtWidgets")
             self._trace_step_width_spin = _qt_w.QDoubleSpinBox()
@@ -373,15 +401,27 @@ class _OrthoViewDialog:
             self._trace_step_width_spin.setSingleStep(0.5)
             self._trace_step_width_spin.setDecimals(2)
             self._trace_step_width_spin.setValue(trace_step_width)
+            self._trace_step_width_spin.setSizePolicy(
+                _qt_w.QSizePolicy.Expanding, _qt_w.QSizePolicy.Fixed)
+            self._trace_step_width_spin.setMinimumWidth(0)
             self._trace_n_trials_spin = _qt_w.QSpinBox()
             self._trace_n_trials_spin.setRange(1, 100)
             self._trace_n_trials_spin.setValue(trace_n_trials)
+            self._trace_n_trials_spin.setSizePolicy(
+                _qt_w.QSizePolicy.Expanding, _qt_w.QSizePolicy.Fixed)
+            self._trace_n_trials_spin.setMinimumWidth(0)
             self._trace_max_len_spin = _qt_w.QSpinBox()
             self._trace_max_len_spin.setRange(1, 1000000)
             self._trace_max_len_spin.setValue(trace_max_len)
+            self._trace_max_len_spin.setSizePolicy(
+                _qt_w.QSizePolicy.Expanding, _qt_w.QSizePolicy.Fixed)
+            self._trace_max_len_spin.setMinimumWidth(0)
             self._trace_max_paths_spin = _qt_w.QSpinBox()
             self._trace_max_paths_spin.setRange(1, 99999)
             self._trace_max_paths_spin.setValue(trace_max_paths)
+            self._trace_max_paths_spin.setSizePolicy(
+                _qt_w.QSizePolicy.Expanding, _qt_w.QSizePolicy.Fixed)
+            self._trace_max_paths_spin.setMinimumWidth(0)
             self._trace_branching_check = _qt_w.QCheckBox("Branching")
             self._trace_branching_check.setChecked(trace_branching)
             self._trace_repeat_starts_check = _qt_w.QCheckBox("Repeat Starts")
@@ -390,6 +430,9 @@ class _OrthoViewDialog:
             self._trace_stochastic_check.setChecked(trace_stochastic_actions)
             self._trace_auto_seed_combo = QComboBox()
             self._trace_auto_seed_combo.addItems(["remote_endnode", "root_nodes"])
+            self._trace_auto_seed_combo.setSizePolicy(
+                _qt_w.QSizePolicy.Expanding, _qt_w.QSizePolicy.Fixed)
+            self._trace_auto_seed_combo.setMinimumWidth(0)
             _auto_seed_idx = self._trace_auto_seed_combo.findText(trace_auto_seed_mode)
             if _auto_seed_idx >= 0:
                 self._trace_auto_seed_combo.setCurrentIndex(_auto_seed_idx)
@@ -398,19 +441,36 @@ class _OrthoViewDialog:
             self.btn_clear_postprocess_output = QPushButton("Unset Post-Process Output")
             self.postprocess_output_value_label = QLabel("")
             self.postprocess_output_value_label.setWordWrap(True)
+            self.postprocess_output_value_label.setMinimumWidth(0)
+            self._pp_enable_length_filter_check = _qt_w.QCheckBox("Filter branches by length")
+            self._pp_enable_length_filter_check.setChecked(postprocess_enable_length_filter)
             self._pp_min_branch_length_spin = _qt_w.QDoubleSpinBox()
             self._pp_min_branch_length_spin.setRange(0.0, 1000.0)
             self._pp_min_branch_length_spin.setSingleStep(0.5)
             self._pp_min_branch_length_spin.setDecimals(2)
             self._pp_min_branch_length_spin.setValue(postprocess_min_branch_length)
+            self._pp_max_branch_length_spin = _qt_w.QDoubleSpinBox()
+            self._pp_max_branch_length_spin.setRange(0.0, 1e9)
+            self._pp_max_branch_length_spin.setSingleStep(10.0)
+            self._pp_max_branch_length_spin.setDecimals(2)
+            _max_branch_length_value = postprocess_max_branch_length
+            if not np.isfinite(_max_branch_length_value):
+                _max_branch_length_value = 1e9
+            self._pp_max_branch_length_spin.setValue(float(np.clip(_max_branch_length_value, 0.0, 1e9)))
+            self._pp_enable_resample_check = _qt_w.QCheckBox("Resample")
+            self._pp_enable_resample_check.setChecked(postprocess_enable_resample)
             self._pp_resampling_step_size_spin = _qt_w.QDoubleSpinBox()
             self._pp_resampling_step_size_spin.setRange(0.1, 100.0)
             self._pp_resampling_step_size_spin.setSingleStep(0.5)
             self._pp_resampling_step_size_spin.setDecimals(2)
             self._pp_resampling_step_size_spin.setValue(postprocess_resampling_step_size)
+            self._pp_enable_smooth_paths_check = _qt_w.QCheckBox("Smooth paths")
+            self._pp_enable_smooth_paths_check.setChecked(postprocess_enable_smooth_paths)
             self._pp_smoothing_window_spin = _qt_w.QSpinBox()
             self._pp_smoothing_window_spin.setRange(1, 100)
             self._pp_smoothing_window_spin.setValue(postprocess_smoothing_window)
+            self._pp_enable_remove_overlaps_check = _qt_w.QCheckBox("Remove overlapping paths")
+            self._pp_enable_remove_overlaps_check.setChecked(postprocess_enable_remove_overlaps)
             self._pp_overlap_threshold_spin = _qt_w.QDoubleSpinBox()
             self._pp_overlap_threshold_spin.setRange(0.0, 1.0)
             self._pp_overlap_threshold_spin.setSingleStep(0.05)
@@ -421,20 +481,32 @@ class _OrthoViewDialog:
             self._pp_overlap_dist_threshold_spin.setSingleStep(0.1)
             self._pp_overlap_dist_threshold_spin.setDecimals(2)
             self._pp_overlap_dist_threshold_spin.setValue(postprocess_overlap_distance_threshold)
+            self._pp_redundancy_action_combo = _qt_w.QComboBox()
+            self._pp_redundancy_action_combo.addItems(["remove", "clip", "merge"])
+            _ra = str(postprocess_redundancy_action).lower()
+            _ra_idx = self._pp_redundancy_action_combo.findText(_ra)
+            if _ra_idx >= 0:
+                self._pp_redundancy_action_combo.setCurrentIndex(_ra_idx)
+            self._pp_mask_smoothing_size_spin = _qt_w.QSpinBox()
+            self._pp_mask_smoothing_size_spin.setRange(0, 100)
+            self._pp_mask_smoothing_size_spin.setValue(int(postprocess_mask_smoothing_size))
             # Postprocess/eval path widgets (always created in seed mode)
             self.btn_set_gt_swc = QPushButton("Set GT SWC Dir")
             self.btn_clear_gt_swc = QPushButton("Unset GT SWC Dir")
             self.gt_swc_value_label = QLabel("")
             self.gt_swc_value_label.setWordWrap(True)
+            self.gt_swc_value_label.setMinimumWidth(0)
             self.btn_set_scales_path = QPushButton("Set Scales JSON")
             self.btn_clear_scales_path = QPushButton("Unset Scales JSON")
             self.scales_path_value_label = QLabel("")
             self.scales_path_value_label.setWordWrap(True)
+            self.scales_path_value_label.setMinimumWidth(0)
             # Evaluation parameter widgets
             self.btn_set_eval_output = QPushButton("Set Eval Output")
             self.btn_clear_eval_output = QPushButton("Unset Eval Output")
             self.eval_output_value_label = QLabel("")
             self.eval_output_value_label.setWordWrap(True)
+            self.eval_output_value_label.setMinimumWidth(0)
             self._eval_distance_threshold_spin = _qt_w.QDoubleSpinBox()
             self._eval_distance_threshold_spin.setRange(0.0, 100.0)
             self._eval_distance_threshold_spin.setSingleStep(0.1)
@@ -442,6 +514,7 @@ class _OrthoViewDialog:
             self._eval_distance_threshold_spin.setValue(eval_distance_threshold)
             self.eval_scales_path_value_label = QLabel("")
             self.eval_scales_path_value_label.setWordWrap(True)
+            self.eval_scales_path_value_label.setMinimumWidth(0)
             self.btn_set_eval_scales_path = QPushButton("Set Scales JSON")
             self.btn_clear_eval_scales_path = QPushButton("Unset Scales JSON")
 
@@ -461,6 +534,7 @@ class _OrthoViewDialog:
             self.btn_clear_filtered_swc_output = QPushButton("Unset Filtered SWC Output")
             self.filtered_swc_output_value_label = QLabel("")
             self.filtered_swc_output_value_label.setWordWrap(True)
+            self.filtered_swc_output_value_label.setMinimumWidth(0)
             self.btn_save_filtered_swc = QPushButton("Save Filtered SWC")
 
         # -----------------------------------------------------------------
@@ -538,6 +612,12 @@ class _OrthoViewDialog:
             left_layout.addWidget(QLabel("Seed Controls:"))
             left_layout.addWidget(self.btn_undo)
             left_layout.addWidget(self.btn_remove_selected_seed)
+            left_layout.addWidget(QLabel("Seed Order (Selected):"))
+            _seed_order_row = self._row_widget()
+            _seed_order_row.layout().addWidget(self._seed_order_spin, stretch=1)
+            _seed_order_row.layout().addWidget(self._seed_order_up_btn)
+            _seed_order_row.layout().addWidget(self._seed_order_down_btn)
+            left_layout.addWidget(_seed_order_row)
             left_layout.addWidget(self.btn_clear)
             if show_save_buttons:
                 left_layout.addWidget(self.btn_save_seeds)
@@ -611,7 +691,11 @@ class _OrthoViewDialog:
                 _sa = _qt_widgets_mod.QScrollArea()
                 _sa.setWidgetResizable(True)
                 _sa.setHorizontalScrollBarPolicy(_qt_core_mod.Qt.ScrollBarAlwaysOff)
+                _sa.setMinimumWidth(0)
+                _sa.setSizePolicy(_qt_widgets_mod.QSizePolicy.Ignored, _qt_widgets_mod.QSizePolicy.Preferred)
                 _tw = QWidget()
+                _tw.setMinimumWidth(0)
+                _tw.setSizePolicy(_qt_widgets_mod.QSizePolicy.Ignored, _qt_widgets_mod.QSizePolicy.Preferred)
                 _tl = QVBoxLayout(_tw)
                 _tl.setContentsMargins(6, 6, 6, 6)
                 _tl.setSpacing(4)
@@ -620,6 +704,29 @@ class _OrthoViewDialog:
 
             # ---- Tab 1: Tracing ----
             _trace_sa, _trace_lay = _make_tab_scroll()
+            # Force Tracing controls to be horizontally shrinkable like the other tabs.
+            _sp_btn = (_qt_widgets_mod.QSizePolicy.Ignored,
+                       _qt_widgets_mod.QSizePolicy.Fixed)
+            _sp_lbl = (_qt_widgets_mod.QSizePolicy.Ignored,
+                       _qt_widgets_mod.QSizePolicy.Preferred)
+            for _tb in [
+                self.btn_set_image_dir, self.btn_clear_image_dir,
+                self.btn_set_model_weights, self.btn_clear_model_weights,
+                self.btn_set_trace_output, self.btn_clear_trace_output,
+                self.btn_set_seeds_output, self.btn_clear_seeds_output,
+                self.btn_set_seeds_input, self.btn_clear_seeds_input,
+            ]:
+                _tb.setSizePolicy(*_sp_btn)
+                _tb.setMinimumWidth(0)
+            for _lv in [
+                self.image_dir_value_label,
+                self.model_weights_value_label,
+                self.trace_output_value_label,
+                self.seeds_output_value_label,
+                self.seeds_input_value_label,
+            ]:
+                _lv.setSizePolicy(*_sp_lbl)
+                _lv.setMinimumWidth(0)
             _trace_lay.addWidget(QLabel("Image Directory:"))
             _trace_lay.addWidget(self.image_dir_value_label)
             _trace_lay.addWidget(self.btn_set_image_dir)
@@ -649,13 +756,20 @@ class _OrthoViewDialog:
             _adv_toggle.setAutoRaise(True)
             _adv_toggle.setFocusPolicy(self.Qt.NoFocus)
             _adv_toggle.setSizePolicy(
-                _qt_widgets_mod.QSizePolicy.Expanding,
+                _qt_widgets_mod.QSizePolicy.Ignored,
                 _qt_widgets_mod.QSizePolicy.Fixed,
             )
+            _adv_toggle.setMinimumWidth(0)
             _trace_lay.addWidget(_adv_toggle)
 
             _adv_panel = QWidget()
             _adv_panel.setVisible(False)
+            _adv_panel.setMaximumHeight(0)
+            _adv_panel.setMinimumWidth(0)
+            _adv_panel.setSizePolicy(
+                _qt_widgets_mod.QSizePolicy.Ignored,
+                _qt_widgets_mod.QSizePolicy.Preferred,
+            )
             _adv_layout = QVBoxLayout(_adv_panel)
             _adv_layout.setContentsMargins(4, 0, 4, 0)
             _adv_layout.setSpacing(4)
@@ -676,6 +790,7 @@ class _OrthoViewDialog:
 
             def _toggle_adv_panel(checked, panel=_adv_panel, btn=_adv_toggle):
                 panel.setVisible(checked)
+                panel.setMaximumHeight(16777215 if checked else 0)
                 btn.setText("▼ Advanced" if checked else "▶ Advanced")
 
             _adv_toggle.toggled.connect(_toggle_adv_panel)
@@ -689,16 +804,26 @@ class _OrthoViewDialog:
             _pp_lay.addWidget(self.btn_set_postprocess_output)
             _pp_lay.addWidget(self.btn_clear_postprocess_output)
             _pp_lay.addWidget(self._sidebar_separator())
+            _pp_lay.addWidget(self._pp_enable_length_filter_check)
             _pp_lay.addWidget(QLabel("Min Branch Length:"))
             _pp_lay.addWidget(self._pp_min_branch_length_spin)
+            _pp_lay.addWidget(QLabel("Max Branch Length:"))
+            _pp_lay.addWidget(self._pp_max_branch_length_spin)
+            _pp_lay.addWidget(self._pp_enable_resample_check)
             _pp_lay.addWidget(QLabel("Resampling Step Size:"))
             _pp_lay.addWidget(self._pp_resampling_step_size_spin)
+            _pp_lay.addWidget(self._pp_enable_smooth_paths_check)
             _pp_lay.addWidget(QLabel("Smoothing Window:"))
             _pp_lay.addWidget(self._pp_smoothing_window_spin)
+            _pp_lay.addWidget(self._pp_enable_remove_overlaps_check)
             _pp_lay.addWidget(QLabel("Overlap Threshold:"))
             _pp_lay.addWidget(self._pp_overlap_threshold_spin)
             _pp_lay.addWidget(QLabel("Overlap Distance Threshold:"))
             _pp_lay.addWidget(self._pp_overlap_dist_threshold_spin)
+            _pp_lay.addWidget(QLabel("Redundancy Action:"))
+            _pp_lay.addWidget(self._pp_redundancy_action_combo)
+            _pp_lay.addWidget(QLabel("Mask Smoothing Size (merge):"))
+            _pp_lay.addWidget(self._pp_mask_smoothing_size_spin)
             _pp_lay.addWidget(self._sidebar_separator())
             _pp_lay.addWidget(QLabel("Scales JSON (optional):"))
             _pp_lay.addWidget(self.scales_path_value_label)
@@ -707,8 +832,8 @@ class _OrthoViewDialog:
             if self._show_postprocess_controls:
                 _pp_lay.addWidget(self._sidebar_separator())
                 _pp_lay.addWidget(self.btn_run_postprocess)
-                _pp_lay.addWidget(self.btn_save_postprocessed)
-                _pp_lay.addWidget(self.chk_post_overlay)
+                _pp_lay.addWidget(self.btn_run_postprocess_all)
+                _pp_lay.addWidget(self.btn_undo_postprocess)
             _pp_lay.addStretch(1)
             _tab_widget.addTab(_pp_sa, "Post-Processing")
 
@@ -732,6 +857,7 @@ class _OrthoViewDialog:
             if self._show_postprocess_controls:
                 _eval_lay.addWidget(self._sidebar_separator())
                 _eval_lay.addWidget(self.btn_run_evaluation)
+                _eval_lay.addWidget(self.btn_run_evaluation_all)
                 _eval_lay.addWidget(self.btn_save_eval_report)
                 _eval_lay.addWidget(self._sidebar_separator())
                 _eval_lay.addWidget(QLabel("Evaluation Report:"))
@@ -831,8 +957,10 @@ class _OrthoViewDialog:
             if self._show_postprocess_controls:
                 button_list.extend([
                     self.btn_run_postprocess,
+                    self.btn_run_postprocess_all,
+                    self.btn_undo_postprocess,
                     self.btn_run_evaluation,
-                    self.btn_save_postprocessed,
+                    self.btn_run_evaluation_all,
                     self.btn_save_eval_report,
                 ])
         for button in button_list:
@@ -857,6 +985,9 @@ class _OrthoViewDialog:
             self.btn_undo.clicked.connect(self._undo_seed)
             self.btn_remove_selected_seed.clicked.connect(self._remove_selected_seed)
             self.btn_clear.clicked.connect(self._clear_seeds)
+            self._seed_order_spin.valueChanged.connect(self._on_seed_order_changed)
+            self._seed_order_up_btn.clicked.connect(self._move_selected_seed_up)
+            self._seed_order_down_btn.clicked.connect(self._move_selected_seed_down)
             self.radio_tool_zoom.toggled.connect(self._on_tool_toggled)
             self.btn_approve_crop.clicked.connect(self._approve_crop_box)
             self.btn_apply_component_filter.clicked.connect(self._apply_component_filter)
@@ -886,10 +1017,21 @@ class _OrthoViewDialog:
             self.btn_set_postprocess_output.clicked.connect(self._select_postprocess_output_dir)
             self.btn_clear_postprocess_output.clicked.connect(self._clear_postprocess_output_dir)
             self._pp_min_branch_length_spin.valueChanged.connect(self._on_postprocess_params_changed_slot)
+            self._pp_max_branch_length_spin.valueChanged.connect(self._on_postprocess_params_changed_slot)
+            self._pp_enable_length_filter_check.toggled.connect(self._on_postprocess_params_changed_slot)
+            self._pp_enable_length_filter_check.toggled.connect(self._update_postprocess_step_controls)
             self._pp_resampling_step_size_spin.valueChanged.connect(self._on_postprocess_params_changed_slot)
+            self._pp_enable_resample_check.toggled.connect(self._on_postprocess_params_changed_slot)
+            self._pp_enable_resample_check.toggled.connect(self._update_postprocess_step_controls)
             self._pp_smoothing_window_spin.valueChanged.connect(self._on_postprocess_params_changed_slot)
+            self._pp_enable_smooth_paths_check.toggled.connect(self._on_postprocess_params_changed_slot)
+            self._pp_enable_smooth_paths_check.toggled.connect(self._update_postprocess_step_controls)
             self._pp_overlap_threshold_spin.valueChanged.connect(self._on_postprocess_params_changed_slot)
             self._pp_overlap_dist_threshold_spin.valueChanged.connect(self._on_postprocess_params_changed_slot)
+            self._pp_enable_remove_overlaps_check.toggled.connect(self._on_postprocess_params_changed_slot)
+            self._pp_enable_remove_overlaps_check.toggled.connect(self._update_postprocess_step_controls)
+            self._pp_redundancy_action_combo.currentIndexChanged.connect(self._on_postprocess_params_changed_slot)
+            self._pp_mask_smoothing_size_spin.valueChanged.connect(self._on_postprocess_params_changed_slot)
             self.btn_set_eval_output.clicked.connect(self._select_eval_output_dir)
             self.btn_clear_eval_output.clicked.connect(self._clear_eval_output_dir)
             self._eval_distance_threshold_spin.valueChanged.connect(self._on_eval_params_changed_slot)
@@ -916,10 +1058,11 @@ class _OrthoViewDialog:
             self.btn_clear_scales_path.clicked.connect(self._clear_scales_path)
             if self._show_postprocess_controls:
                 self.btn_run_postprocess.clicked.connect(self._run_postprocess)
+                self.btn_run_postprocess_all.clicked.connect(self._run_postprocess_all)
+                self.btn_undo_postprocess.clicked.connect(self._undo_postprocess)
                 self.btn_run_evaluation.clicked.connect(self._run_evaluation)
-                self.btn_save_postprocessed.clicked.connect(self._save_postprocessed)
+                self.btn_run_evaluation_all.clicked.connect(self._run_evaluation_all)
                 self.btn_save_eval_report.clicked.connect(self._save_eval_report)
-                self.chk_post_overlay.toggled.connect(self._toggle_post_overlay)
 
         if self._show_trace_controls and self._get_trace_status is not None:
             qt_core = importlib.import_module("qtpy.QtCore")
@@ -934,6 +1077,9 @@ class _OrthoViewDialog:
             self._trace_params_debounce_timer.setSingleShot(True)
             self._trace_params_debounce_timer.timeout.connect(self._flush_pending_trace_params)
         self._update_trace_revision_controls()
+        if mode == "seed":
+            self._update_postprocess_step_controls()
+            self._refresh_seed_order_controls()
 
         self._mpl_press_cid = self.canvas.mpl_connect("button_press_event", self._on_mouse_press)
         self._mpl_motion_cid = self.canvas.mpl_connect("motion_notify_event", self._on_mouse_move)
@@ -1037,6 +1183,7 @@ class _OrthoViewDialog:
         if self.seeds:
             self.seeds.pop()
             self.selected_seed_index = None
+            self._refresh_seed_order_controls()
             self._redraw()
 
     def _remove_selected_seed(self):
@@ -1045,15 +1192,85 @@ class _OrthoViewDialog:
         idx = int(self.selected_seed_index)
         if idx < 0 or idx >= len(self.seeds):
             self.selected_seed_index = None
+            self._refresh_seed_order_controls()
             return
         self.seeds.pop(idx)
         self.selected_seed_index = None
+        self._refresh_seed_order_controls()
         self._redraw()
 
     def _clear_seeds(self):
         self.seeds.clear()
         self.selected_seed_index = None
+        self._refresh_seed_order_controls()
         self._redraw()
+
+    def _refresh_seed_order_controls(self):
+        if self._seed_order_spin is None:
+            return
+        seed_count = len(self.seeds)
+        self._seed_order_spin.blockSignals(True)
+        if seed_count <= 0:
+            self._seed_order_spin.setRange(1, 1)
+            self._seed_order_spin.setValue(1)
+            self._seed_order_spin.setEnabled(False)
+            if self._seed_order_up_btn is not None:
+                self._seed_order_up_btn.setEnabled(False)
+            if self._seed_order_down_btn is not None:
+                self._seed_order_down_btn.setEnabled(False)
+            self._seed_order_spin.blockSignals(False)
+            return
+
+        self._seed_order_spin.setRange(1, seed_count)
+        if self.selected_seed_index is None:
+            self._seed_order_spin.setValue(1)
+            self._seed_order_spin.setEnabled(False)
+            if self._seed_order_up_btn is not None:
+                self._seed_order_up_btn.setEnabled(False)
+            if self._seed_order_down_btn is not None:
+                self._seed_order_down_btn.setEnabled(False)
+        else:
+            selected_index = int(np.clip(self.selected_seed_index, 0, seed_count - 1))
+            self.selected_seed_index = selected_index
+            self._seed_order_spin.setValue(selected_index + 1)
+            self._seed_order_spin.setEnabled(True)
+            if self._seed_order_up_btn is not None:
+                self._seed_order_up_btn.setEnabled(selected_index > 0)
+            if self._seed_order_down_btn is not None:
+                self._seed_order_down_btn.setEnabled(selected_index < (seed_count - 1))
+        self._seed_order_spin.blockSignals(False)
+
+    def _move_selected_seed_to_index(self, new_index: int):
+        if self.selected_seed_index is None or not self.seeds:
+            return
+        old_index = int(self.selected_seed_index)
+        if old_index < 0 or old_index >= len(self.seeds):
+            self.selected_seed_index = None
+            self._refresh_seed_order_controls()
+            return
+
+        new_index = int(np.clip(new_index, 0, len(self.seeds) - 1))
+        if new_index == old_index:
+            return
+
+        selected_seed = self.seeds.pop(old_index)
+        self.seeds.insert(new_index, selected_seed)
+        self.selected_seed_index = new_index
+        self._refresh_seed_order_controls()
+        self._redraw()
+
+    def _move_selected_seed_up(self):
+        if self.selected_seed_index is None:
+            return
+        self._move_selected_seed_to_index(int(self.selected_seed_index) - 1)
+
+    def _move_selected_seed_down(self):
+        if self.selected_seed_index is None:
+            return
+        self._move_selected_seed_to_index(int(self.selected_seed_index) + 1)
+
+    def _on_seed_order_changed(self, one_based_index: int):
+        self._move_selected_seed_to_index(one_based_index - 1)
 
     def _on_tool_toggled(self, checked: bool):
         self._active_tool = "zoom" if checked else "crop"
@@ -1228,6 +1445,7 @@ class _OrthoViewDialog:
             for z, y, x in seed_points
         ]
         self.selected_seed_index = None
+        self._refresh_seed_order_controls()
 
         if self._on_filtered_swc_changed is not None:
             self._on_filtered_swc_changed(self._current_image_key, self._tree_swc_committed.tolist())
@@ -1300,6 +1518,7 @@ class _OrthoViewDialog:
             for z, y, x in seed_points
         ]
         self.selected_seed_index = None
+        self._refresh_seed_order_controls()
 
         if self._on_filtered_swc_changed is not None:
             self._on_filtered_swc_changed(self._current_image_key, self._tree_swc_committed.tolist())
@@ -1354,14 +1573,17 @@ class _OrthoViewDialog:
         self.seeds = []
         self.selected_seed_index = None
         if seed_array is None:
+            self._refresh_seed_order_controls()
             return
         arr = np.asarray(seed_array, dtype=np.float32)
         if arr.ndim != 2 or arr.shape[1] != 3:
+            self._refresh_seed_order_controls()
             return
         arr[:, 0] = np.clip(arr[:, 0], 0, self.shape[0] - 1)
         arr[:, 1] = np.clip(arr[:, 1], 0, self.shape[1] - 1)
         arr[:, 2] = np.clip(arr[:, 2], 0, self.shape[2] - 1)
         self.seeds = [(int(round(z)), int(round(y)), int(round(x))) for z, y, x in arr]
+        self._refresh_seed_order_controls()
 
     def _set_finished_paths(self, finished_paths):
         self.finished_paths = []
@@ -1439,18 +1661,11 @@ class _OrthoViewDialog:
         self._refresh_output_path_labels()
 
         neuron_name = context.get("neuron_name", "")
-        title = "Manual Seed Selection"
+        title = "Viewing Image"
         if isinstance(neuron_name, str) and len(neuron_name) > 0:
             title = f"{title}: {neuron_name}"
         self.dialog.setWindowTitle(title)
 
-        postprocess_paths = context.get("postprocess_paths", None)
-        self.post_paths = []
-        if postprocess_paths is not None:
-            for path in postprocess_paths:
-                path_np = np.asarray(path, dtype=np.float32)
-                if path_np.ndim == 2 and path_np.shape[1] >= 3 and path_np.shape[0] >= 2:
-                    self.post_paths.append(path_np[:, :3])
         self.trace_revision_selected_node_xyz = None
         self.trace_revision_selected_point_xyz = None
         self.trace_revision_preview_paths = []
@@ -1673,24 +1888,30 @@ class _OrthoViewDialog:
             return
         self._on_run_postprocess()
 
+    def _run_postprocess_all(self):
+        if self._on_run_postprocess_all is None:
+            return
+        self._on_run_postprocess_all()
+
+    def _undo_postprocess(self):
+        if self._on_undo_postprocess is None:
+            return
+        self._on_undo_postprocess()
+
     def _run_evaluation(self):
         if self._on_run_evaluation is None:
             return
         self._on_run_evaluation()
 
-    def _save_postprocessed(self):
-        if self._on_save_postprocessed is None:
+    def _run_evaluation_all(self):
+        if self._on_run_evaluation_all is None:
             return
-        self._on_save_postprocessed()
+        self._on_run_evaluation_all()
 
     def _save_eval_report(self):
         if self._on_save_eval_report is None:
             return
         self._on_save_eval_report()
-
-    def _toggle_post_overlay(self, checked: bool):
-        self.post_overlay_visible = bool(checked)
-        self._redraw()
 
     def _select_gt_swc_path(self):
         if self._on_select_gt_swc_path is None:
@@ -1728,6 +1949,9 @@ class _OrthoViewDialog:
     def _format_output_path(self, path_value: Optional[str]) -> str:
         if path_value is None or len(path_value) == 0:
             return "(not set)"
+        # Add soft break points so long filesystem paths can wrap inside narrow tab layouts.
+        if "/" in path_value:
+            return path_value.replace("/", "/\u200b")
         return path_value
 
     def _refresh_output_path_labels(self):
@@ -1863,13 +2087,36 @@ class _OrthoViewDialog:
 
     def get_postprocess_params_overrides(self) -> Dict[str, object]:
         """Return the current post-processing parameter values from the config panel."""
+        max_branch_length = float(self._pp_max_branch_length_spin.value())
+        if max_branch_length >= 1e9 - 1.0:
+            max_branch_length = float("inf")
         return {
+            "enable_length_filter": bool(self._pp_enable_length_filter_check.isChecked()),
             "min_branch_length": float(self._pp_min_branch_length_spin.value()),
+            "max_branch_length": max_branch_length,
+            "enable_resample": bool(self._pp_enable_resample_check.isChecked()),
             "resampling_step_size": float(self._pp_resampling_step_size_spin.value()),
+            "enable_smooth_paths": bool(self._pp_enable_smooth_paths_check.isChecked()),
             "smoothing_window": int(self._pp_smoothing_window_spin.value()),
+            "enable_remove_overlaps": bool(self._pp_enable_remove_overlaps_check.isChecked()),
             "overlap_threshold": float(self._pp_overlap_threshold_spin.value()),
             "overlap_distance_threshold": float(self._pp_overlap_dist_threshold_spin.value()),
+            "redundancy_action": str(self._pp_redundancy_action_combo.currentText()),
+            "mask_smoothing_size": int(self._pp_mask_smoothing_size_spin.value()),
         }
+
+    def _update_postprocess_step_controls(self, *_args):
+        if self.mode != "seed":
+            return
+        self._pp_min_branch_length_spin.setEnabled(bool(self._pp_enable_length_filter_check.isChecked()))
+        self._pp_max_branch_length_spin.setEnabled(bool(self._pp_enable_length_filter_check.isChecked()))
+        self._pp_resampling_step_size_spin.setEnabled(bool(self._pp_enable_resample_check.isChecked()))
+        self._pp_smoothing_window_spin.setEnabled(bool(self._pp_enable_smooth_paths_check.isChecked()))
+        remove_overlaps_enabled = bool(self._pp_enable_remove_overlaps_check.isChecked())
+        self._pp_overlap_threshold_spin.setEnabled(remove_overlaps_enabled)
+        self._pp_overlap_dist_threshold_spin.setEnabled(remove_overlaps_enabled)
+        self._pp_redundancy_action_combo.setEnabled(remove_overlaps_enabled)
+        self._pp_mask_smoothing_size_spin.setEnabled(remove_overlaps_enabled)
 
     def get_eval_params_overrides(self) -> Dict[str, object]:
         """Return the current evaluation parameter values from the config panel."""
@@ -1934,6 +2181,11 @@ class _OrthoViewDialog:
         if progress_text != self._last_trace_progress_text:
             self.trace_progress_label.setText(progress_text)
             self._last_trace_progress_text = progress_text
+
+        self._can_undo_postprocess = bool(status.get("can_undo_postprocess", False))
+        if self._show_postprocess_controls and hasattr(self, "btn_undo_postprocess"):
+            self.btn_undo_postprocess.setEnabled((not running) and self._can_undo_postprocess)
+
         if self._trace_controls_running_state is None or running != self._trace_controls_running_state:
             self._set_trace_controls_busy(running)
             self._trace_controls_running_state = running
@@ -1974,15 +2226,6 @@ class _OrthoViewDialog:
                 self._model_weights_path = model_weights_path
                 self._refresh_output_path_labels()
 
-            postprocess_paths = status.get("postprocess_paths", None)
-            if postprocess_paths is not None:
-                self.post_paths = []
-                for path in postprocess_paths:
-                    path_np = np.asarray(path, dtype=np.float32)
-                    if path_np.ndim == 2 and path_np.shape[1] >= 3 and path_np.shape[0] >= 2:
-                        self.post_paths.append(path_np[:, :3])
-                self._redraw(fast=True)
-
             eval_report_text = status.get("eval_report_text", None)
             if eval_report_text is not None and self.eval_report_widget is not None:
                 self.eval_report_widget.setPlainText(str(eval_report_text))
@@ -2018,8 +2261,8 @@ class _OrthoViewDialog:
             self.btn_trace_revision_launch.setEnabled(False)
         if self._show_postprocess_controls:
             self.btn_run_postprocess.setEnabled(not running)
+            self.btn_undo_postprocess.setEnabled((not running) and self._can_undo_postprocess)
             self.btn_run_evaluation.setEnabled(not running)
-            self.chk_post_overlay.setEnabled(not running)
 
     def _invalidate_mip_cache(self):
         self._mip_cache_by_view = {"xy": None, "xz": None, "yz": None}
@@ -2342,6 +2585,7 @@ class _OrthoViewDialog:
                 best_idx = idx
                 best_dist_sq = dist_sq
         self.selected_seed_index = best_idx
+        self._refresh_seed_order_controls()
         return best_idx
 
     def _draw_overlay(self, ax, view: str):
@@ -2389,10 +2633,6 @@ class _OrthoViewDialog:
             if self._revision_marker_visible(node, view=view):
                 px, py = self._project_xyz_to_view(node, view=view)
                 artists.append(ax.scatter([px], [py], s=55, c="red", edgecolors="black"))
-
-        if self.post_overlay_visible and self.post_paths:
-            for path in self.post_paths:
-                artists.extend(self._plot_path_in_view(ax=ax, path=path, view=view, color="cyan"))
 
         return artists
 
@@ -2626,6 +2866,7 @@ class _OrthoViewDialog:
             return
         self.seeds.append((self.current_z, self.current_y, self.current_x))
         self.selected_seed_index = len(self.seeds) - 1
+        self._refresh_seed_order_controls()
         self._redraw()
 
     def _on_mpl_keypress(self, event):
@@ -2865,19 +3106,28 @@ def interactive_seed_selection_session(
     on_trace_params_changed: Optional[Callable[[Dict[str, object]], None]] = None,
     show_postprocess_controls: bool = False,
     on_run_postprocess: Optional[Callable[[], None]] = None,
+    on_run_postprocess_all: Optional[Callable[[], None]] = None,
+    on_undo_postprocess: Optional[Callable[[], None]] = None,
     on_run_evaluation: Optional[Callable[[], None]] = None,
-    on_save_postprocessed: Optional[Callable[[], None]] = None,
+    on_run_evaluation_all: Optional[Callable[[], None]] = None,
     on_save_eval_report: Optional[Callable[[], None]] = None,
     on_select_gt_swc_path: Optional[Callable[[], Optional[str]]] = None,
     on_clear_gt_swc_path: Optional[Callable[[], Optional[str]]] = None,
     on_select_scales_path: Optional[Callable[[], Optional[str]]] = None,
     on_clear_scales_path: Optional[Callable[[], Optional[str]]] = None,
     postprocess_output_dir: Optional[str] = None,
+    postprocess_enable_length_filter: bool = True,
     postprocess_min_branch_length: float = 5.0,
+    postprocess_max_branch_length: float = 1e9,
+    postprocess_enable_resample: bool = True,
     postprocess_resampling_step_size: float = 4.0,
+    postprocess_enable_smooth_paths: bool = True,
     postprocess_smoothing_window: int = 5,
+    postprocess_enable_remove_overlaps: bool = True,
     postprocess_overlap_threshold: float = 0.5,
     postprocess_overlap_distance_threshold: float = 1.0,
+    postprocess_redundancy_action: str = "remove",
+    postprocess_mask_smoothing_size: int = 0,
     on_select_postprocess_output_dir: Optional[Callable[[], Optional[str]]] = None,
     on_clear_postprocess_output_dir: Optional[Callable[[], Optional[str]]] = None,
     on_postprocess_params_changed: Optional[Callable[[Dict[str, object]], None]] = None,
@@ -2954,8 +3204,10 @@ def interactive_seed_selection_session(
         on_next_image=on_next_image,
         show_postprocess_controls=show_postprocess_controls,
         on_run_postprocess=on_run_postprocess,
+        on_run_postprocess_all=on_run_postprocess_all,
+        on_undo_postprocess=on_undo_postprocess,
         on_run_evaluation=on_run_evaluation,
-        on_save_postprocessed=on_save_postprocessed,
+        on_run_evaluation_all=on_run_evaluation_all,
         on_save_eval_report=on_save_eval_report,
         gt_swc_path=initial_context.get("gt_swc_path"),
         on_select_gt_swc_path=on_select_gt_swc_path,
@@ -2964,11 +3216,18 @@ def interactive_seed_selection_session(
         on_select_scales_path=on_select_scales_path,
         on_clear_scales_path=on_clear_scales_path,
         postprocess_output_dir=postprocess_output_dir,
+        postprocess_enable_length_filter=postprocess_enable_length_filter,
         postprocess_min_branch_length=postprocess_min_branch_length,
+        postprocess_max_branch_length=postprocess_max_branch_length,
+        postprocess_enable_resample=postprocess_enable_resample,
         postprocess_resampling_step_size=postprocess_resampling_step_size,
+        postprocess_enable_smooth_paths=postprocess_enable_smooth_paths,
         postprocess_smoothing_window=postprocess_smoothing_window,
+        postprocess_enable_remove_overlaps=postprocess_enable_remove_overlaps,
         postprocess_overlap_threshold=postprocess_overlap_threshold,
         postprocess_overlap_distance_threshold=postprocess_overlap_distance_threshold,
+        postprocess_redundancy_action=postprocess_redundancy_action,
+        postprocess_mask_smoothing_size=postprocess_mask_smoothing_size,
         on_select_postprocess_output_dir=on_select_postprocess_output_dir,
         on_clear_postprocess_output_dir=on_clear_postprocess_output_dir,
         on_postprocess_params_changed=on_postprocess_params_changed,
@@ -3071,13 +3330,17 @@ def prompt_save_json_path(default_path: Optional[str] = None) -> Optional[str]:
 
     _ensure_qapplication()
     qt_widgets = importlib.import_module("qtpy.QtWidgets")
+    _opts = qt_widgets.QFileDialog.Options()
+    _opts |= qt_widgets.QFileDialog.DontConfirmOverwrite
     selected_output, _ = qt_widgets.QFileDialog.getSaveFileName(
         None,
         "Select seeds output JSON",
         default_path or os.path.join(os.getcwd(), "seeds.json"),
         "JSON Files (*.json)",
+        options=_opts,
     )
     return selected_output or None
+
 
 
 def prompt_select_directory(default_path: Optional[str] = None) -> Optional[str]:

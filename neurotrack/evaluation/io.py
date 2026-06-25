@@ -103,13 +103,62 @@ def save_evaluation_results(
     results: List[Dict[str, Any]],
     output_path: str,
     summary_path: Optional[str] = None,
+    write_summary: bool = True,
 ) -> None:
-    df = pd.DataFrame(results)
-    df.to_csv(output_path, index=False)
+    df = upsert_evaluation_results_csv(results, output_path)
+
+    if not write_summary:
+        return
 
     if summary_path is None:
         summary_path = output_path.replace(".csv", "_summary.json")
 
+    write_evaluation_summary_from_csv(output_path, summary_path=summary_path)
+
+
+def upsert_evaluation_results_csv(
+    results: List[Dict[str, Any]],
+    output_path: str,
+    key_column: str = "neuron_name",
+) -> pd.DataFrame:
+    output_file = Path(output_path)
+    new_df = pd.DataFrame(results)
+
+    if output_file.exists():
+        existing_df = pd.read_csv(output_file)
+    else:
+        existing_df = pd.DataFrame()
+
+    if len(new_df) == 0 and len(existing_df) == 0:
+        empty_df = pd.DataFrame(columns=[key_column])
+        empty_df.to_csv(output_file, index=False)
+        return empty_df
+
+    if key_column not in new_df.columns:
+        raise ValueError(f"'{key_column}' column is required to upsert evaluation results.")
+
+    if len(existing_df) == 0:
+        combined_df = new_df.copy()
+    else:
+        if key_column not in existing_df.columns:
+            raise ValueError(f"Existing evaluation CSV is missing '{key_column}' column: {output_file}")
+        combined_df = pd.concat([existing_df, new_df], ignore_index=True, sort=False)
+
+    combined_df = combined_df.drop_duplicates(subset=[key_column], keep="last")
+    combined_df.to_csv(output_file, index=False)
+    return combined_df
+
+
+def write_evaluation_summary_from_csv(
+    csv_path: str | Path,
+    summary_path: Optional[str | Path] = None,
+) -> Dict[str, Any]:
+    csv_file = Path(csv_path)
+    if summary_path is None:
+        summary_path = csv_file.with_name(f"{csv_file.stem}_summary.json")
+    summary_file = Path(summary_path)
+
+    df = pd.read_csv(csv_file)
     numeric_cols = df.select_dtypes(include=[np.number]).columns
     summary: Dict[str, Any] = {}
     for col in numeric_cols:
@@ -121,10 +170,13 @@ def save_evaluation_results(
             "max": float(df[col].max()),
         }
 
-    summary["n_neurons"] = len(df)
+    summary["n_neurons"] = int(len(df))
 
-    with open(summary_path, "w") as handle:
+    summary_file.parent.mkdir(parents=True, exist_ok=True)
+    with summary_file.open("w", encoding="utf-8") as handle:
         json.dump(summary, handle, indent=2)
+
+    return summary
 
 
 def compute_pipeline_summary(

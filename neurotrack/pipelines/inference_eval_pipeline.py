@@ -30,8 +30,7 @@ _INFERENCE_PIPELINE_DEFAULTS: Dict[str, Any] = {
     "random_offset": 0.0,
     "auto_seed_selection_mode": "remote_endnode",
     "review_before_next": False,
-    "sync": False,            # Skip images whose *_trace.json already exists
-    "run_postprocessing": True,
+    "sync": False,            # Skip images whose reconstruction already exists
     "run_evaluation": None,   # None → infer from swc_dir
     "min_branch_length": 5.0,
     "resampling_step_size": 4.0,
@@ -80,17 +79,21 @@ class InferenceEvaluationPipeline:
 
     def run(
         self,
-        run_postprocessing: bool | None = None,
         run_evaluation: bool | None = None,
     ) -> Dict[str, Any]:
         run_out_dir = Path(self.config["out_dir"]) / (self.config["test_name"] + "_" + date_time)
         run_out_dir.mkdir(parents=True, exist_ok=True)
 
+        postprocess_config = PostprocessConfig.from_config(self.config)
+
+        # Determine if any postprocessing step is enabled.
         should_postprocess = (
-            bool(self.config.get("run_postprocessing", True))
-            if run_postprocessing is None
-            else bool(run_postprocessing)
+            postprocess_config.filter_branches_by_length
+            or postprocess_config.resample
+            or postprocess_config.smooth_paths
+            or postprocess_config.remove_overlapping_paths
         )
+
         # Priority: caller kwarg > explicit JSON flag > infer from swc_dir.
         if run_evaluation is not None:
             should_evaluate = bool(run_evaluation)
@@ -101,31 +104,9 @@ class InferenceEvaluationPipeline:
 
         if should_evaluate and self.config.get("swc_dir") is None:
             raise ValueError("Evaluation requested but 'swc_dir' is not configured.")
-        if should_evaluate and not should_postprocess:
-            raise ValueError("Evaluation requires post-processing. Enable post-processing first.")
-
-        postprocess_config = PostprocessConfig.from_config(self.config)
 
         inference_payload = run_inference(self.config, run_out_dir)
         inference_results = list(inference_payload["results"])
-
-        # When sync=True, run_inference skips already-traced images.  Load
-        # their saved *_trace.json files and merge them in so that
-        # post-processing and evaluation cover the full image set.
-        if bool(self.config.get("sync", False)):
-            tracing_results_dir = Path(inference_payload["tracing_results_dir"])
-            traced_stems = {
-                Path(r.get("neuron_name", "")).stem for r in inference_results
-            }
-            for json_path in sorted(tracing_results_dir.glob("*_trace.json")):
-                # Strip the trailing "_trace" suffix to recover the image stem.
-                img_stem = json_path.stem[: -len("_trace")]
-                if img_stem not in traced_stems:
-                    with json_path.open("r", encoding="utf-8") as fh:
-                        cached = json.load(fh)
-                    inference_results.append(cached)
-                    traced_stems.add(img_stem)
-                    print(f"[sync] Loaded cached inference result: {json_path.name}")
 
         postprocessed_results = []
         postprocess_payload = None
@@ -151,11 +132,10 @@ class InferenceEvaluationPipeline:
                 distance_threshold=float(self.config.get("distance_threshold", 2.0)),
             )
             metrics_csv = run_out_dir / f"{self.config['test_name']}_metrics.csv"
-            summary_json = run_out_dir / f"{self.config['test_name']}_summary.json"
             save_evaluation_results(
                 evaluation_results,
                 str(metrics_csv),
-                summary_path=str(summary_json),
+                write_summary=False,
             )
 
         pipeline_summary = compute_pipeline_summary(
@@ -164,7 +144,7 @@ class InferenceEvaluationPipeline:
             has_ground_truth=should_evaluate,
         )
 
-        pipeline_summary_path = run_out_dir / "pipeline_summary.json"
+        pipeline_summary_path = run_out_dir / f"{self.config['test_name']}_summary.json"
         with open(pipeline_summary_path, "w") as handle:
             json.dump(pipeline_summary, handle, indent=2)
 
@@ -184,9 +164,6 @@ class InferenceEvaluationPipeline:
                 "run_postprocessing": should_postprocess,
                 "run_evaluation": should_evaluate,
             },
-            "inference": {
-                "tracing_results_dir": str(inference_payload["tracing_results_dir"]),
-            },
             "postprocess": None
             if postprocess_payload is None
             else {
@@ -197,11 +174,7 @@ class InferenceEvaluationPipeline:
 
 def run_inference_eval_pipeline(
     config_path: str,
-    run_postprocessing: bool | None = None,
     run_evaluation: bool | None = None,
 ) -> Dict[str, Any]:
     pipeline = InferenceEvaluationPipeline(config_path=config_path)
-    return pipeline.run(
-        run_postprocessing=run_postprocessing,
-        run_evaluation=run_evaluation,
-    )
+    return pipeline.run(run_evaluation=run_evaluation)

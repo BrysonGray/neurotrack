@@ -26,6 +26,10 @@ from neurotrack.core.pipeline_config import PostprocessConfig, flexible_image_ke
 from neurotrack.inference.postprocess import process_results
 from neurotrack.inference.runtime import load_models
 from neurotrack.inference.tracing import trace_image as sac_trace_image
+from neurotrack.evaluation.io import (
+    compute_pipeline_summary,
+    upsert_evaluation_results_csv,
+)
 from neurotrack.visualization.ortho_viewer import (
     interactive_seed_selection_session,
     prompt_select_model_weights,
@@ -430,6 +434,7 @@ class _TraceSessionManager:
         image_root: Path,
         trace_params: Optional[Dict[str, object]],
         postprocess_config: Optional[PostprocessConfig] = None,
+        report_stem: Optional[str] = None,
     ) -> None:
         self.image_paths = image_paths
         self.image_root = image_root
@@ -457,6 +462,7 @@ class _TraceSessionManager:
         # post-processing and evaluation state
         self.postprocess_results_by_key: Dict[str, Dict[str, object]] = {}
         self.eval_results_by_key: Dict[str, Dict[str, object]] = {}
+        self._pre_postprocess_trace_cache_by_key: Dict[str, List[List[List[float]]]] = {}
         self.filtered_swc_by_key: Dict[str, List[List[float]]] = {}
         self._gt_swc_cache_by_key: Dict[str, List[List[float]]] = {}
         self._gt_swc_dir: Optional[Path] = None
@@ -466,6 +472,9 @@ class _TraceSessionManager:
         self._postprocess_output_dir: Optional[Path] = None
         self._eval_output_dir: Optional[Path] = None
         self._filtered_swc_output_dir: Optional[Path] = None
+        self._report_stem = str(report_stem).strip() if report_stem is not None else image_root.name
+        if len(self._report_stem) == 0:
+            self._report_stem = "session"
 
         if self.trace_params.get("sac_weights"):
             self.set_model_weights_path(str(self.trace_params["sac_weights"]))
@@ -512,12 +521,15 @@ class _TraceSessionManager:
             self._set_state(f"No trace available to save for {image_key}.", increment_token=True)
             return
         out_dir = self._ensure_output_dir(default_dir=default_dir)
-        src = self._temp_root / Path(image_key).with_suffix(".json")
-        if not src.exists():
-            self._write_temp_trace(image_key=image_key, paths=self.trace_results_by_key[image_key])
-        dst = out_dir / Path(image_key).with_suffix(".json")
+        out_dir = out_dir / "reconstructions"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        swc_list = data_save.paths_to_swc(_coerce_paths_xyz(self.trace_results_by_key[image_key]))
+        if not swc_list:
+            self._set_state("Empty SWC — nothing to save.", increment_token=True)
+            return
+        dst = out_dir / f"{Path(image_key).stem}.swc"
         dst.parent.mkdir(parents=True, exist_ok=True)
-        dst.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
+        data_save.write_swc(swc_list, str(dst))
         self._set_state(f"Saved trace: {dst}", increment_token=True)
 
     def save_all_traces(self, default_dir: Path):
@@ -525,13 +537,15 @@ class _TraceSessionManager:
             self._set_state("No traces available to save.", increment_token=True)
             return
         out_dir = self._ensure_output_dir(default_dir=default_dir)
+        out_dir = out_dir / "reconstructions"
+        out_dir.mkdir(parents=True, exist_ok=True)
         for image_key, paths in self.trace_results_by_key.items():
-            src = self._temp_root / Path(image_key).with_suffix(".json")
-            if not src.exists():
-                self._write_temp_trace(image_key=image_key, paths=paths)
-            dst = out_dir / Path(image_key).with_suffix(".json")
+            swc_list = data_save.paths_to_swc(_coerce_paths_xyz(paths))
+            if not swc_list:
+                continue
+            dst = out_dir / f"{Path(image_key).stem}.swc"
             dst.parent.mkdir(parents=True, exist_ok=True)
-            dst.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
+            data_save.write_swc(swc_list, str(dst))
         self._set_state(f"Saved all traces to: {out_dir}", increment_token=True)
 
     def _clear_revision_state(self, image_key: str) -> None:
@@ -540,6 +554,44 @@ class _TraceSessionManager:
     def _clear_derived_results(self, image_key: str) -> None:
         self.postprocess_results_by_key.pop(image_key, None)
         self.eval_results_by_key.pop(image_key, None)
+        self._pre_postprocess_trace_cache_by_key.pop(image_key, None)
+
+    @staticmethod
+    def _normalize_paths_payload(paths: List[List[List[float]]]) -> List[List[List[float]]]:
+        normalized: List[List[List[float]]] = []
+        for path in _coerce_paths_xyz(paths):
+            normalized.append(path.tolist())
+        return normalized
+
+    def discard_trace(self, image_key: str) -> None:
+        if image_key not in self.trace_results_by_key:
+            self._set_state(f"No trace to discard for {image_key}.", increment_token=True)
+            return
+        self.trace_results_by_key.pop(image_key, None)
+        self._clear_derived_results(image_key)
+        self._clear_revision_state(image_key)
+        trace_tmp_path = self._temp_root / Path(image_key).with_suffix(".json")
+        if trace_tmp_path.exists():
+            trace_tmp_path.unlink(missing_ok=True)
+        self._increment_overlay_token()
+        self._set_state(f"Discarded current predicted trace for {image_key}.", increment_token=True)
+
+    def undo_postprocess(self, image_key: str) -> Optional[List[List[List[float]]]]:
+        original = self._pre_postprocess_trace_cache_by_key.get(image_key)
+        if original is None:
+            self._set_state(f"No cached pre-processed trace to restore for {image_key}.", increment_token=True)
+            return None
+
+        restored = self._normalize_paths_payload(original)
+        self.trace_results_by_key[image_key] = restored
+        self._write_temp_trace(image_key=image_key, paths=restored)
+        self.postprocess_results_by_key.pop(image_key, None)
+        self.eval_results_by_key.pop(image_key, None)
+        self._pre_postprocess_trace_cache_by_key.pop(image_key, None)
+        self._clear_revision_state(image_key)
+        self._increment_overlay_token()
+        self._set_state(f"Restored original predicted trace for {image_key}.", increment_token=True)
+        return restored
 
     def _store_trace_timing(self, image_key: str, timing_ms: Optional[object]) -> None:
         if isinstance(timing_ms, dict):
@@ -779,16 +831,30 @@ class _TraceSessionManager:
 
     def update_postprocess_config(self, overrides: Dict[str, object]) -> None:
         """Update postprocess/eval config parameters from the UI."""
+        if "enable_length_filter" in overrides:
+            self.postprocess_config.enable_length_filter = bool(overrides["enable_length_filter"])
         if "min_branch_length" in overrides:
             self.postprocess_config.min_branch_length = float(overrides["min_branch_length"])
+        if "max_branch_length" in overrides:
+            self.postprocess_config.max_branch_length = float(overrides["max_branch_length"])
+        if "enable_resample" in overrides:
+            self.postprocess_config.enable_resample = bool(overrides["enable_resample"])
         if "resampling_step_size" in overrides:
             self.postprocess_config.resampling_step_size = float(overrides["resampling_step_size"])
+        if "enable_smooth_paths" in overrides:
+            self.postprocess_config.enable_smooth_paths = bool(overrides["enable_smooth_paths"])
         if "smoothing_window" in overrides:
             self.postprocess_config.smoothing_window = int(overrides["smoothing_window"])
+        if "enable_remove_overlaps" in overrides:
+            self.postprocess_config.enable_remove_overlaps = bool(overrides["enable_remove_overlaps"])
         if "overlap_threshold" in overrides:
             self.postprocess_config.overlap_threshold = float(overrides["overlap_threshold"])
         if "overlap_distance_threshold" in overrides:
             self.postprocess_config.overlap_distance_threshold = float(overrides["overlap_distance_threshold"])
+        if "redundancy_action" in overrides:
+            self.postprocess_config.redundancy_action = str(overrides["redundancy_action"])
+        if "mask_smoothing_size" in overrides:
+            self.postprocess_config.mask_smoothing_size = int(overrides["mask_smoothing_size"])
         if "distance_threshold" in overrides:
             self.postprocess_config.distance_threshold = float(overrides["distance_threshold"])
 
@@ -922,27 +988,48 @@ class _TraceSessionManager:
         return str(out_dir)
 
     def run_postprocess(self, image_key: str) -> Optional[Dict[str, object]]:
-        """Post-process raw trace paths for *image_key* and store the result."""
+        """Post-process current predicted paths and replace current prediction with the result."""
         if image_key not in self.trace_results_by_key:
             self._set_state(
                 f"No trace to post-process for {image_key}. Trace the image first.",
                 increment_token=True,
             )
             return None
-        raw_paths = self.trace_results_by_key[image_key]
+        raw_paths = self._normalize_paths_payload(self.trace_results_by_key[image_key])
+        raw_paths_xyz = _coerce_paths_xyz(raw_paths)
+        if len(raw_paths_xyz) == 0:
+            self._set_state("Empty prediction — post-processing skipped.", increment_token=True)
+            return None
+
         raw_result = {
             "neuron_name": image_key,
-            "paths": [np.asarray(p, dtype=np.float32) for p in raw_paths],
+            "paths": raw_paths_xyz,
         }
         try:
             self._set_state(f"Post-processing {image_key}...", increment_token=False)
             processed = process_results([raw_result], self.postprocess_config.scaled_params_for_image(image_key))
             if processed:
                 result = processed[0]
+                processed_paths = self._normalize_paths_payload(result.get("processed_paths", []))
+                if len(processed_paths) == 0:
+                    self._set_state("Post-processing produced no paths.", increment_token=True)
+                    return None
+
+                if image_key not in self._pre_postprocess_trace_cache_by_key:
+                    self._pre_postprocess_trace_cache_by_key[image_key] = raw_paths
+
+                self.trace_results_by_key[image_key] = processed_paths
+                self._write_temp_trace(image_key=image_key, paths=processed_paths)
+                self._increment_overlay_token()
+                self.eval_results_by_key.pop(image_key, None)
+                self._clear_revision_state(image_key)
                 self.postprocess_results_by_key[image_key] = result
                 n = result.get("n_processed_paths", 0)
                 self._set_state(
-                    f"Post-processing complete: {n} paths for {image_key}",
+                    (
+                        f"Post-processing complete: {n} paths for {image_key}. "
+                        "Use 'Undo Post-Process' to restore the original trace."
+                    ),
                     increment_token=True,
                 )
                 return result
@@ -950,11 +1037,29 @@ class _TraceSessionManager:
             self._set_state(f"Post-processing failed: {exc}", increment_token=True)
         return None
 
+    def run_postprocess_all(self) -> List[Dict[str, object]]:
+        """Post-process every currently available trace in the session."""
+        if len(self.trace_results_by_key) == 0:
+            self._set_state("No traces available to post-process.", increment_token=True)
+            return []
+
+        processed_results: List[Dict[str, object]] = []
+        for image_key in sorted(self.trace_results_by_key.keys()):
+            result = self.run_postprocess(image_key)
+            if result is not None:
+                processed_results.append(result)
+
+        self._set_state(
+            f"Post-processing complete for {len(processed_results)} trace(s).",
+            increment_token=True,
+        )
+        return processed_results
+
     def run_evaluation(self, image_key: str) -> Optional[Dict[str, object]]:
-        """Evaluate the post-processed result for *image_key* against the GT SWC."""
-        if image_key not in self.postprocess_results_by_key:
+        """Evaluate the current predicted trace for *image_key* against the GT SWC."""
+        if image_key not in self.trace_results_by_key:
             self._set_state(
-                f"Run post-processing for {image_key} before evaluation.",
+                f"No predicted trace available for {image_key}. Trace the image first.",
                 increment_token=True,
             )
             return None
@@ -983,7 +1088,8 @@ class _TraceSessionManager:
         try:
             self._set_state(f"Evaluating {image_key}...", increment_token=False)
             gt_swc = data_loading.swc(str(gt_file), verbose=False)
-            pred_swc = self.postprocess_results_by_key[image_key].get("swc_list", [])
+            pred_paths_xyz = _coerce_paths_xyz(self.trace_results_by_key.get(image_key, []))
+            pred_swc = data_save.paths_to_swc(pred_paths_xyz)
             if not pred_swc:
                 self._set_state("Empty prediction — evaluation skipped.", increment_token=True)
                 return None
@@ -992,6 +1098,7 @@ class _TraceSessionManager:
                 threshold=self.postprocess_config.distance_threshold / self.postprocess_config.get_scale_for_image(image_key),
                 return_l_measures=True,
             )
+            result["neuron_name"] = image_key
             result["image_key"] = image_key
             result["gt_file"] = str(gt_file)
             self.eval_results_by_key[image_key] = result
@@ -1001,11 +1108,32 @@ class _TraceSessionManager:
             self._set_state(f"Evaluation failed: {exc}", increment_token=True)
             return None
 
+    def evaluate_all(self) -> List[Dict[str, object]]:
+        """Evaluate every currently available trace in the session."""
+        if len(self.trace_results_by_key) == 0:
+            self._set_state("No traces available to evaluate.", increment_token=True)
+            return []
+        if self._gt_swc_dir is None:
+            self._set_state("Ground truth SWC directory not set.", increment_token=True)
+            return []
+
+        evaluated: List[Dict[str, object]] = []
+        for image_key in sorted(self.trace_results_by_key.keys()):
+            result = self.run_evaluation(image_key)
+            if result is not None:
+                evaluated.append(result)
+
+        self._set_state(
+            f"Evaluation complete for {len(evaluated)} trace(s).",
+            increment_token=True,
+        )
+        return evaluated
+
     def save_postprocessed(self, image_key: str, default_dir: Path) -> None:
-        """Write the post-processed SWC for *image_key* to disk."""
-        if image_key not in self.postprocess_results_by_key:
+        """Write the current predicted SWC for *image_key* to disk."""
+        if image_key not in self.trace_results_by_key:
             self._set_state(
-                f"No post-processed data to save for {image_key}.",
+                f"No predicted trace data to save for {image_key}.",
                 increment_token=True,
             )
             return
@@ -1015,23 +1143,20 @@ class _TraceSessionManager:
                 return
             self._postprocess_output_dir = Path(selected)
         self._postprocess_output_dir.mkdir(parents=True, exist_ok=True)
-        result = self.postprocess_results_by_key[image_key]
-        swc_list = result.get("swc_list", [])
+        pred_paths_xyz = _coerce_paths_xyz(self.trace_results_by_key.get(image_key, []))
+        swc_list = data_save.paths_to_swc(pred_paths_xyz)
         if not swc_list:
             self._set_state("Empty SWC — nothing to save.", increment_token=True)
             return
         neuron_stem = Path(image_key).stem
         swc_path = self._postprocess_output_dir / f"{neuron_stem}_reconstructed.swc"
         data_save.write_swc(swc_list, str(swc_path))
-        self._set_state(f"Saved post-processed SWC: {swc_path}", increment_token=True)
+        self._set_state(f"Saved predicted SWC: {swc_path}", increment_token=True)
 
-    def save_eval_report(self, image_key: str, default_dir: Path) -> None:
-        """Write the evaluation report for *image_key* as JSON to disk."""
-        if image_key not in self.eval_results_by_key:
-            self._set_state(
-                f"No evaluation data to save for {image_key}.",
-                increment_token=True,
-            )
+    def save_eval_report(self, default_dir: Path) -> None:
+        """Write the cached session evaluation report to CSV and JSON summary."""
+        if len(self.eval_results_by_key) == 0:
+            self._set_state("No cached evaluation data to save.", increment_token=True)
             return
         if self._eval_output_dir is None:
             selected = prompt_select_directory(default_path=str(default_dir))
@@ -1039,13 +1164,37 @@ class _TraceSessionManager:
                 return
             self._eval_output_dir = Path(selected)
         self._eval_output_dir.mkdir(parents=True, exist_ok=True)
-        result = {k: (v.item() if hasattr(v, "item") else v) for k, v in self.eval_results_by_key[image_key].items()}
-        neuron_stem = Path(image_key).stem
-        report_path = self._eval_output_dir / f"{neuron_stem}_eval_report.json"
-        with report_path.open("w", encoding="utf-8") as fh:
-            json.dump(result, fh, indent=2)
-            fh.write("\n")
-        self._set_state(f"Saved eval report: {report_path}", increment_token=True)
+        report_stem = self._report_stem
+        metrics_path = self._eval_output_dir / f"{report_stem}_metrics.csv"
+        summary_path = self._eval_output_dir / f"{report_stem}_summary.json"
+
+        rows: List[Dict[str, object]] = []
+        for image_key, eval_result in sorted(self.eval_results_by_key.items()):
+            row = {
+                key: (value.item() if hasattr(value, "item") else value)
+                for key, value in eval_result.items()
+            }
+            row.setdefault("neuron_name", image_key)
+            row.pop("image_key", None)
+            row.setdefault("skipped", False)
+            postprocess_result = self.postprocess_results_by_key.get(image_key, {})
+            row.setdefault("n_raw_paths", int(postprocess_result.get("n_raw_paths", 0)))
+            row.setdefault("n_processed_paths", int(postprocess_result.get("n_processed_paths", 0)))
+            rows.append(row)
+
+        upsert_evaluation_results_csv(rows, str(metrics_path))
+
+        summary = compute_pipeline_summary(
+            postprocessed_results=[],
+            evaluation_results=rows,
+            has_ground_truth=True,
+        )
+        with summary_path.open("w", encoding="utf-8") as handle:
+            json.dump(summary, handle, indent=2)
+        self._set_state(
+            f"Saved eval report: {metrics_path} and {summary_path}",
+            increment_token=True,
+        )
 
     # ------------------------------------------------------------------
     # Status
@@ -1064,17 +1213,10 @@ class _TraceSessionManager:
                 "model_weights_path": self.get_model_weights_path(),
                 "progress_completed": self._progress_completed,
                 "progress_total": self._progress_total,
-                "postprocess_paths": None,
                 "eval_report_text": None,
                 "gt_swc_path": self.get_gt_swc_path(),
+                "can_undo_postprocess": current_key in self._pre_postprocess_trace_cache_by_key,
             }
-            pp_result = self.postprocess_results_by_key.get(current_key)
-            if pp_result is not None:
-                raw_post = pp_result.get("processed_paths", [])
-                status["postprocess_paths"] = [
-                    p.tolist() if hasattr(p, "tolist") else list(p)
-                    for p in raw_post
-                ]
             eval_result = self.eval_results_by_key.get(current_key)
             if eval_result is not None:
                 status["eval_report_text"] = _format_eval_report(current_key, eval_result)
@@ -1343,7 +1485,18 @@ class _SessionState:
         return self.seeds_output_path
 
     def select_seeds_output_path(self) -> Optional[str]:
-        selected = prompt_save_json_path(default_path=str(self.image_root / "seeds.json"))
+        # Use getSaveFileName with DontConfirmOverwrite so selecting an existing file
+        # only sets the path without Qt showing an overwrite-confirmation dialog.
+        qt_widgets_mod = importlib.import_module("qtpy.QtWidgets")
+        options = qt_widgets_mod.QFileDialog.Options()
+        options |= qt_widgets_mod.QFileDialog.DontConfirmOverwrite
+        selected, _ = qt_widgets_mod.QFileDialog.getSaveFileName(
+            None,
+            "Select seeds output JSON",
+            str(self.image_root / "seeds.json"),
+            "JSON Files (*.json)",
+            options=options,
+        )
         if selected:
             self.seeds_output_path = selected
         return self.seeds_output_path
@@ -1365,16 +1518,69 @@ class _SessionState:
         self.display_image_dir = None
         return self.display_image_dir
 
+    def _load_existing_output_seeds(self, out_path: str) -> Dict[str, List[List[float]]]:
+        path = Path(out_path)
+        if not path.exists():
+            return {}
+        try:
+            return load_seeds_json(path)
+        except Exception as exc:
+            raise ValueError(f"Failed to load existing seeds JSON '{path}': {exc}") from exc
+
+    def write_seeds_merge(self, out_path: str, updates: Dict[str, List[List[float]]]) -> None:
+        existing = self._load_existing_output_seeds(out_path)
+        merged = dict(existing)
+        merged.update(updates)
+        save_seeds_json(seeds_json_path=out_path, seeds_by_relative_path=merged)
+
+    def _confirm_seed_overwrite(self, out_path: str, update_keys: List[str]) -> bool:
+        """Return True if it is safe to proceed with a seeds write.
+
+        Loads the existing output file (if any), finds keys that would be
+        overwritten, and—when there are conflicts—shows a Qt confirmation
+        dialog.  Returns False if the user cancels.
+        """
+        existing = self._load_existing_output_seeds(out_path)
+        conflicting = [k for k in update_keys if k in existing]
+        if not conflicting:
+            return True
+        qt_widgets_mod = importlib.import_module("qtpy.QtWidgets")
+        count = len(conflicting)
+        noun = "image" if count == 1 else "images"
+        listed = "\n".join(f"  \u2022 {k}" for k in conflicting[:10])
+        more = f"\n  \u2026 and {count - 10} more" if count > 10 else ""
+        msg = (
+            f"The following {count} {noun} already ha"
+            + ("s" if count == 1 else "ve")
+            + " seeds in the output file:\n\n"
+            + listed
+            + more
+            + "\n\nOverwrite those entries with the current seeds?\n"
+            "(Other entries in the file will not be affected.)"
+        )
+        reply = qt_widgets_mod.QMessageBox.question(
+            None,
+            "Overwrite Seeds?",
+            msg,
+            qt_widgets_mod.QMessageBox.Yes | qt_widgets_mod.QMessageBox.No,
+            qt_widgets_mod.QMessageBox.No,
+        )
+        return reply == qt_widgets_mod.QMessageBox.Yes
+
     def save_current(self, seed_array: np.ndarray) -> None:
         relative_key = self.current_relative_key()
         self.selected_seeds[relative_key] = self.rows_from_seed_array(seed_array)
         out_path = self.ensure_output_path()
-        save_seeds_json(seeds_json_path=out_path, seeds_by_relative_path=self.selected_seeds)
+        if not self._confirm_seed_overwrite(out_path, [relative_key]):
+            return
+        self.write_seeds_merge(out_path=out_path, updates={relative_key: self.selected_seeds[relative_key]})
         print(f"Saved seeds for {relative_key} to: {out_path}")
 
     def save_all(self) -> None:
         out_path = self.ensure_output_path()
-        save_seeds_json(seeds_json_path=out_path, seeds_by_relative_path=self.selected_seeds)
+        if not self._confirm_seed_overwrite(out_path, list(self.selected_seeds.keys())):
+            return
+        self.write_seeds_merge(out_path=out_path, updates=self.selected_seeds)
         print(f"Saved all seeds to: {out_path}")
 
     # ------------------------------------------------------------------
@@ -1474,6 +1680,7 @@ def run_interactive_tracing_session(
         seeds_input_path = _first_config_value("seeds_input_path", "seeds_path")
     if seeds_output_path is None:
         seeds_output_path = _first_config_value("seeds_output_path")
+    report_stem = _first_config_value("test_name", "session_name", "run_name")
 
     image_dir, seeds_input_path, seeds_output_path = prompt_seed_session_paths(
         image_dir=image_dir,
@@ -1524,6 +1731,7 @@ def run_interactive_tracing_session(
         image_root=image_root,
         trace_params=trace_params,
         postprocess_config=postprocess_config,
+        report_stem=report_stem,
     )
 
     # Pre-set optional output directories from config so UI labels are populated immediately.
@@ -1632,6 +1840,7 @@ def run_interactive_tracing_session(
             on_save_all_traces=lambda: trace_manager.save_all_traces(
                 default_dir=image_root / "trace_outputs"
             ),
+            on_discard_trace=lambda: trace_manager.discard_trace(session.current_relative_key()),
             on_select_seeds_output_path=session.select_seeds_output_path,
             on_select_trace_output_path=lambda: trace_manager.select_trace_output_dir(
                 default_dir=image_root / "trace_outputs"
@@ -1655,23 +1864,28 @@ def run_interactive_tracing_session(
             on_trace_params_changed=trace_manager.update_trace_params,
             show_postprocess_controls=True,
             on_run_postprocess=lambda: trace_manager.run_postprocess(session.current_relative_key()),
+            on_run_postprocess_all=trace_manager.run_postprocess_all,
+            on_undo_postprocess=lambda: trace_manager.undo_postprocess(session.current_relative_key()),
             on_run_evaluation=lambda: trace_manager.run_evaluation(session.current_relative_key()),
-            on_save_postprocessed=lambda: trace_manager.save_postprocessed(
-                session.current_relative_key(), default_dir=image_root / "postprocessed"
-            ),
-            on_save_eval_report=lambda: trace_manager.save_eval_report(
-                session.current_relative_key(), default_dir=image_root / "evaluation"
-            ),
+            on_run_evaluation_all=trace_manager.evaluate_all,
+            on_save_eval_report=lambda: trace_manager.save_eval_report(default_dir=image_root / "evaluation"),
             on_select_gt_swc_path=_select_gt_swc_path,
             on_clear_gt_swc_path=_clear_gt_swc_path,
             on_select_scales_path=_select_scales_path,
             on_clear_scales_path=_clear_scales_path,
             postprocess_output_dir=trace_manager.get_postprocess_output_dir(),
             postprocess_min_branch_length=postprocess_config.min_branch_length,
+            postprocess_max_branch_length=postprocess_config.max_branch_length,
+            postprocess_enable_length_filter=postprocess_config.enable_length_filter,
             postprocess_resampling_step_size=postprocess_config.resampling_step_size,
+            postprocess_enable_resample=postprocess_config.enable_resample,
             postprocess_smoothing_window=postprocess_config.smoothing_window,
+            postprocess_enable_smooth_paths=postprocess_config.enable_smooth_paths,
             postprocess_overlap_threshold=postprocess_config.overlap_threshold,
             postprocess_overlap_distance_threshold=postprocess_config.overlap_distance_threshold,
+            postprocess_enable_remove_overlaps=postprocess_config.enable_remove_overlaps,
+            postprocess_redundancy_action=postprocess_config.redundancy_action,
+            postprocess_mask_smoothing_size=postprocess_config.mask_smoothing_size,
             on_select_postprocess_output_dir=_select_postprocess_output_dir,
             on_clear_postprocess_output_dir=_clear_postprocess_output_dir,
             on_postprocess_params_changed=trace_manager.update_postprocess_config,
@@ -1692,14 +1906,5 @@ def run_interactive_tracing_session(
         )
     finally:
         trace_manager.close()
-
-    if session.seeds_output_path is not None:
-        save_seeds_json(
-            seeds_json_path=session.seeds_output_path,
-            seeds_by_relative_path=session.selected_seeds,
-        )
-        print(f"Saved seeds JSON to: {session.seeds_output_path}")
-    else:
-        print("Session ended without writing seeds to disk (no output path selected).")
 
     return session.selected_seeds

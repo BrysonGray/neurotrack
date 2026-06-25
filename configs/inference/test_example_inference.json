@@ -24,12 +24,11 @@
   "terminal_target_norm_threshold": 1.0,
   "false_stop_distance_threshold": 1.0,
 
-  "run_postprocessing": true,
-  "min_branch_length": 1.0,
+  "filter_branches_by_length": false,
+  "resample": true,
   "resampling_step_size": 1.0,
-  "smoothing_window": 1,
-  "overlap_threshold": 0.5,
-  "overlap_distance_threshold": 2.0,
+  "smooth_paths": false,
+  "remove_overlapping_paths": false,
 
   "run_evaluation": true,
   "eval_distance_threshold": 2.0

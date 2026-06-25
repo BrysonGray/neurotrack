@@ -37,7 +37,8 @@ class NeuronTrackingEnvironment:
                  stall_threshold: float = 1.0,
                  max_len: int = 10000, max_paths: int = 10000, gamma=0.99, branching: bool = False,
                  repeat_starts: bool = False, start_idx: int = 0,
-                 inference_mode: bool = False):
+                 inference_mode: bool = False,
+                 clear_path_history_between_seeds: Optional[bool] = None):
         """
         Initialize the enhanced SAC tracking environment.
         
@@ -63,6 +64,11 @@ class NeuronTrackingEnvironment:
             Whether to enable branching.
         repeat_starts : bool
             Whether to repeatedly restart at the beginning of a completed path
+        clear_path_history_between_seeds : Optional[bool]
+            Whether to zero the path-history channel (``img.data[-1]``) after all
+            branches stemming from one seed are traced and the head advances to the
+            next seed. When ``None``, defaults to ``inference_mode`` (cleared during
+            inference, retained during training).
         """
         self.dataset = dataset
         self.current_patch_idx = start_idx
@@ -83,16 +89,24 @@ class NeuronTrackingEnvironment:
         self.branching = branching
         self.repeat_starts = repeat_starts
         self.inference_mode = inference_mode
+        self.clear_path_history_between_seeds = (
+            bool(inference_mode)
+            if clear_path_history_between_seeds is None
+            else bool(clear_path_history_between_seeds)
+        )
         self.close_dist2 = 9.0 ** 2  # distance threshold for cut end assignment and neuron end point assignment when removing visited edges
         
         # Initialize other attributes that will be set when neuron data is loaded
         self.img = None
         self.neuron_mask = None
         self.seeds = torch.empty((0, 3), dtype=torch.float32)
+        self.pending_seeds: List[torch.Tensor] = []
         self.paths = []
         self.branch_roots = torch.empty((0, 3), dtype=torch.float32)
         self.neuron_root_ids = set()
         self._zero_state_patch: Optional[torch.Tensor] = None
+        self.accumulated_path_history: Optional[torch.Tensor] = None
+        self._group_first_path_pending = False
         self.finished_paths = []
         self.section_nodes = None
         self.terminal_nodes = set() # terminal node IDs for the current path
@@ -207,8 +221,19 @@ class NeuronTrackingEnvironment:
         if self.seeds.ndim != 2 or self.seeds.shape[1] != 3:
             raise ValueError("patch_data['seed_points'] must have shape (N, 3) in (z, y, x) order.")
         
-        self.paths = [[p] for p in self.seeds.unbind(0)]
-        self._set_branch_roots(list(self.seeds.unbind(0)))
+        # Group tracing by seed: only the first seed starts active, the rest are
+        # queued and traced one-at-a-time after all branches of the active seed finish.
+        seed_list = list(self.seeds.unbind(0))
+        if len(seed_list) == 0:
+            self.paths = []
+            self.pending_seeds = []
+            self._set_branch_roots([])
+        else:
+            self.paths = [[seed_list[0]]]
+            self.pending_seeds = seed_list[1:]
+            # Branch roots reset per seed so each seed branches independently.
+            self._set_branch_roots([seed_list[0]])
+        self._group_first_path_pending = True
         cut_end_ids_data = patch_data.get('cut_end_ids', [])
         if cut_end_ids_data is None:
             cut_end_ids_data = []
@@ -228,6 +253,11 @@ class NeuronTrackingEnvironment:
             self.target_vectors = self._zero_target_vectors()
             self.section_nodes = None
             self.section_assigned = False
+
+        # Persistent buffer accumulating the full path-history channel across all
+        # seed groups, so the final reconstruction reflects every seed even when the
+        # live channel is cleared between seeds.
+        self.accumulated_path_history = torch.zeros_like(self.img.data[-1])
 
         if self.paths:
             self.img.draw_point(
@@ -398,6 +428,59 @@ class NeuronTrackingEnvironment:
                     self.target_vectors = target_points
 
 
+    def _reset_path_history_channel(self) -> None:
+        """Accumulate the live path-history channel into the persistent buffer, then zero it."""
+        if self.img is None:
+            return
+        current = self.img.data[-1]
+        if self.accumulated_path_history is None:
+            self.accumulated_path_history = torch.zeros_like(current)
+        elif (
+            self.accumulated_path_history.shape != current.shape
+            or self.accumulated_path_history.device != current.device
+            or self.accumulated_path_history.dtype != current.dtype
+        ):
+            self.accumulated_path_history = self.accumulated_path_history.to(
+                device=current.device, dtype=current.dtype
+            )
+        self.accumulated_path_history = torch.maximum(self.accumulated_path_history, current)
+        self.img.data[-1] = torch.zeros_like(current)
+
+    def get_full_path_history(self) -> torch.Tensor:
+        """Return the full path-history channel accumulated across every seed group."""
+        if self.img is None:
+            raise ValueError("No neuron data loaded. Call reset() first.")
+        current = self.img.data[-1]
+        if self.accumulated_path_history is None:
+            return current.clone()
+        accumulated = self.accumulated_path_history
+        if (
+            accumulated.shape != current.shape
+            or accumulated.device != current.device
+            or accumulated.dtype != current.dtype
+        ):
+            accumulated = accumulated.to(device=current.device, dtype=current.dtype)
+        return torch.maximum(accumulated, current)
+
+    def _advance_to_next_seed(self) -> None:
+        """Start tracing the next pending seed, optionally clearing the path-history channel."""
+        next_seed = self.pending_seeds.pop(0)
+        if self.clear_path_history_between_seeds:
+            self._reset_path_history_channel()
+        # Branch roots reset per seed so each seed branches independently.
+        self._set_branch_roots([next_seed])
+        self.paths = [[next_seed]]
+        self._group_first_path_pending = True
+        # Redraw the seed marker onto the (possibly cleared) path-history channel.
+        if self.img is not None:
+            self.img.draw_point(
+                next_seed,
+                radius=(self.step_width / 2.35),
+                channel=-1,
+                mode="gaussian",
+                binary=False,
+            )
+
     def _terminate_path(self) -> bool:
         """
         Remove current path and move to next path. Determine if episode should terminate.
@@ -417,6 +500,10 @@ class NeuronTrackingEnvironment:
         finished_path = torch.stack(self.paths.pop(0), dim=0)
         self.finished_paths.append(finished_path)
 
+        # Track whether the just-finished path was the first path of the current seed group.
+        first_path_of_group = self._group_first_path_pending
+        self._group_first_path_pending = False
+
         # Check for max branches
         if len(self.finished_paths) > self.max_paths:
             terminate_episode = True
@@ -425,13 +512,18 @@ class NeuronTrackingEnvironment:
             self.paths.append([finished_path[0]])
             self._append_branch_root(finished_path[0])
         elif len(self.paths) == 0:
-            terminate_episode = True
+            # All branches stemming from the current seed are complete.
+            # Advance to the next seed (optionally clearing path history) if any remain.
+            if len(self.pending_seeds) > 0:
+                self._advance_to_next_seed()
+            else:
+                terminate_episode = True
         if not terminate_episode: # Move to next path
             if self.has_ground_truth:
                 self._init_path()
-            if self.branching and len(self.finished_paths) == 1: # Always create a branch at the start for the first path if branching is enabled
-                self.paths.append([self.finished_paths[0][0]])
-                self._append_branch_root(self.finished_paths[0][0])
+            if self.branching and first_path_of_group: # Always create a branch at the start of each seed group's first path if branching is enabled
+                self.paths.append([finished_path[0]])
+                self._append_branch_root(finished_path[0])
 
         return terminate_episode
 
@@ -702,10 +794,13 @@ class NeuronTrackingEnvironment:
         self.img = None
         self.neuron_mask = None
         self.seeds = []
+        self.pending_seeds = []
         self.paths = []
         self.branch_roots = torch.empty((0, 3), dtype=torch.float32)
         self.neuron_root_ids = set()
         self._zero_state_patch = None
+        self.accumulated_path_history = None
+        self._group_first_path_pending = False
         self.finished_paths = []
         self.terminal_nodes = set() # terminal node IDs for the current path
         self.visited = {}

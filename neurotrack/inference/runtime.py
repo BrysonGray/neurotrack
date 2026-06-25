@@ -1,6 +1,4 @@
 """Shared inference runtime utilities for SAC and deterministic BC policies."""
-
-import json
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
@@ -12,20 +10,6 @@ from neurotrack.data import NeuronPatchDataset
 from neurotrack.environments import NeuronTrackingEnvironment
 from neurotrack.models import ConvNet
 from .tracing import trace_image
-
-
-def _to_serializable(value: Any) -> Any:
-    if isinstance(value, np.ndarray):
-        return value.tolist()
-    if isinstance(value, torch.Tensor):
-        return value.detach().cpu().tolist()
-    if isinstance(value, np.generic):
-        return value.item()
-    if isinstance(value, dict):
-        return {k: _to_serializable(v) for k, v in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_to_serializable(v) for v in value]
-    return value
 
 
 def build_env(params: Dict[str, Any]) -> NeuronTrackingEnvironment:
@@ -57,6 +41,7 @@ def build_env(params: Dict[str, Any]) -> NeuronTrackingEnvironment:
         repeat_starts=params.get("repeat_starts", False),
         start_idx=0,
         inference_mode=True,
+        clear_path_history_between_seeds=params.get("clear_path_history_between_seeds", None),
     )
 
     return env
@@ -99,9 +84,8 @@ def load_models(
 
 def run_inference(params: Dict[str, Any], out_dir: Path | str) -> Dict[str, Any]:
     run_out_dir = Path(out_dir)
-    inference_out_dir = run_out_dir / "tracing_results"
+    reconstruction_out_dir = run_out_dir / "reconstructions"
     run_out_dir.mkdir(parents=True, exist_ok=True)
-    inference_out_dir.mkdir(parents=True, exist_ok=True)
 
     actor, q_net = load_models(params)
     env = build_env(params)
@@ -119,10 +103,10 @@ def run_inference(params: Dict[str, Any], out_dir: Path | str) -> Dict[str, Any]
 
     img_indices = list(range(len(env.dataset.img_files)))
     if sync:
-        processed_stems = {f.stem for f in inference_out_dir.glob("*_trace.json")}
+        processed_stems = {f.stem for f in reconstruction_out_dir.glob("*.swc")}
         img_indices = [
             i for i in img_indices
-            if Path(env.dataset.img_files[i]).stem + "_trace" not in processed_stems
+            if Path(env.dataset.img_files[i]).stem not in processed_stems
         ]
 
     results = []
@@ -145,14 +129,7 @@ def run_inference(params: Dict[str, Any], out_dir: Path | str) -> Dict[str, Any]
         )
         results.append(result)
 
-        # Save per-image result (exclude labeled_neuron — too large for JSON)
-        img_stem = Path(result["neuron_name"]).stem
-        per_image_data = {k: _to_serializable(v) for k, v in result.items() if k != "labeled_neuron"}
-        with open(inference_out_dir / f"{img_stem}_trace.json", "w") as handle:
-            json.dump(per_image_data, handle, indent=2)
-
     return {
         "results": results,
         "run_out_dir": run_out_dir,
-        "tracing_results_dir": inference_out_dir,
     }

@@ -282,7 +282,7 @@ def trace_image(
 
             if info["terminate_episode"]:
                 estimated_returns.append(estimated_return)
-                labeled_neurons.append(env.img.data[-1].detach().clone().cpu())
+                labeled_neurons.append(env.get_full_path_history().detach().clone().cpu())
                 trial_paths.append([path.detach().cpu().numpy().tolist() for path in env.finished_paths if isinstance(path, torch.Tensor) and len(path) > 3])
                 if show:
                     try:

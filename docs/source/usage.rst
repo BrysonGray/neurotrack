@@ -19,8 +19,8 @@ Use package CLI modules from the project root:
 The inference command runs a single workflow and defers behavior to the JSON config:
 
 - Inference always runs.
-- Post-processing runs when ``run_postprocessing`` is true.
-- Evaluation runs when ``swc_dir`` is provided.
+- Post-processing steps run only if their parameters are present in the config (granular per-step control).
+- Evaluation runs when ``swc_dir`` is provided, independent of whether post-processing ran.
 
 simulate_neurons.py
 ^^^^^^^^^^^^^^^^^^^

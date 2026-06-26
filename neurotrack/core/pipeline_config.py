@@ -91,9 +91,16 @@ def _compute_enable_flag_for_step(config: Dict[str, object], raw_config: Dict[st
     elif step_name == "smooth_paths":
         enable_key = "smooth_paths"
         parameter_keys = ["smoothing_window"]
-    elif step_name == "remove_overlapping_paths":
-        enable_key = "remove_overlapping_paths"
-        parameter_keys = ["overlap_threshold", "overlap_distance_threshold", "redundancy_action", "mask_smoothing_size"]
+    elif step_name == "merge_paths":
+        enable_key = "enable_merge"
+        parameter_keys = [
+            "merge_threshold",
+            "confidence_threshold",
+            "mask_smoothing_size",
+            "merge_guard_max_paths",
+            "merge_guard_max_nodes",
+            "merge_timeout_seconds",
+        ]
     else:
         return False  # Unknown step; default to disabled
 
@@ -117,7 +124,7 @@ class PostprocessConfig:
     filenames (or relative paths) and whose values are the x-y pixel size in
     physical units.  When provided, the distance-based parameters
     (``min_branch_length``, ``resampling_step_size``, ``smoothing_window``,
-    ``overlap_distance_threshold``, ``distance_threshold``) are divided by the
+    ``merge_threshold``, ``distance_threshold``) are divided by the
     matching scale before being passed to ``process_results`` / evaluation, so
     that thresholds expressed in physical units are correctly converted to
     voxels.
@@ -127,7 +134,7 @@ class PostprocessConfig:
     filter_branches_by_length: bool = False
     resample: bool = False
     smooth_paths: bool = False
-    remove_overlapping_paths: bool = False
+    merge_paths: bool = False
     # --- branch length filtering ---
     min_branch_length: float = 5.0
     max_branch_length: float = float("inf")
@@ -138,11 +145,13 @@ class PostprocessConfig:
     enable_resample: bool = True
     smoothing_window: int = 5
     enable_smooth_paths: bool = True
-    enable_remove_overlaps: bool = True
-    overlap_threshold: float = 0.5
-    overlap_distance_threshold: float = 1.0
-    redundancy_action: str = "remove" # "remove" | "clip" | "merge"
+    enable_merge: bool = True
+    merge_threshold: float = 1.0
+    confidence_threshold: int = 0  # min input paths supporting a node; <=1 disables
     mask_smoothing_size: int = 0  # binary close/open of the merge overlap mask; <=1 disables
+    merge_guard_max_paths: int = 0  # <=0 disables path-count guard
+    merge_guard_max_nodes: int = 0  # <=0 disables node-count guard
+    merge_timeout_seconds: float = 30.0  # <=0 disables timeout guard
     # --- evaluation ---
     distance_threshold: float = 1.0
     # --- optional per-image scale lookup ---
@@ -174,15 +183,15 @@ class PostprocessConfig:
         )
         resample = _compute_enable_flag_for_step(config, raw_config, "resample")
         smooth_paths = _compute_enable_flag_for_step(config, raw_config, "smooth_paths")
-        remove_overlapping_paths = _compute_enable_flag_for_step(
-            config, raw_config, "remove_overlapping_paths"
+        merge_paths = _compute_enable_flag_for_step(
+            config, raw_config, "merge_paths"
         )
 
         return cls(
             filter_branches_by_length=filter_branches_by_length,
             resample=resample,
             smooth_paths=smooth_paths,
-            remove_overlapping_paths=remove_overlapping_paths,
+            merge_paths=merge_paths,
             min_branch_length=float(config.get("min_branch_length", 5.0)),
             max_branch_length=float(config.get("max_branch_length", float("inf"))),
             resampling_step_size=float(config.get("resampling_step_size", 4.0)),
@@ -190,11 +199,13 @@ class PostprocessConfig:
             enable_resample=bool(config.get("enable_resample", resample)),
             smoothing_window=int(config.get("smoothing_window", 5)),
             enable_smooth_paths=bool(config.get("enable_smooth_paths", smooth_paths)),
-            enable_remove_overlaps=bool(config.get("enable_remove_overlaps", remove_overlapping_paths)),
-            overlap_threshold=float(config.get("overlap_threshold", 0.5)),
-            overlap_distance_threshold=float(config.get("overlap_distance_threshold", 1.0)),
-            redundancy_action=str(config.get("redundancy_action", "remove")),
+            enable_merge=bool(config.get("enable_merge", merge_paths)),
+            merge_threshold=float(config.get("merge_threshold", 1.0)),
+            confidence_threshold=int(config.get("confidence_threshold", 0)),
             mask_smoothing_size=int(config.get("mask_smoothing_size", 0)),
+            merge_guard_max_paths=int(config.get("merge_guard_max_paths", 0)),
+            merge_guard_max_nodes=int(config.get("merge_guard_max_nodes", 0)),
+            merge_timeout_seconds=float(config.get("merge_timeout_seconds", 30.0)),
             distance_threshold=float(eval_distance_threshold),
             scales_path=config.get("scales_path", None),
         )
@@ -209,11 +220,13 @@ class PostprocessConfig:
             "resampling_step_size": self.resampling_step_size,
             "enable_smooth_paths": self.enable_smooth_paths,
             "smoothing_window": self.smoothing_window,
-            "enable_remove_overlaps": self.enable_remove_overlaps,
-            "overlap_threshold": self.overlap_threshold,
-            "overlap_distance_threshold": self.overlap_distance_threshold,
-            "redundancy_action": self.redundancy_action,
+            "enable_merge": self.enable_merge,
+            "merge_threshold": self.merge_threshold,
+            "confidence_threshold": self.confidence_threshold,
             "mask_smoothing_size": self.mask_smoothing_size,
+            "merge_guard_max_paths": self.merge_guard_max_paths,
+            "merge_guard_max_nodes": self.merge_guard_max_nodes,
+            "merge_timeout_seconds": self.merge_timeout_seconds,
         }
 
     def _load_scales(self) -> Dict[str, float]:
@@ -257,7 +270,6 @@ class PostprocessConfig:
         """Return ``to_dict()`` with distance-based params divided by the image scale.
 
         ``smoothing_window`` stays as an ``int`` (rounded after division).
-        ``overlap_threshold`` is a ratio and is therefore *not* scaled.
         """
         scale = self.get_scale_for_image(image_key)
         if scale == 1.0:
@@ -273,11 +285,13 @@ class PostprocessConfig:
             "resampling_step_size": self.resampling_step_size,
             "enable_smooth_paths": self.enable_smooth_paths,
             "smoothing_window": max(1, round(self.smoothing_window)),
-            "enable_remove_overlaps": self.enable_remove_overlaps,
-            "overlap_threshold": self.overlap_threshold,
-            "overlap_distance_threshold": self.overlap_distance_threshold / scale,
-            "redundancy_action": self.redundancy_action,
+            "enable_merge": self.enable_merge,
+            "merge_threshold": self.merge_threshold / scale,
+            "confidence_threshold": self.confidence_threshold,
             "mask_smoothing_size": self.mask_smoothing_size,
+            "merge_guard_max_paths": self.merge_guard_max_paths,
+            "merge_guard_max_nodes": self.merge_guard_max_nodes,
+            "merge_timeout_seconds": self.merge_timeout_seconds,
         }
 
 

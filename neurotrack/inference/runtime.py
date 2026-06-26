@@ -102,6 +102,11 @@ def run_inference(params: Dict[str, Any], out_dir: Path | str) -> Dict[str, Any]
     sync = bool(params.get("sync", False))
     terminal_target_norm_threshold = float(params.get("terminal_target_norm_threshold", params.get("stall_threshold", 1.0)))
     false_stop_distance_threshold = float(params.get("false_stop_distance_threshold", terminal_target_norm_threshold))
+    retry_on_no_long_paths = bool(params.get("retry_on_no_long_paths", True))
+    retry_initial_radius = float(params.get("retry_initial_radius", 5.0))
+    retry_radius_step = float(params.get("retry_radius_step", 5.0))
+    retry_max_radius = float(params.get("retry_max_radius", 50.0))
+    retry_attempts_per_radius = int(params.get("retry_attempts_per_radius", 50))
 
     img_indices = list(range(len(env.dataset.img_files)))
     if sync:
@@ -128,6 +133,11 @@ def run_inference(params: Dict[str, Any], out_dir: Path | str) -> Dict[str, Any]
             return_stats=return_stats,
             terminal_target_norm_threshold=terminal_target_norm_threshold,
             false_stop_distance_threshold=false_stop_distance_threshold,
+            retry_on_no_long_paths=retry_on_no_long_paths,
+            retry_initial_radius=retry_initial_radius,
+            retry_radius_step=retry_radius_step,
+            retry_max_radius=retry_max_radius,
+            retry_attempts_per_radius=retry_attempts_per_radius,
         )
         results.append(result)
 

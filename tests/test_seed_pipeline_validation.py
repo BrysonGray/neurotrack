@@ -461,6 +461,49 @@ class SeedPipelineValidationTests(unittest.TestCase):
                 torch.tensor([6.0, 5.0, 4.0], dtype=torch.float32),
             )
 
+    def test_seed_jitter_order_is_originals_then_round_robin_cycles(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            img_dir = root / "images"
+            img_dir.mkdir()
+
+            _write_volume(img_dir / "sample.tif", shape=(40, 40, 40))
+            seed_rows = [[10.0, 11.0, 12.0], [20.0, 21.0, 22.0]]
+            jitter_count = 2
+            jitter_radius = 5.0
+
+            dataset = NeuronPatchDataset(
+                swc_dir=None,
+                img_dir=img_dir,
+                step_width=4.0,
+                crop_patches=False,
+                inference_mode=True,
+                seed_points_by_image={"sample.tif": seed_rows},
+                seed_jitter_count=jitter_count,
+                seed_jitter_radius=jitter_radius,
+                rng=np.random.default_rng(0),
+            )
+
+            sample_a = dataset[0]
+            sample_b = dataset[0]
+            seeds = sample_a["seed_points"]
+
+            expected_n = len(seed_rows) * (1 + jitter_count)
+            self.assertEqual(tuple(seeds.shape), (expected_n, 3))
+            self.assertTrue(torch.equal(sample_a["seed_points"], sample_b["seed_points"]))
+
+            originals = torch.tensor(seed_rows, dtype=torch.float32)
+            torch.testing.assert_close(seeds[: len(seed_rows)], originals)
+
+            # Cycle-wise order: [orig1, orig2, j1(orig1), j1(orig2), j2(orig1), j2(orig2)]
+            for cycle in range(jitter_count):
+                cycle_start = len(seed_rows) + cycle * len(seed_rows)
+                for seed_idx in range(len(seed_rows)):
+                    jitter_seed = seeds[cycle_start + seed_idx]
+                    base_seed = originals[seed_idx]
+                    dist = torch.linalg.vector_norm(jitter_seed - base_seed)
+                    self.assertLessEqual(float(dist.item()), jitter_radius + 1e-4)
+
     def test_inference_runtime_uses_external_seeds_json(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)

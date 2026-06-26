@@ -66,6 +66,11 @@ def trace_image(
     initial_path_mask=None,
     terminal_target_norm_threshold: float = 1.0,
     false_stop_distance_threshold: Optional[float] = None,
+    retry_on_no_long_paths: bool = True,
+    retry_initial_radius: float = 5.0,
+    retry_radius_step: float = 5.0,
+    retry_max_radius: float = 50.0,
+    retry_attempts_per_radius: int = 50,
 ):
     """
     Trace a single neuron image using the given actor.
@@ -102,6 +107,17 @@ def trace_image(
     false_stop_distance_threshold : float, optional
         A choose_stop event is counted as false-stop when current target distance exceeds this value.
         Defaults to ``terminal_target_norm_threshold`` when not provided.
+    retry_on_no_long_paths : bool, optional
+        If True, when a trial terminates with no long paths, automatically retry
+        from jittered seed points using an expanding-radius schedule.
+    retry_initial_radius : float, optional
+        Initial jitter radius for retry starts.
+    retry_radius_step : float, optional
+        Radius increment between retry bands.
+    retry_max_radius : float, optional
+        Maximum jitter radius for retries.
+    retry_attempts_per_radius : int, optional
+        Number of retry starts to attempt per radius band.
 
     Returns
     -------
@@ -126,6 +142,14 @@ def trace_image(
         false_stop_distance_threshold = terminal_target_norm_threshold
     if false_stop_distance_threshold < 0.0:
         raise ValueError("false_stop_distance_threshold must be non-negative")
+    if retry_initial_radius <= 0.0:
+        raise ValueError("retry_initial_radius must be > 0")
+    if retry_radius_step <= 0.0:
+        raise ValueError("retry_radius_step must be > 0")
+    if retry_max_radius < retry_initial_radius:
+        raise ValueError("retry_max_radius must be >= retry_initial_radius")
+    if retry_attempts_per_radius < 1:
+        raise ValueError("retry_attempts_per_radius must be at least 1")
 
     if show:
         fig, ax = plt.subplots(2, 3, figsize=(15, 10))
@@ -191,6 +215,77 @@ def trace_image(
 
     _apply_initial_path_mask_if_provided()
     timing_ms["reset_and_mask"] = (time.perf_counter() - reset_start) * 1000.0
+
+    # Preserve the original seed pool for retry jitter starts.
+    base_retry_seeds = torch.as_tensor(env.seeds, dtype=torch.float32).detach().cpu().view(-1, 3)
+    seed_jitter_count = int(getattr(env.dataset, "seed_jitter_count", 0))
+    if seed_jitter_count > 0 and base_retry_seeds.shape[0] % (seed_jitter_count + 1) == 0:
+        n_original_retry_seeds = base_retry_seeds.shape[0] // (seed_jitter_count + 1)
+    else:
+        n_original_retry_seeds = base_retry_seeds.shape[0]
+    original_retry_seeds = base_retry_seeds[:n_original_retry_seeds]
+    retry_rng = np.random.default_rng(int(dataset_idx) + 9973)
+
+    long_path_min_points = int(getattr(env, "min_path_steps", 3)) + 1
+
+    def _set_single_seed_start(seed_zyx: torch.Tensor) -> None:
+        """Override environment to trace from one seed with no pending seeds."""
+        seed_t = torch.as_tensor(seed_zyx, dtype=torch.float32).detach().cpu().view(3)
+        env.seeds = seed_t.unsqueeze(0)
+        env.pending_seeds = []
+        env.paths = [[seed_t]]
+        if hasattr(env, "_set_branch_roots"):
+            env._set_branch_roots([seed_t])
+        if hasattr(env, "_group_first_path_pending"):
+            env._group_first_path_pending = True
+        if getattr(env, "has_ground_truth", False):
+            env._init_path()
+
+        if env.img is not None:
+            env.img.data[-1] = torch.zeros_like(env.img.data[-1])
+            env.img.draw_point(
+                env.paths[0][-1],
+                radius=(env.step_width / 2.35),
+                channel=-1,
+                mode="gaussian",
+                binary=False,
+            )
+
+    def _sample_jittered_seed_around(base_seed: torch.Tensor, radius: float) -> torch.Tensor:
+        """Sample one jittered seed around a specific base seed at the requested radius."""
+        base_seed = torch.as_tensor(base_seed, dtype=torch.float32).detach().cpu().view(3)
+
+        direction = retry_rng.normal(size=(3,))
+        norm = float(np.linalg.norm(direction))
+        if norm == 0.0:
+            direction = np.array([1.0, 0.0, 0.0], dtype=np.float32)
+        else:
+            direction = direction / norm
+        sampled_radius = radius * float(np.cbrt(retry_rng.random()))
+        offset = torch.as_tensor(direction * sampled_radius, dtype=torch.float32)
+
+        max_coords = torch.as_tensor(
+            [float(env.img.data.shape[-3 + i] - 1) for i in range(3)],
+            dtype=torch.float32,
+        )
+        min_coords = torch.zeros(3, dtype=torch.float32)
+        return torch.clamp(base_seed + offset, min=min_coords, max=max_coords)
+
+    def _extract_long_paths_and_seed_success() -> tuple[list[list[list[float]]], list[bool]]:
+        """Collect long paths and track which original seeds produced at least one long path."""
+        long_paths = []
+        seed_success = [False] * int(original_retry_seeds.shape[0])
+        for path in env.finished_paths:
+            if not isinstance(path, torch.Tensor) or len(path) <= long_path_min_points:
+                continue
+            long_paths.append(path.detach().cpu().numpy().tolist())
+            if original_retry_seeds.shape[0] == 0:
+                continue
+            root = path[0].detach().cpu().view(1, 3)
+            dists2 = torch.sum((original_retry_seeds - root) ** 2, dim=1)
+            closest_seed_idx = int(torch.argmin(dists2).item())
+            seed_success[closest_seed_idx] = True
+        return long_paths, seed_success
 
     estimated_returns = []
     labeled_neurons = []
@@ -281,9 +376,118 @@ def trace_image(
                     pass
 
             if info["terminate_episode"]:
+                current_long_paths, seed_has_long_path = _extract_long_paths_and_seed_success()
+                combined_labeled_neuron = env.get_full_path_history().detach().clone().cpu()
+
+                # Automatic retries are evaluated per original seed.
+                if retry_on_no_long_paths and original_retry_seeds.shape[0] > 0:
+                    for original_seed_idx, original_seed in enumerate(original_retry_seeds):
+                        if seed_has_long_path[original_seed_idx]:
+                            continue
+
+                        radius = float(retry_initial_radius)
+                        recovered_for_seed = False
+                        while radius <= float(retry_max_radius) + 1e-9 and not recovered_for_seed:
+                            for _ in range(int(retry_attempts_per_radius)):
+                                if cancel_event is not None and cancel_event.is_set():
+                                    raise RuntimeError("Trace cancelled.")
+
+                                reset_retry_start = time.perf_counter()
+                                env.reset(move_to_next=False)
+                                _apply_initial_path_mask_if_provided()
+                                _set_single_seed_start(_sample_jittered_seed_around(original_seed, radius))
+                                timing_ms["reset_and_mask"] += (time.perf_counter() - reset_retry_start) * 1000.0
+
+                                retry_state_start = time.perf_counter()
+                                obs = env.get_state()
+                                timing_ms["get_state"] += (time.perf_counter() - retry_state_start) * 1000.0
+
+                                for _retry_t in count():
+                                    if cancel_event is not None and cancel_event.is_set():
+                                        raise RuntimeError("Trace cancelled.")
+
+                                    with torch.no_grad():
+                                        actor_start = time.perf_counter()
+                                        obs_on_device = prepare_observation_for_model(obs, device=DEVICE, model_dtype=torch.float32)
+                                        actor_out = actor(obs_on_device)
+                                        timing_ms["actor_forward"] += (time.perf_counter() - actor_start) * 1000.0
+
+                                        sample_start = time.perf_counter()
+                                        action, action_variance = _select_action_from_actor_output(
+                                            actor_out,
+                                            policy_output_mode=policy_output_mode,
+                                            stochastic=stochastic,
+                                        )
+                                        if action_variance is not None:
+                                            variance.append(action_variance)
+                                        action_norm = float(action.norm().detach().cpu())
+                                        step_magnitudes.append(action_norm)
+                                        timing_ms["sample_action"] += (time.perf_counter() - sample_start) * 1000.0
+
+                                    step_start = time.perf_counter()
+                                    action_cpu = action.detach().cpu()
+                                    next_obs, reward, terminated, truncated, info = env.step(action_cpu)
+                                    timing_ms["env_step"] += (time.perf_counter() - step_start) * 1000.0
+                                    timing_ms["steps"] += 1
+
+                                    current_target_distance = _min_target_norm(info.get("current_target_vectors"))
+                                    if current_target_distance is not None:
+                                        if current_target_distance <= terminal_target_norm_threshold:
+                                            terminal_state_action_norms.append(action_norm)
+                                        else:
+                                            nonterminal_state_action_norms.append(action_norm)
+
+                                    if info.get("status") == "choose_stop":
+                                        choose_stop_count += 1
+                                        if current_target_distance is not None:
+                                            choose_stop_with_target_count += 1
+                                            choose_stop_target_distances.append(current_target_distance)
+                                            if current_target_distance > false_stop_distance_threshold:
+                                                false_choose_stop_count += 1
+
+                                    if Q_net is not None:
+                                        q_start = time.perf_counter()
+                                        action_on_device = action if action.device == DEVICE else action.to(device=DEVICE, non_blocking=True)
+                                        action_channels = action_on_device.view(1, 3, 1, 1, 1).expand(
+                                            obs_on_device.shape[0],
+                                            3,
+                                            obs_on_device.shape[2],
+                                            obs_on_device.shape[3],
+                                            obs_on_device.shape[4],
+                                        )
+                                        current_state = torch.cat((obs_on_device, action_channels), dim=1)
+                                        q_val = Q_net(current_state)[:, 0]
+                                        estimated_return += q_val.cpu().item()
+                                        timing_ms["q_eval"] += (time.perf_counter() - q_start) * 1000.0
+
+                                    if info["terminate_episode"]:
+                                        retry_long_paths = [
+                                            path.detach().cpu().numpy().tolist()
+                                            for path in env.finished_paths
+                                            if isinstance(path, torch.Tensor) and len(path) > long_path_min_points
+                                        ]
+                                        if len(retry_long_paths) > 0:
+                                            current_long_paths.extend(retry_long_paths)
+                                            combined_labeled_neuron = torch.maximum(
+                                                combined_labeled_neuron,
+                                                env.get_full_path_history().detach().clone().cpu(),
+                                            )
+                                            seed_has_long_path[original_seed_idx] = True
+                                            recovered_for_seed = True
+                                        break
+
+                                    state_start = time.perf_counter()
+                                    obs = env.get_state()
+                                    timing_ms["get_state"] += (time.perf_counter() - state_start) * 1000.0
+
+                                if recovered_for_seed:
+                                    break
+
+                            radius += float(retry_radius_step)
+
                 estimated_returns.append(estimated_return)
-                labeled_neurons.append(env.get_full_path_history().detach().clone().cpu())
-                trial_paths.append([path.detach().cpu().numpy().tolist() for path in env.finished_paths if isinstance(path, torch.Tensor) and len(path) > 3])
+                labeled_neurons.append(combined_labeled_neuron)
+                trial_paths.append(current_long_paths)
                 if show:
                     try:
                         shell = get_ipython().__class__.__name__  # type: ignore  # noqa: F821

@@ -35,8 +35,7 @@ _INFERENCE_PIPELINE_DEFAULTS: Dict[str, Any] = {
     "min_branch_length": 5.0,
     "resampling_step_size": 4.0,
     "smoothing_window": 5,
-    "overlap_threshold": 0.5,
-    "overlap_distance_threshold": 5.0,
+    "merge_threshold": 5.0,
     "eval_distance_threshold": None,
     "distance_threshold": 5.0,
     "scales_path": None,
@@ -91,7 +90,7 @@ class InferenceEvaluationPipeline:
             postprocess_config.filter_branches_by_length
             or postprocess_config.resample
             or postprocess_config.smooth_paths
-            or postprocess_config.remove_overlapping_paths
+            or postprocess_config.merge_paths
         )
 
         # Priority: caller kwarg > explicit JSON flag > infer from swc_dir.

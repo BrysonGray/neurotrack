@@ -212,8 +212,12 @@ class NeuronPatchDataset(TorchDataset):
     ) -> torch.Tensor:
         """Add ``seed_jitter_count`` randomized seeds within ``seed_jitter_radius`` of each seed.
 
-        The configured seeds are preserved; each is followed by its jittered
-        copies. Jittered points are sampled uniformly inside a sphere of radius
+        Ordering is:
+        1) all original configured seeds (in input order), then
+        2) ``seed_jitter_count`` jitter cycles, where each cycle appends one
+           jittered seed for every original seed in order.
+
+        Jittered points are sampled uniformly inside a sphere of radius
         ``seed_jitter_radius`` and clamped to valid image coordinates. Sampling
         is driven by ``rng`` so output is deterministic per dataset index.
         """
@@ -221,25 +225,31 @@ class NeuronPatchDataset(TorchDataset):
             return seeds_zyx
 
         max_coords = torch.as_tensor(
-            [float(dim) - 1.0 for dim in spatial_shape_zyx], dtype=torch.float32
+            [float(dim) - 1.0 for dim in spatial_shape_zyx],
+            dtype=torch.float32,
+            device=seeds_zyx.device,
         )
-        augmented: List[torch.Tensor] = []
-        for seed in seeds_zyx:
-            augmented.append(seed.unsqueeze(0))
-            # Uniform sampling inside a ball: random direction * radius * U^(1/3).
-            directions = rng.normal(size=(self.seed_jitter_count, 3))
-            norms = np.linalg.norm(directions, axis=1, keepdims=True)
-            norms[norms == 0.0] = 1.0
-            directions = directions / norms
-            radii = self.seed_jitter_radius * np.cbrt(
-                rng.random(size=(self.seed_jitter_count, 1))
-            )
-            offsets = torch.as_tensor(directions * radii, dtype=torch.float32)
-            jittered = seed.unsqueeze(0) + offsets
-            jittered = torch.clamp(jittered, min=torch.zeros(3), max=max_coords)
-            augmented.append(jittered)
+        min_coords = torch.zeros(3, dtype=torch.float32, device=seeds_zyx.device)
 
-        return torch.cat(augmented, dim=0)
+        augmented_chunks: List[torch.Tensor] = [seeds_zyx]
+        for _ in range(self.seed_jitter_count):
+            cycle_rows: List[torch.Tensor] = []
+            for seed in seeds_zyx:
+                # Uniform sampling inside a ball: random direction * radius * U^(1/3).
+                direction = rng.normal(size=(3,))
+                norm = float(np.linalg.norm(direction))
+                if norm == 0.0:
+                    direction = np.array([1.0, 0.0, 0.0], dtype=np.float32)
+                else:
+                    direction = direction / norm
+                radius = self.seed_jitter_radius * float(np.cbrt(rng.random()))
+                offset = torch.as_tensor(direction * radius, dtype=torch.float32, device=seeds_zyx.device)
+                jittered = torch.clamp(seed + offset, min=min_coords, max=max_coords)
+                cycle_rows.append(jittered.unsqueeze(0))
+
+            augmented_chunks.append(torch.cat(cycle_rows, dim=0))
+
+        return torch.cat(augmented_chunks, dim=0)
 
     @staticmethod
     def _get_root_seed_points_from_swc(swc_data: List) -> Optional[torch.Tensor]:

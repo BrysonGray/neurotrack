@@ -125,11 +125,13 @@ class _OrthoViewDialog:
         postprocess_resampling_step_size: float = 4.0,
         postprocess_enable_smooth_paths: bool = True,
         postprocess_smoothing_window: int = 5,
-        postprocess_enable_remove_overlaps: bool = True,
-        postprocess_overlap_threshold: float = 0.5,
-        postprocess_overlap_distance_threshold: float = 1.0,
-        postprocess_redundancy_action: str = "remove",
+        postprocess_enable_merge: bool = True,
+        postprocess_merge_threshold: float = 1.0,
+        postprocess_confidence_threshold: int = 0,
         postprocess_mask_smoothing_size: int = 0,
+        postprocess_merge_guard_max_paths: int = 0,
+        postprocess_merge_guard_max_nodes: int = 0,
+        postprocess_merge_timeout_seconds: float = 30.0,
         on_select_postprocess_output_dir: Optional[Callable[[], Optional[str]]] = None,
         on_clear_postprocess_output_dir: Optional[Callable[[], Optional[str]]] = None,
         on_postprocess_params_changed: Optional[Callable[[Dict[str, object]], None]] = None,
@@ -483,27 +485,30 @@ class _OrthoViewDialog:
             self._pp_smoothing_window_spin = _qt_w.QSpinBox()
             self._pp_smoothing_window_spin.setRange(1, 100)
             self._pp_smoothing_window_spin.setValue(postprocess_smoothing_window)
-            self._pp_enable_remove_overlaps_check = _qt_w.QCheckBox("Remove overlapping paths")
-            self._pp_enable_remove_overlaps_check.setChecked(postprocess_enable_remove_overlaps)
-            self._pp_overlap_threshold_spin = _qt_w.QDoubleSpinBox()
-            self._pp_overlap_threshold_spin.setRange(0.0, 1.0)
-            self._pp_overlap_threshold_spin.setSingleStep(0.05)
-            self._pp_overlap_threshold_spin.setDecimals(3)
-            self._pp_overlap_threshold_spin.setValue(postprocess_overlap_threshold)
+            self._pp_enable_merge_check = _qt_w.QCheckBox("Merge overlapping paths")
+            self._pp_enable_merge_check.setChecked(postprocess_enable_merge)
             self._pp_overlap_dist_threshold_spin = _qt_w.QDoubleSpinBox()
             self._pp_overlap_dist_threshold_spin.setRange(0.0, 100.0)
             self._pp_overlap_dist_threshold_spin.setSingleStep(0.1)
             self._pp_overlap_dist_threshold_spin.setDecimals(2)
-            self._pp_overlap_dist_threshold_spin.setValue(postprocess_overlap_distance_threshold)
-            self._pp_redundancy_action_combo = _qt_w.QComboBox()
-            self._pp_redundancy_action_combo.addItems(["remove", "clip", "merge"])
-            _ra = str(postprocess_redundancy_action).lower()
-            _ra_idx = self._pp_redundancy_action_combo.findText(_ra)
-            if _ra_idx >= 0:
-                self._pp_redundancy_action_combo.setCurrentIndex(_ra_idx)
+            self._pp_overlap_dist_threshold_spin.setValue(postprocess_merge_threshold)
+            self._pp_confidence_threshold_spin = _qt_w.QSpinBox()
+            self._pp_confidence_threshold_spin.setRange(0, 1000)
+            self._pp_confidence_threshold_spin.setValue(int(postprocess_confidence_threshold))
             self._pp_mask_smoothing_size_spin = _qt_w.QSpinBox()
             self._pp_mask_smoothing_size_spin.setRange(0, 100)
             self._pp_mask_smoothing_size_spin.setValue(int(postprocess_mask_smoothing_size))
+            self._pp_merge_guard_max_paths_spin = _qt_w.QSpinBox()
+            self._pp_merge_guard_max_paths_spin.setRange(0, 1000000)
+            self._pp_merge_guard_max_paths_spin.setValue(int(postprocess_merge_guard_max_paths))
+            self._pp_merge_guard_max_nodes_spin = _qt_w.QSpinBox()
+            self._pp_merge_guard_max_nodes_spin.setRange(0, 10000000)
+            self._pp_merge_guard_max_nodes_spin.setValue(int(postprocess_merge_guard_max_nodes))
+            self._pp_merge_timeout_seconds_spin = _qt_w.QDoubleSpinBox()
+            self._pp_merge_timeout_seconds_spin.setRange(0.0, 3600.0)
+            self._pp_merge_timeout_seconds_spin.setSingleStep(1.0)
+            self._pp_merge_timeout_seconds_spin.setDecimals(1)
+            self._pp_merge_timeout_seconds_spin.setValue(float(postprocess_merge_timeout_seconds))
             # Postprocess/eval path widgets (always created in seed mode)
             self.btn_set_gt_swc = QPushButton("Set GT SWC Dir")
             self.btn_clear_gt_swc = QPushButton("Unset GT SWC Dir")
@@ -829,15 +834,19 @@ class _OrthoViewDialog:
             _pp_lay.addWidget(self._pp_enable_smooth_paths_check)
             _pp_lay.addWidget(QLabel("Smoothing Window:"))
             _pp_lay.addWidget(self._pp_smoothing_window_spin)
-            _pp_lay.addWidget(self._pp_enable_remove_overlaps_check)
-            _pp_lay.addWidget(QLabel("Overlap Threshold:"))
-            _pp_lay.addWidget(self._pp_overlap_threshold_spin)
-            _pp_lay.addWidget(QLabel("Overlap Distance Threshold:"))
+            _pp_lay.addWidget(self._pp_enable_merge_check)
+            _pp_lay.addWidget(QLabel("Merge Threshold:"))
             _pp_lay.addWidget(self._pp_overlap_dist_threshold_spin)
-            _pp_lay.addWidget(QLabel("Redundancy Action:"))
-            _pp_lay.addWidget(self._pp_redundancy_action_combo)
-            _pp_lay.addWidget(QLabel("Mask Smoothing Size (merge):"))
+            _pp_lay.addWidget(QLabel("Confidence Threshold:"))
+            _pp_lay.addWidget(self._pp_confidence_threshold_spin)
+            _pp_lay.addWidget(QLabel("Mask Smoothing Size:"))
             _pp_lay.addWidget(self._pp_mask_smoothing_size_spin)
+            _pp_lay.addWidget(QLabel("Merge Guard Max Paths (0=off):"))
+            _pp_lay.addWidget(self._pp_merge_guard_max_paths_spin)
+            _pp_lay.addWidget(QLabel("Merge Guard Max Nodes (0=off):"))
+            _pp_lay.addWidget(self._pp_merge_guard_max_nodes_spin)
+            _pp_lay.addWidget(QLabel("Merge Timeout Seconds (0=off):"))
+            _pp_lay.addWidget(self._pp_merge_timeout_seconds_spin)
             _pp_lay.addWidget(self._sidebar_separator())
             _pp_lay.addWidget(QLabel("Scales JSON (optional):"))
             _pp_lay.addWidget(self.scales_path_value_label)
@@ -1040,12 +1049,14 @@ class _OrthoViewDialog:
             self._pp_smoothing_window_spin.valueChanged.connect(self._on_postprocess_params_changed_slot)
             self._pp_enable_smooth_paths_check.toggled.connect(self._on_postprocess_params_changed_slot)
             self._pp_enable_smooth_paths_check.toggled.connect(self._update_postprocess_step_controls)
-            self._pp_overlap_threshold_spin.valueChanged.connect(self._on_postprocess_params_changed_slot)
             self._pp_overlap_dist_threshold_spin.valueChanged.connect(self._on_postprocess_params_changed_slot)
-            self._pp_enable_remove_overlaps_check.toggled.connect(self._on_postprocess_params_changed_slot)
-            self._pp_enable_remove_overlaps_check.toggled.connect(self._update_postprocess_step_controls)
-            self._pp_redundancy_action_combo.currentIndexChanged.connect(self._on_postprocess_params_changed_slot)
+            self._pp_confidence_threshold_spin.valueChanged.connect(self._on_postprocess_params_changed_slot)
+            self._pp_enable_merge_check.toggled.connect(self._on_postprocess_params_changed_slot)
+            self._pp_enable_merge_check.toggled.connect(self._update_postprocess_step_controls)
             self._pp_mask_smoothing_size_spin.valueChanged.connect(self._on_postprocess_params_changed_slot)
+            self._pp_merge_guard_max_paths_spin.valueChanged.connect(self._on_postprocess_params_changed_slot)
+            self._pp_merge_guard_max_nodes_spin.valueChanged.connect(self._on_postprocess_params_changed_slot)
+            self._pp_merge_timeout_seconds_spin.valueChanged.connect(self._on_postprocess_params_changed_slot)
             self.btn_set_eval_output.clicked.connect(self._select_eval_output_dir)
             self.btn_clear_eval_output.clicked.connect(self._clear_eval_output_dir)
             self._eval_distance_threshold_spin.valueChanged.connect(self._on_eval_params_changed_slot)
@@ -1931,14 +1942,41 @@ class _OrthoViewDialog:
         self._redraw()
 
     def _run_postprocess(self):
+        # Ensure in-progress edits in spin boxes are committed before reading
+        # values, then push a fresh override snapshot to the pipeline manager.
+        self._commit_postprocess_editor_values()
+        self._on_postprocess_params_changed_slot()
         if self._on_run_postprocess is None:
             return
         self._on_run_postprocess()
 
     def _run_postprocess_all(self):
+        # Keep "Post-Process All" consistent with the currently visible UI
+        # values, even if the user has not left an edited field yet.
+        self._commit_postprocess_editor_values()
+        self._on_postprocess_params_changed_slot()
         if self._on_run_postprocess_all is None:
             return
         self._on_run_postprocess_all()
+
+    def _commit_postprocess_editor_values(self):
+        """Force-commit any in-progress text edits in postprocess spin boxes."""
+        spinboxes = [
+            "_pp_min_branch_length_spin",
+            "_pp_max_branch_length_spin",
+            "_pp_resampling_step_size_spin",
+            "_pp_smoothing_window_spin",
+            "_pp_overlap_dist_threshold_spin",
+            "_pp_confidence_threshold_spin",
+            "_pp_mask_smoothing_size_spin",
+            "_pp_merge_guard_max_paths_spin",
+            "_pp_merge_guard_max_nodes_spin",
+            "_pp_merge_timeout_seconds_spin",
+        ]
+        for name in spinboxes:
+            widget = getattr(self, name, None)
+            if widget is not None and hasattr(widget, "interpretText"):
+                widget.interpretText()
 
     def _undo_postprocess(self):
         if self._on_undo_postprocess is None:
@@ -2145,11 +2183,13 @@ class _OrthoViewDialog:
             "resampling_step_size": float(self._pp_resampling_step_size_spin.value()),
             "enable_smooth_paths": bool(self._pp_enable_smooth_paths_check.isChecked()),
             "smoothing_window": int(self._pp_smoothing_window_spin.value()),
-            "enable_remove_overlaps": bool(self._pp_enable_remove_overlaps_check.isChecked()),
-            "overlap_threshold": float(self._pp_overlap_threshold_spin.value()),
-            "overlap_distance_threshold": float(self._pp_overlap_dist_threshold_spin.value()),
-            "redundancy_action": str(self._pp_redundancy_action_combo.currentText()),
+            "enable_merge": bool(self._pp_enable_merge_check.isChecked()),
+            "merge_threshold": float(self._pp_overlap_dist_threshold_spin.value()),
+            "confidence_threshold": int(self._pp_confidence_threshold_spin.value()),
             "mask_smoothing_size": int(self._pp_mask_smoothing_size_spin.value()),
+            "merge_guard_max_paths": int(self._pp_merge_guard_max_paths_spin.value()),
+            "merge_guard_max_nodes": int(self._pp_merge_guard_max_nodes_spin.value()),
+            "merge_timeout_seconds": float(self._pp_merge_timeout_seconds_spin.value()),
         }
 
     def _update_postprocess_step_controls(self, *_args):
@@ -2159,11 +2199,13 @@ class _OrthoViewDialog:
         self._pp_max_branch_length_spin.setEnabled(bool(self._pp_enable_length_filter_check.isChecked()))
         self._pp_resampling_step_size_spin.setEnabled(bool(self._pp_enable_resample_check.isChecked()))
         self._pp_smoothing_window_spin.setEnabled(bool(self._pp_enable_smooth_paths_check.isChecked()))
-        remove_overlaps_enabled = bool(self._pp_enable_remove_overlaps_check.isChecked())
-        self._pp_overlap_threshold_spin.setEnabled(remove_overlaps_enabled)
-        self._pp_overlap_dist_threshold_spin.setEnabled(remove_overlaps_enabled)
-        self._pp_redundancy_action_combo.setEnabled(remove_overlaps_enabled)
-        self._pp_mask_smoothing_size_spin.setEnabled(remove_overlaps_enabled)
+        merge_enabled = bool(self._pp_enable_merge_check.isChecked())
+        self._pp_overlap_dist_threshold_spin.setEnabled(merge_enabled)
+        self._pp_confidence_threshold_spin.setEnabled(merge_enabled)
+        self._pp_mask_smoothing_size_spin.setEnabled(merge_enabled)
+        self._pp_merge_guard_max_paths_spin.setEnabled(merge_enabled)
+        self._pp_merge_guard_max_nodes_spin.setEnabled(merge_enabled)
+        self._pp_merge_timeout_seconds_spin.setEnabled(merge_enabled)
 
     def get_eval_params_overrides(self) -> Dict[str, object]:
         """Return the current evaluation parameter values from the config panel."""
@@ -3189,11 +3231,13 @@ def interactive_seed_selection_session(
     postprocess_resampling_step_size: float = 4.0,
     postprocess_enable_smooth_paths: bool = True,
     postprocess_smoothing_window: int = 5,
-    postprocess_enable_remove_overlaps: bool = True,
-    postprocess_overlap_threshold: float = 0.5,
-    postprocess_overlap_distance_threshold: float = 1.0,
-    postprocess_redundancy_action: str = "remove",
+    postprocess_enable_merge: bool = True,
+    postprocess_merge_threshold: float = 1.0,
+    postprocess_confidence_threshold: int = 0,
     postprocess_mask_smoothing_size: int = 0,
+    postprocess_merge_guard_max_paths: int = 0,
+    postprocess_merge_guard_max_nodes: int = 0,
+    postprocess_merge_timeout_seconds: float = 30.0,
     on_select_postprocess_output_dir: Optional[Callable[[], Optional[str]]] = None,
     on_clear_postprocess_output_dir: Optional[Callable[[], Optional[str]]] = None,
     on_postprocess_params_changed: Optional[Callable[[Dict[str, object]], None]] = None,
@@ -3291,11 +3335,13 @@ def interactive_seed_selection_session(
         postprocess_resampling_step_size=postprocess_resampling_step_size,
         postprocess_enable_smooth_paths=postprocess_enable_smooth_paths,
         postprocess_smoothing_window=postprocess_smoothing_window,
-        postprocess_enable_remove_overlaps=postprocess_enable_remove_overlaps,
-        postprocess_overlap_threshold=postprocess_overlap_threshold,
-        postprocess_overlap_distance_threshold=postprocess_overlap_distance_threshold,
-        postprocess_redundancy_action=postprocess_redundancy_action,
+        postprocess_enable_merge=postprocess_enable_merge,
+        postprocess_merge_threshold=postprocess_merge_threshold,
+        postprocess_confidence_threshold=postprocess_confidence_threshold,
         postprocess_mask_smoothing_size=postprocess_mask_smoothing_size,
+        postprocess_merge_guard_max_paths=postprocess_merge_guard_max_paths,
+        postprocess_merge_guard_max_nodes=postprocess_merge_guard_max_nodes,
+        postprocess_merge_timeout_seconds=postprocess_merge_timeout_seconds,
         on_select_postprocess_output_dir=on_select_postprocess_output_dir,
         on_clear_postprocess_output_dir=on_clear_postprocess_output_dir,
         on_postprocess_params_changed=on_postprocess_params_changed,

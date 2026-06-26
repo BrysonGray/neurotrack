@@ -8,6 +8,7 @@ import json
 import importlib
 import threading
 import tempfile
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -52,6 +53,24 @@ def _load_optional_session_config(config_path: Optional[str]) -> Dict[str, Optio
     if not isinstance(payload, dict):
         raise ValueError("Seed-selection config must be a JSON object.")
     return payload
+
+
+def _output_stem(name_or_path: str) -> str:
+    key = str(name_or_path).strip()
+    if not key:
+        return "unknown"
+
+    path = Path(key)
+    if path.parent == Path("."):
+        return path.name
+
+    parts = [part for part in path.parts if part not in ("", ".")]
+    if len(parts) == 1:
+        return parts[0]
+
+    parent_key = "__".join(parts[:-1])
+    leaf_key = Path(parts[-1]).stem
+    return f"{parent_key}__{leaf_key}"
 
 
 
@@ -414,6 +433,11 @@ class _TraceRuntime:
                 stochastic=bool(self.trace_params.get("stochastic_actions", False)),
                 cancel_event=cancel_event,
                 initial_path_mask=initial_path_mask,
+                retry_on_no_long_paths=bool(self.trace_params.get("retry_on_no_long_paths", True)),
+                retry_initial_radius=float(self.trace_params.get("retry_initial_radius", 5.0)),
+                retry_radius_step=float(self.trace_params.get("retry_radius_step", 5.0)),
+                retry_max_radius=float(self.trace_params.get("retry_max_radius", 50.0)),
+                retry_attempts_per_radius=int(self.trace_params.get("retry_attempts_per_radius", 50)),
             )
             labeled_neuron = result.get("labeled_neuron", None)
             if labeled_neuron is not None and hasattr(labeled_neuron, "detach"):
@@ -500,6 +524,8 @@ class _TraceSessionManager:
         self._report_stem = str(report_stem).strip() if report_stem is not None else image_root.name
         if len(self._report_stem) == 0:
             self._report_stem = "session"
+        _ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        self._run_stem = f"{self._report_stem}_{_ts}"
 
         if self.trace_params.get("sac_weights"):
             self.set_model_weights_path(str(self.trace_params["sac_weights"]))
@@ -552,7 +578,7 @@ class _TraceSessionManager:
         if not swc_list:
             self._set_state("Empty SWC — nothing to save.", increment_token=True)
             return
-        dst = out_dir / f"{Path(image_key).stem}.swc"
+        dst = out_dir / f"{_output_stem(image_key)}.swc"
         dst.parent.mkdir(parents=True, exist_ok=True)
         data_save.write_swc(swc_list, str(dst))
         self._set_state(f"Saved trace: {dst}", increment_token=True)
@@ -568,7 +594,7 @@ class _TraceSessionManager:
             swc_list = data_save.paths_to_swc(_coerce_paths_xyz(paths))
             if not swc_list:
                 continue
-            dst = out_dir / f"{Path(image_key).stem}.swc"
+            dst = out_dir / f"{_output_stem(image_key)}.swc"
             dst.parent.mkdir(parents=True, exist_ok=True)
             data_save.write_swc(swc_list, str(dst))
         self._set_state(f"Saved all traces to: {out_dir}", increment_token=True)
@@ -828,7 +854,7 @@ class _TraceSessionManager:
         """Set the directory where post-processed SWC files are written."""
         if not path or not str(path).strip():
             return None
-        p = Path(path)
+        p = Path(path) / self._run_stem
         p.mkdir(parents=True, exist_ok=True)
         self._postprocess_output_dir = p
         self._set_state(f"Post-process output set to: {p}", increment_token=True)
@@ -843,7 +869,7 @@ class _TraceSessionManager:
         """Set the directory where evaluation reports are written."""
         if not path or not str(path).strip():
             return None
-        p = Path(path)
+        p = Path(path) / self._run_stem
         p.mkdir(parents=True, exist_ok=True)
         self._eval_output_dir = p
         self._set_state(f"Eval output set to: {p}", increment_token=True)
@@ -870,16 +896,20 @@ class _TraceSessionManager:
             self.postprocess_config.enable_smooth_paths = bool(overrides["enable_smooth_paths"])
         if "smoothing_window" in overrides:
             self.postprocess_config.smoothing_window = int(overrides["smoothing_window"])
-        if "enable_remove_overlaps" in overrides:
-            self.postprocess_config.enable_remove_overlaps = bool(overrides["enable_remove_overlaps"])
-        if "overlap_threshold" in overrides:
-            self.postprocess_config.overlap_threshold = float(overrides["overlap_threshold"])
-        if "overlap_distance_threshold" in overrides:
-            self.postprocess_config.overlap_distance_threshold = float(overrides["overlap_distance_threshold"])
-        if "redundancy_action" in overrides:
-            self.postprocess_config.redundancy_action = str(overrides["redundancy_action"])
+        if "enable_merge" in overrides:
+            self.postprocess_config.enable_merge = bool(overrides["enable_merge"])
+        if "merge_threshold" in overrides:
+            self.postprocess_config.merge_threshold = float(overrides["merge_threshold"])
+        if "confidence_threshold" in overrides:
+            self.postprocess_config.confidence_threshold = int(overrides["confidence_threshold"])
         if "mask_smoothing_size" in overrides:
             self.postprocess_config.mask_smoothing_size = int(overrides["mask_smoothing_size"])
+        if "merge_guard_max_paths" in overrides:
+            self.postprocess_config.merge_guard_max_paths = int(overrides["merge_guard_max_paths"])
+        if "merge_guard_max_nodes" in overrides:
+            self.postprocess_config.merge_guard_max_nodes = int(overrides["merge_guard_max_nodes"])
+        if "merge_timeout_seconds" in overrides:
+            self.postprocess_config.merge_timeout_seconds = float(overrides["merge_timeout_seconds"])
         if "distance_threshold" in overrides:
             self.postprocess_config.distance_threshold = float(overrides["distance_threshold"])
 
@@ -1020,7 +1050,15 @@ class _TraceSessionManager:
                 increment_token=True,
             )
             return None
-        raw_paths = self._normalize_paths_payload(self.trace_results_by_key[image_key])
+
+        # Re-run postprocess from the same pre-postprocess baseline so repeated
+        # clicks do not compound transforms on already-processed output.
+        if image_key not in self._pre_postprocess_trace_cache_by_key:
+            self._pre_postprocess_trace_cache_by_key[image_key] = self._normalize_paths_payload(
+                self.trace_results_by_key[image_key]
+            )
+
+        raw_paths = self._normalize_paths_payload(self._pre_postprocess_trace_cache_by_key[image_key])
         raw_paths_xyz = _coerce_paths_xyz(raw_paths)
         if len(raw_paths_xyz) == 0:
             self._set_state("Empty prediction — post-processing skipped.", increment_token=True)
@@ -1039,9 +1077,6 @@ class _TraceSessionManager:
                 if len(processed_paths) == 0:
                     self._set_state("Post-processing produced no paths.", increment_token=True)
                     return None
-
-                if image_key not in self._pre_postprocess_trace_cache_by_key:
-                    self._pre_postprocess_trace_cache_by_key[image_key] = raw_paths
 
                 self.trace_results_by_key[image_key] = processed_paths
                 self._write_temp_trace(image_key=image_key, paths=processed_paths)
@@ -1173,7 +1208,7 @@ class _TraceSessionManager:
         if not swc_list:
             self._set_state("Empty SWC — nothing to save.", increment_token=True)
             return
-        neuron_stem = Path(image_key).stem
+        neuron_stem = _output_stem(image_key)
         swc_path = self._postprocess_output_dir / f"{neuron_stem}_reconstructed.swc"
         data_save.write_swc(swc_list, str(swc_path))
         self._set_state(f"Saved predicted SWC: {swc_path}", increment_token=True)
@@ -1284,7 +1319,7 @@ class _TraceSessionManager:
         """Set the trace output directory directly (e.g. from a config file)."""
         if not path or not str(path).strip():
             return None
-        p = Path(path)
+        p = Path(path) / self._run_stem
         p.mkdir(parents=True, exist_ok=True)
         self._trace_output_dir = p
         self._set_state(f"Trace output set to: {p}", increment_token=True)
@@ -1768,6 +1803,11 @@ def run_interactive_tracing_session(
         "n_trials": config.get("n_trials", 1),
         "stochastic_actions": config.get("stochastic_actions", False),
         "auto_seed_selection_mode": config.get("auto_seed_selection_mode", "remote_endnode"),
+        "retry_on_no_long_paths": config.get("retry_on_no_long_paths", True),
+        "retry_initial_radius": config.get("retry_initial_radius", 5.0),
+        "retry_radius_step": config.get("retry_radius_step", 5.0),
+        "retry_max_radius": config.get("retry_max_radius", 50.0),
+        "retry_attempts_per_radius": config.get("retry_attempts_per_radius", 50),
     }
 
     # ---- post-processing / evaluation parameters (separate from trace_params) ----
@@ -1941,11 +1981,13 @@ def run_interactive_tracing_session(
             postprocess_enable_resample=postprocess_config.enable_resample,
             postprocess_smoothing_window=postprocess_config.smoothing_window,
             postprocess_enable_smooth_paths=postprocess_config.enable_smooth_paths,
-            postprocess_overlap_threshold=postprocess_config.overlap_threshold,
-            postprocess_overlap_distance_threshold=postprocess_config.overlap_distance_threshold,
-            postprocess_enable_remove_overlaps=postprocess_config.enable_remove_overlaps,
-            postprocess_redundancy_action=postprocess_config.redundancy_action,
+            postprocess_merge_threshold=postprocess_config.merge_threshold,
+            postprocess_confidence_threshold=postprocess_config.confidence_threshold,
+            postprocess_enable_merge=postprocess_config.enable_merge,
             postprocess_mask_smoothing_size=postprocess_config.mask_smoothing_size,
+            postprocess_merge_guard_max_paths=postprocess_config.merge_guard_max_paths,
+            postprocess_merge_guard_max_nodes=postprocess_config.merge_guard_max_nodes,
+            postprocess_merge_timeout_seconds=postprocess_config.merge_timeout_seconds,
             on_select_postprocess_output_dir=_select_postprocess_output_dir,
             on_clear_postprocess_output_dir=_clear_postprocess_output_dir,
             on_postprocess_params_changed=trace_manager.update_postprocess_config,

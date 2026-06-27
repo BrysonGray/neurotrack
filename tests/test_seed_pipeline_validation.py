@@ -504,6 +504,70 @@ class SeedPipelineValidationTests(unittest.TestCase):
                     dist = torch.linalg.vector_norm(jitter_seed - base_seed)
                     self.assertLessEqual(float(dist.item()), jitter_radius + 1e-4)
 
+    def test_seed_jitter_intensity_weighted_targets_bright_voxel(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            img_dir = root / "images"
+            img_dir.mkdir()
+
+            volume = np.zeros((40, 40, 40), dtype=np.uint8)
+            bright_zyx = (22, 20, 20)
+            volume[bright_zyx] = 255
+            tf.imwrite(img_dir / "sample.tif", volume)
+
+            seed_rows = [[20.0, 20.0, 20.0]]
+            jitter_count = 5
+
+            dataset = NeuronPatchDataset(
+                swc_dir=None,
+                img_dir=img_dir,
+                step_width=4.0,
+                crop_patches=False,
+                inference_mode=True,
+                seed_points_by_image={"sample.tif": seed_rows},
+                seed_jitter_count=jitter_count,
+                seed_jitter_radius=3.0,
+                seed_jitter_weight_strategy="intensity_weighted",
+                rng=np.random.default_rng(0),
+            )
+
+            sample = dataset[0]
+            seeds = sample["seed_points"]
+            jittered = seeds[1:]
+            expected = torch.tensor(bright_zyx, dtype=torch.float32)
+            self.assertEqual(tuple(jittered.shape), (jitter_count, 3))
+            for row in jittered:
+                torch.testing.assert_close(row, expected)
+
+    def test_seed_jitter_boundary_weighted_is_deterministic(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            img_dir = root / "images"
+            img_dir.mkdir()
+
+            volume = np.zeros((40, 40, 40), dtype=np.uint8)
+            volume[20:, :, :] = 255
+            tf.imwrite(img_dir / "sample.tif", volume)
+
+            seed_rows = [[20.0, 20.0, 20.0]]
+
+            dataset = NeuronPatchDataset(
+                swc_dir=None,
+                img_dir=img_dir,
+                step_width=4.0,
+                crop_patches=False,
+                inference_mode=True,
+                seed_points_by_image={"sample.tif": seed_rows},
+                seed_jitter_count=6,
+                seed_jitter_radius=4.0,
+                seed_jitter_weight_strategy="boundary_weighted",
+                rng=np.random.default_rng(0),
+            )
+
+            sample_a = dataset[0]
+            sample_b = dataset[0]
+            self.assertTrue(torch.equal(sample_a["seed_points"], sample_b["seed_points"]))
+
     def test_inference_runtime_uses_external_seeds_json(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)

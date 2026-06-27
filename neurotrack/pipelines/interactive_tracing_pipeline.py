@@ -364,6 +364,9 @@ class _TraceRuntime:
             random_offset=float(trace_params.get("random_offset", 0.0)),
             seed_jitter_count=int(trace_params.get("seed_jitter_count", 0)),
             seed_jitter_radius=float(trace_params.get("seed_jitter_radius", 0.0)),
+            seed_jitter_weight_strategy=str(
+                trace_params.get("seed_jitter_weight_strategy", trace_params.get("weight_strategy", "uniform"))
+            ),
             inference_mode=True,
         )
 
@@ -1796,6 +1799,7 @@ def run_interactive_tracing_session(
         "random_offset": config.get("random_offset", 0.0),
         "seed_jitter_count": config.get("seed_jitter_count", 0),
         "seed_jitter_radius": config.get("seed_jitter_radius", 0.0),
+        "seed_jitter_weight_strategy": config.get("seed_jitter_weight_strategy", config.get("weight_strategy", "uniform")),
         "max_len": config.get("max_len", 10000),
         "max_paths": config.get("max_paths", 1000),
         "branching": config.get("branching", True),

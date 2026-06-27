@@ -4,6 +4,7 @@ import numpy as np
 from pathlib import Path
 from typing import List, Tuple, Optional, Dict, Union
 import warnings
+from scipy.ndimage import sobel
 import torch
 from torch.utils.data import Dataset as TorchDataset
 from torch.utils.data import Sampler
@@ -52,6 +53,7 @@ class NeuronPatchDataset(TorchDataset):
         random_offset: float = 0.0,
         seed_jitter_count: int = 0,
         seed_jitter_radius: float = 0.0,
+        seed_jitter_weight_strategy: str = "uniform",
     ):
         """
         Initialize the dataset.
@@ -99,6 +101,10 @@ class NeuronPatchDataset(TorchDataset):
             Radius (in voxels) of the ball around each configured seed within
             which the additional jittered seeds are placed. Must be > 0 when
             ``seed_jitter_count > 0``.
+        seed_jitter_weight_strategy : str
+            Strategy used when placing jittered seeds around each configured
+            seed. Options are ``"uniform"``, ``"intensity_weighted"``, and
+            ``"boundary_weighted"``.
 
         """
         self.rng = rng or np.random.default_rng(0)
@@ -145,6 +151,7 @@ class NeuronPatchDataset(TorchDataset):
         self.random_offset = float(random_offset)
         self.seed_jitter_count = int(seed_jitter_count)
         self.seed_jitter_radius = float(seed_jitter_radius)
+        self.seed_jitter_weight_strategy = str(seed_jitter_weight_strategy).strip().lower()
         self.seeds_path = str(seeds_path) if seeds_path is not None else None
         if seed_points_by_image is not None:
             self.seed_points_by_image = dict(seed_points_by_image)
@@ -164,6 +171,12 @@ class NeuronPatchDataset(TorchDataset):
             raise ValueError("seed_jitter_count must be a non-negative integer")
         if self.seed_jitter_count > 0 and self.seed_jitter_radius <= 0.0:
             raise ValueError("seed_jitter_radius must be > 0 when seed_jitter_count > 0")
+        valid_jitter_weight_strategies = {"uniform", "intensity_weighted", "boundary_weighted"}
+        if self.seed_jitter_weight_strategy not in valid_jitter_weight_strategies:
+            raise ValueError(
+                "seed_jitter_weight_strategy must be one of "
+                f"{sorted(valid_jitter_weight_strategies)}"
+            )
         
         # Cache for currently loaded image
         self._cached_image_idx: Optional[int] = None
@@ -209,6 +222,8 @@ class NeuronPatchDataset(TorchDataset):
         seeds_zyx: torch.Tensor,
         rng: np.random.Generator,
         spatial_shape_zyx: torch.Size,
+        image_zyx: Optional[torch.Tensor] = None,
+        weight_strategy: Optional[str] = None,
     ) -> torch.Tensor:
         """Add ``seed_jitter_count`` randomized seeds within ``seed_jitter_radius`` of each seed.
 
@@ -218,11 +233,25 @@ class NeuronPatchDataset(TorchDataset):
            jittered seed for every original seed in order.
 
         Jittered points are sampled uniformly inside a sphere of radius
-        ``seed_jitter_radius`` and clamped to valid image coordinates. Sampling
-        is driven by ``rng`` so output is deterministic per dataset index.
+        ``seed_jitter_radius`` and clamped to valid image coordinates for the
+        ``"uniform"`` strategy. ``"intensity_weighted"`` and
+        ``"boundary_weighted"`` sample discrete voxels in the radius-limited
+        neighborhood using image intensity or 3D Sobel boundary magnitude,
+        respectively. Sampling is driven by ``rng`` so output is deterministic
+        per dataset index.
         """
         if self.seed_jitter_count <= 0 or seeds_zyx.shape[0] == 0:
             return seeds_zyx
+
+        strategy = str(weight_strategy or self.seed_jitter_weight_strategy).strip().lower()
+        valid_strategies = {"uniform", "intensity_weighted", "boundary_weighted"}
+        if strategy not in valid_strategies:
+            raise ValueError(f"Unknown jitter weight strategy '{strategy}'. Expected one of {sorted(valid_strategies)}")
+
+        if strategy != "uniform" and image_zyx is None:
+            raise ValueError(
+                f"weight strategy '{strategy}' requires image_zyx to compute voxel weights"
+            )
 
         max_coords = torch.as_tensor(
             [float(dim) - 1.0 for dim in spatial_shape_zyx],
@@ -231,20 +260,97 @@ class NeuronPatchDataset(TorchDataset):
         )
         min_coords = torch.zeros(3, dtype=torch.float32, device=seeds_zyx.device)
 
+        image_np: Optional[np.ndarray] = None
+        if strategy != "uniform" and image_zyx is not None:
+            image_tensor = image_zyx
+            if image_tensor.ndim == 4:
+                image_tensor = image_tensor[0]
+            if image_tensor.ndim != 3:
+                raise ValueError(
+                    f"image_zyx must be 3D [Z,Y,X] or 4D [C,Z,Y,X], got shape {tuple(image_zyx.shape)}"
+                )
+            image_np = image_tensor.detach().cpu().numpy().astype(np.float32, copy=False)
+
+        def _sample_uniform_offset() -> torch.Tensor:
+            direction = rng.normal(size=(3,))
+            norm = float(np.linalg.norm(direction))
+            if norm == 0.0:
+                direction = np.array([1.0, 0.0, 0.0], dtype=np.float32)
+            else:
+                direction = direction / norm
+            radius = self.seed_jitter_radius * float(np.cbrt(rng.random()))
+            return torch.as_tensor(direction * radius, dtype=torch.float32, device=seeds_zyx.device)
+
+        def _sample_weighted_jitter(seed: torch.Tensor) -> torch.Tensor:
+            assert image_np is not None
+            seed_np = seed.detach().cpu().numpy().astype(np.float32, copy=False)
+            center_zyx = np.rint(seed_np).astype(np.int64)
+            radius_vox = max(1, int(np.ceil(self.seed_jitter_radius)))
+
+            z0 = max(0, int(center_zyx[0] - radius_vox))
+            y0 = max(0, int(center_zyx[1] - radius_vox))
+            x0 = max(0, int(center_zyx[2] - radius_vox))
+            z1 = min(image_np.shape[0], int(center_zyx[0] + radius_vox + 1))
+            y1 = min(image_np.shape[1], int(center_zyx[1] + radius_vox + 1))
+            x1 = min(image_np.shape[2], int(center_zyx[2] + radius_vox + 1))
+
+            if z0 >= z1 or y0 >= y1 or x0 >= x1:
+                return torch.clamp(seed + _sample_uniform_offset(), min=min_coords, max=max_coords)
+
+            patch = image_np[z0:z1, y0:y1, x0:x1]
+            if patch.size == 0:
+                return torch.clamp(seed + _sample_uniform_offset(), min=min_coords, max=max_coords)
+
+            zz, yy, xx = np.meshgrid(
+                np.arange(z0, z1, dtype=np.float32),
+                np.arange(y0, y1, dtype=np.float32),
+                np.arange(x0, x1, dtype=np.float32),
+                indexing="ij",
+            )
+            dist2 = (zz - seed_np[0]) ** 2 + (yy - seed_np[1]) ** 2 + (xx - seed_np[2]) ** 2
+            sphere_mask = dist2 <= (self.seed_jitter_radius ** 2)
+            if not np.any(sphere_mask):
+                return torch.clamp(seed + _sample_uniform_offset(), min=min_coords, max=max_coords)
+
+            if strategy == "intensity_weighted":
+                score_map = patch
+            else:
+                grad_z = sobel(patch, axis=0, mode="nearest")
+                grad_y = sobel(patch, axis=1, mode="nearest")
+                grad_x = sobel(patch, axis=2, mode="nearest")
+                score_map = np.sqrt(grad_z * grad_z + grad_y * grad_y + grad_x * grad_x)
+
+            candidate_scores = np.maximum(score_map[sphere_mask], 0.0).astype(np.float64, copy=False)
+            if candidate_scores.size == 0:
+                return torch.clamp(seed + _sample_uniform_offset(), min=min_coords, max=max_coords)
+
+            score_sum = float(candidate_scores.sum())
+            if score_sum <= 0.0 or not np.isfinite(score_sum):
+                probs = np.full(candidate_scores.shape[0], 1.0 / candidate_scores.shape[0], dtype=np.float64)
+            else:
+                probs = candidate_scores / score_sum
+
+            flat_indices = np.flatnonzero(sphere_mask.ravel())
+            chosen_idx = int(rng.choice(flat_indices.shape[0], p=probs))
+            patch_linear_idx = int(flat_indices[chosen_idx])
+            patch_coords = np.unravel_index(patch_linear_idx, patch.shape)
+            sampled_coord = np.array(
+                [z0 + patch_coords[0], y0 + patch_coords[1], x0 + patch_coords[2]],
+                dtype=np.float32,
+            )
+
+            sampled_seed = torch.as_tensor(sampled_coord, dtype=torch.float32, device=seeds_zyx.device)
+            return torch.clamp(sampled_seed, min=min_coords, max=max_coords)
+
         augmented_chunks: List[torch.Tensor] = [seeds_zyx]
         for _ in range(self.seed_jitter_count):
             cycle_rows: List[torch.Tensor] = []
             for seed in seeds_zyx:
-                # Uniform sampling inside a ball: random direction * radius * U^(1/3).
-                direction = rng.normal(size=(3,))
-                norm = float(np.linalg.norm(direction))
-                if norm == 0.0:
-                    direction = np.array([1.0, 0.0, 0.0], dtype=np.float32)
+                if strategy == "uniform":
+                    offset = _sample_uniform_offset()
+                    jittered = torch.clamp(seed + offset, min=min_coords, max=max_coords)
                 else:
-                    direction = direction / norm
-                radius = self.seed_jitter_radius * float(np.cbrt(rng.random()))
-                offset = torch.as_tensor(direction * radius, dtype=torch.float32, device=seeds_zyx.device)
-                jittered = torch.clamp(seed + offset, min=min_coords, max=max_coords)
+                    jittered = _sample_weighted_jitter(seed)
                 cycle_rows.append(jittered.unsqueeze(0))
 
             augmented_chunks.append(torch.cat(cycle_rows, dim=0))
@@ -972,6 +1078,7 @@ class NeuronPatchDataset(TorchDataset):
                         seed_points,
                         jitter_rng,
                         self._cached_image.shape[-3:],
+                        image_zyx=self._cached_image,
                     )
             elif self.has_swc and self._cached_swc_data is not None and not has_configured_seed_key:
                 # Sample a deterministic seed and build the path channel for full images.

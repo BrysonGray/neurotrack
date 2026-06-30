@@ -54,6 +54,7 @@ class NeuronPatchDataset(TorchDataset):
         seed_jitter_count: int = 0,
         seed_jitter_radius: float = 0.0,
         seed_jitter_weight_strategy: str = "uniform",
+        seed_jitter_nonce: int = 0,
     ):
         """
         Initialize the dataset.
@@ -152,6 +153,7 @@ class NeuronPatchDataset(TorchDataset):
         self.seed_jitter_count = int(seed_jitter_count)
         self.seed_jitter_radius = float(seed_jitter_radius)
         self.seed_jitter_weight_strategy = str(seed_jitter_weight_strategy).strip().lower()
+        self.seed_jitter_nonce = int(seed_jitter_nonce)
         self.seeds_path = str(seeds_path) if seeds_path is not None else None
         if seed_points_by_image is not None:
             self.seed_points_by_image = dict(seed_points_by_image)
@@ -1073,7 +1075,7 @@ class NeuronPatchDataset(TorchDataset):
             if configured_seeds is not None:
                 seed_points = configured_seeds
                 if self.seed_jitter_count > 0:
-                    jitter_rng = np.random.default_rng(self._base_seed + idx)
+                    jitter_rng = np.random.default_rng(self._base_seed + idx + (self.seed_jitter_nonce * 1000003))
                     seed_points = self._augment_seeds_with_jitter(
                         seed_points,
                         jitter_rng,

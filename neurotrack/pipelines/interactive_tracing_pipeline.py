@@ -367,6 +367,7 @@ class _TraceRuntime:
             seed_jitter_weight_strategy=str(
                 trace_params.get("seed_jitter_weight_strategy", trace_params.get("weight_strategy", "uniform"))
             ),
+            seed_jitter_nonce=int(trace_params.get("seed_jitter_nonce", 0)),
             inference_mode=True,
         )
 
@@ -907,10 +908,6 @@ class _TraceSessionManager:
             self.postprocess_config.confidence_threshold = int(overrides["confidence_threshold"])
         if "mask_smoothing_size" in overrides:
             self.postprocess_config.mask_smoothing_size = int(overrides["mask_smoothing_size"])
-        if "merge_guard_max_paths" in overrides:
-            self.postprocess_config.merge_guard_max_paths = int(overrides["merge_guard_max_paths"])
-        if "merge_guard_max_nodes" in overrides:
-            self.postprocess_config.merge_guard_max_nodes = int(overrides["merge_guard_max_nodes"])
         if "merge_timeout_seconds" in overrides:
             self.postprocess_config.merge_timeout_seconds = float(overrides["merge_timeout_seconds"])
         if "distance_threshold" in overrides:
@@ -1965,6 +1962,11 @@ def run_interactive_tracing_session(
             trace_repeat_starts=bool(trace_params.get("repeat_starts", False)),
             trace_stochastic_actions=bool(trace_params.get("stochastic_actions", False)),
             trace_auto_seed_mode=str(trace_params.get("auto_seed_selection_mode", "remote_endnode")),
+            trace_seed_jitter_count=int(trace_params.get("seed_jitter_count", 0)),
+            trace_seed_jitter_radius=float(trace_params.get("seed_jitter_radius", 0.0)),
+            trace_seed_jitter_weight_strategy=str(
+                trace_params.get("seed_jitter_weight_strategy", trace_params.get("weight_strategy", "uniform"))
+            ),
             on_trace_params_changed=trace_manager.update_trace_params,
             show_postprocess_controls=True,
             on_run_postprocess=lambda: trace_manager.run_postprocess(session.current_relative_key()),
@@ -1989,8 +1991,6 @@ def run_interactive_tracing_session(
             postprocess_confidence_threshold=postprocess_config.confidence_threshold,
             postprocess_enable_merge=postprocess_config.enable_merge,
             postprocess_mask_smoothing_size=postprocess_config.mask_smoothing_size,
-            postprocess_merge_guard_max_paths=postprocess_config.merge_guard_max_paths,
-            postprocess_merge_guard_max_nodes=postprocess_config.merge_guard_max_nodes,
             postprocess_merge_timeout_seconds=postprocess_config.merge_timeout_seconds,
             on_select_postprocess_output_dir=_select_postprocess_output_dir,
             on_clear_postprocess_output_dir=_clear_postprocess_output_dir,

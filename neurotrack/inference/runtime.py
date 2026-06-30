@@ -32,6 +32,7 @@ def build_env(params: Dict[str, Any]) -> NeuronTrackingEnvironment:
         seed_jitter_weight_strategy=str(
             params.get("seed_jitter_weight_strategy", params.get("weight_strategy", "uniform"))
         ),
+        seed_jitter_nonce=int(params.get("seed_jitter_nonce", 0)),
         inference_mode=True,
     )
 

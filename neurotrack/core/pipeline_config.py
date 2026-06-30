@@ -97,8 +97,6 @@ def _compute_enable_flag_for_step(config: Dict[str, object], raw_config: Dict[st
             "merge_threshold",
             "confidence_threshold",
             "mask_smoothing_size",
-            "merge_guard_max_paths",
-            "merge_guard_max_nodes",
             "merge_timeout_seconds",
         ]
     else:
@@ -149,8 +147,6 @@ class PostprocessConfig:
     merge_threshold: float = 1.0
     confidence_threshold: int = 0  # min input paths supporting a node; <=1 disables
     mask_smoothing_size: int = 0  # binary close/open of the merge overlap mask; <=1 disables
-    merge_guard_max_paths: int = 0  # <=0 disables path-count guard
-    merge_guard_max_nodes: int = 0  # <=0 disables node-count guard
     merge_timeout_seconds: float = 30.0  # <=0 disables timeout guard
     # --- evaluation ---
     distance_threshold: float = 1.0
@@ -203,8 +199,6 @@ class PostprocessConfig:
             merge_threshold=float(config.get("merge_threshold", 1.0)),
             confidence_threshold=int(config.get("confidence_threshold", 0)),
             mask_smoothing_size=int(config.get("mask_smoothing_size", 0)),
-            merge_guard_max_paths=int(config.get("merge_guard_max_paths", 0)),
-            merge_guard_max_nodes=int(config.get("merge_guard_max_nodes", 0)),
             merge_timeout_seconds=float(config.get("merge_timeout_seconds", 30.0)),
             distance_threshold=float(eval_distance_threshold),
             scales_path=config.get("scales_path", None),
@@ -224,8 +218,6 @@ class PostprocessConfig:
             "merge_threshold": self.merge_threshold,
             "confidence_threshold": self.confidence_threshold,
             "mask_smoothing_size": self.mask_smoothing_size,
-            "merge_guard_max_paths": self.merge_guard_max_paths,
-            "merge_guard_max_nodes": self.merge_guard_max_nodes,
             "merge_timeout_seconds": self.merge_timeout_seconds,
         }
 
@@ -289,8 +281,6 @@ class PostprocessConfig:
             "merge_threshold": self.merge_threshold / scale,
             "confidence_threshold": self.confidence_threshold,
             "mask_smoothing_size": self.mask_smoothing_size,
-            "merge_guard_max_paths": self.merge_guard_max_paths,
-            "merge_guard_max_nodes": self.merge_guard_max_nodes,
             "merge_timeout_seconds": self.merge_timeout_seconds,
         }
 

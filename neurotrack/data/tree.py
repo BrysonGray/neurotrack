@@ -1,8 +1,14 @@
 import numpy as np
 import torch
-from typing import Union 
+from typing import Dict, List, Union
 from scipy.spatial import KDTree
 from neurotrack.data import loading as load
+
+
+def _point_key(point, decimals: int = 5):
+    arr = np.asarray(point, dtype=np.float32).reshape(-1)
+    rounded = np.round(arr[:3].astype(np.float64), decimals=decimals)
+    return float(rounded[0]), float(rounded[1]), float(rounded[2])
 
 def split_swc_into_sections(swc_list):
     """
@@ -89,19 +95,36 @@ def split_paths_into_sections(paths):
     Splits paths into sections based on their origins.
     Each section is defined as a segment of the path between intersections with other paths' origins.
     """
-    path_origins = np.array([p[0][:3] for p in paths])
+    # Hashable rounded keys avoid expensive ndarray membership checks and are
+    # resilient to tiny floating-point jitter at shared branch anchors.
+    path_origin_keys = {
+        _point_key(np.asarray(p)[0][:3])
+        for p in paths
+        if len(np.asarray(p)) > 0
+    }
     sections = {}
     # divide each path wherever it intersects with the origin of other paths
     # create a new section for each segment of the path
     for path in paths:
         path_array = np.array(path) if not isinstance(path, np.ndarray) else path
-        intersections = [0] + [i+1 for i, point in enumerate(path_array[1:]) if point[:3] in path_origins]
+        intersections = [
+            0
+        ] + [
+            i + 1
+            for i, point in enumerate(path_array[1:])
+            if _point_key(point[:3]) in path_origin_keys
+        ]
         if len(intersections) > 1:
-            sections |= {len(sections) + i+1: torch.from_numpy(path_array[intersections[i]:intersections[i+1]+1].astype(np.float32)) for i in range(len(intersections)-1)}
+            sections |= {
+                len(sections) + i + 1: path_array[
+                    intersections[i] : intersections[i + 1] + 1
+                ].astype(np.float32)
+                for i in range(len(intersections) - 1)
+            }
             if intersections[-1] != len(path_array) - 1:
-                sections[len(sections)+1] = torch.from_numpy(path_array[intersections[-1]:].astype(np.float32))  # Add the last segment
+                sections[len(sections) + 1] = path_array[intersections[-1] :].astype(np.float32)
         else:
-            sections[len(sections)+1] = torch.from_numpy(path_array.astype(np.float32))
+            sections[len(sections) + 1] = path_array.astype(np.float32)
 
     return sections
 
@@ -116,9 +139,11 @@ def get_single_stream_length(section_id, section_graph, sections, visited=None):
     if section_id in visited:
         return 0
     visited.add(section_id)
-    # total_length = len(sections[section_id])
-    # total_length = np.linalg.norm(sections[section_id][0,:3] - sections[section_id][-1,:3])
-    total_length = (torch.sum((sections[section_id][1:, :3] - sections[section_id][:-1, :3])**2, dim=1)**0.5).sum()
+    section = np.asarray(sections[section_id], dtype=np.float32)
+    if len(section) < 2:
+        total_length = 0.0
+    else:
+        total_length = float(np.linalg.norm(section[1:, :3] - section[:-1, :3], axis=1).sum())
     for connected_section in section_graph.get(section_id, []):
         total_length += get_single_stream_length(connected_section, section_graph, sections, visited)
     return total_length
@@ -128,17 +153,52 @@ def get_all_stream_lengths(sections):
     """
     Calculate the lengths of each section.
     """
-    # Make section adjacency graph
-    section_graph = {}
-    for id,section in sections.items():
-        section_graph[id] = []
-        for other_id,other_section in sections.items():
-            if id != other_id and all(section[-1] == other_section[0]):
-                section_graph[id].append(other_id)
-    # Calculate total length of each section and its downstream sections
-    stream_lengths = {}
+    # Build key indices once, then connect sections by matching end->start key.
+    start_key_to_ids: Dict[tuple, List[int]] = {}
+    end_keys: Dict[int, tuple] = {}
+    for section_id, section in sections.items():
+        arr = np.asarray(section, dtype=np.float32)
+        if len(arr) == 0:
+            continue
+        start_key = _point_key(arr[0][:3])
+        end_key = _point_key(arr[-1][:3])
+        start_key_to_ids.setdefault(start_key, []).append(section_id)
+        end_keys[section_id] = end_key
+
+    section_graph: Dict[int, List[int]] = {section_id: [] for section_id in sections.keys()}
+    for section_id, end_key in end_keys.items():
+        section_graph[section_id] = [
+            other_id
+            for other_id in start_key_to_ids.get(end_key, [])
+            if other_id != section_id
+        ]
+
+    # Memoize stream lengths so shared downstream subgraphs are not recomputed
+    # for every source section.
+    stream_lengths: Dict[int, float] = {}
+
+    def _compute_stream_length(section_id: int, visiting: set[int]) -> float:
+        if section_id in stream_lengths:
+            return stream_lengths[section_id]
+        if section_id in visiting:
+            return 0.0
+        visiting.add(section_id)
+
+        section = np.asarray(sections[section_id], dtype=np.float32)
+        if len(section) < 2:
+            total = 0.0
+        else:
+            total = float(np.linalg.norm(section[1:, :3] - section[:-1, :3], axis=1).sum())
+
+        for child_id in section_graph.get(section_id, []):
+            total += _compute_stream_length(child_id, visiting)
+
+        visiting.remove(section_id)
+        stream_lengths[section_id] = total
+        return total
+
     for section_id in sections.keys():
-        stream_lengths[section_id] = get_single_stream_length(section_id, section_graph, sections)
+        _compute_stream_length(section_id, set())
 
     return stream_lengths, section_graph
 
@@ -148,10 +208,12 @@ def get_longest_stream(section_id, section_graph, section_lengths):
     Get longest stream, starting at the given section id, where a stream is a list of section ids of consecutive sections.
     """
     stream = [section_id]
+    visited = {section_id}
     while section_id in section_graph:
         next_section = max(section_graph[section_id], key=lambda x: section_lengths.get(x, 0), default=None)
-        if next_section is not None:
+        if next_section is not None and next_section not in visited:
             stream.append(next_section)
+            visited.add(next_section)
             section_id = next_section
         else:
             break
@@ -182,13 +244,14 @@ def restitch_sections(hierarchical_streams, sections):
             continue
             
         # Start with the first section
-        stitched = [sections[stream_ids[0]]]
+        stitched = [np.asarray(sections[stream_ids[0]], dtype=np.float32)]
         
         # For subsequent sections, exclude the first point (which duplicates the last point of previous section)
         for section_id in stream_ids[1:]:
-            stitched.append(sections[section_id][1:])
+            section = np.asarray(sections[section_id], dtype=np.float32)
+            stitched.append(section[1:])
             
-        restitched_sections[i] = torch.cat(stitched)
+        restitched_sections[i] = np.concatenate(stitched, axis=0)
     
     return restitched_sections
 

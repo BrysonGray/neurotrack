@@ -116,6 +116,9 @@ class _OrthoViewDialog:
         trace_repeat_starts: bool = False,
         trace_stochastic_actions: bool = False,
         trace_auto_seed_mode: str = "remote_endnode",
+        trace_seed_jitter_count: int = 0,
+        trace_seed_jitter_radius: float = 0.0,
+        trace_seed_jitter_weight_strategy: str = "uniform",
         on_trace_params_changed: Optional[Callable[[Dict[str, object]], None]] = None,
         postprocess_output_dir: Optional[str] = None,
         postprocess_enable_length_filter: bool = True,
@@ -129,8 +132,6 @@ class _OrthoViewDialog:
         postprocess_merge_threshold: float = 1.0,
         postprocess_confidence_threshold: int = 0,
         postprocess_mask_smoothing_size: int = 0,
-        postprocess_merge_guard_max_paths: int = 0,
-        postprocess_merge_guard_max_nodes: int = 0,
         postprocess_merge_timeout_seconds: float = 30.0,
         on_select_postprocess_output_dir: Optional[Callable[[], Optional[str]]] = None,
         on_clear_postprocess_output_dir: Optional[Callable[[], Optional[str]]] = None,
@@ -293,9 +294,6 @@ class _OrthoViewDialog:
             "parent_xyz": np.empty((0, 3), dtype=np.float32),
         }
         self.selected_seed_index: Optional[int] = None
-        self._seed_order_spin = None
-        self._seed_order_up_btn = None
-        self._seed_order_down_btn = None
 
         self._trace_status_token = None
         self._trace_overlay_token = None
@@ -400,16 +398,7 @@ class _OrthoViewDialog:
             self.seeds_input_value_label = QLabel("")
             self.seeds_input_value_label.setWordWrap(True)
             self.seeds_input_value_label.setMinimumWidth(0)
-            self._seed_order_spin = _qt_w.QSpinBox()
-            self._seed_order_spin.setRange(1, 1)
-            self._seed_order_spin.setValue(1)
-            self._seed_order_spin.setEnabled(False)
-            self._seed_order_up_btn = QPushButton("↑")
-            self._seed_order_up_btn.setFixedWidth(28)
-            self._seed_order_up_btn.setEnabled(False)
-            self._seed_order_down_btn = QPushButton("↓")
-            self._seed_order_down_btn.setFixedWidth(28)
-            self._seed_order_down_btn.setEnabled(False)
+            self.btn_rejitter_seeds = QPushButton("Rejitter Seeds")
             # Advanced trace parameter widgets
             _qt_w = importlib.import_module("qtpy.QtWidgets")
             self._trace_step_width_spin = _qt_w.QDoubleSpinBox()
@@ -452,6 +441,34 @@ class _OrthoViewDialog:
             _auto_seed_idx = self._trace_auto_seed_combo.findText(trace_auto_seed_mode)
             if _auto_seed_idx >= 0:
                 self._trace_auto_seed_combo.setCurrentIndex(_auto_seed_idx)
+            self._trace_seed_jitter_count_spin = _qt_w.QSpinBox()
+            self._trace_seed_jitter_count_spin.setRange(0, 10000)
+            self._trace_seed_jitter_count_spin.setValue(int(max(0, trace_seed_jitter_count)))
+            self._trace_seed_jitter_count_spin.setSizePolicy(
+                _qt_w.QSizePolicy.Expanding, _qt_w.QSizePolicy.Fixed)
+            self._trace_seed_jitter_count_spin.setMinimumWidth(0)
+            self._trace_seed_jitter_radius_spin = _qt_w.QDoubleSpinBox()
+            self._trace_seed_jitter_radius_spin.setRange(0.0, 1000.0)
+            self._trace_seed_jitter_radius_spin.setSingleStep(0.5)
+            self._trace_seed_jitter_radius_spin.setDecimals(2)
+            self._trace_seed_jitter_radius_spin.setValue(float(max(0.0, trace_seed_jitter_radius)))
+            self._trace_seed_jitter_radius_spin.setSizePolicy(
+                _qt_w.QSizePolicy.Expanding, _qt_w.QSizePolicy.Fixed)
+            self._trace_seed_jitter_radius_spin.setMinimumWidth(0)
+            self._trace_seed_jitter_weight_combo = QComboBox()
+            self._trace_seed_jitter_weight_combo.addItems([
+                "uniform",
+                "intensity_weighted",
+                "boundary_weighted",
+            ])
+            self._trace_seed_jitter_weight_combo.setSizePolicy(
+                _qt_w.QSizePolicy.Expanding, _qt_w.QSizePolicy.Fixed)
+            self._trace_seed_jitter_weight_combo.setMinimumWidth(0)
+            _jitter_weight_idx = self._trace_seed_jitter_weight_combo.findText(
+                str(trace_seed_jitter_weight_strategy).strip().lower()
+            )
+            if _jitter_weight_idx >= 0:
+                self._trace_seed_jitter_weight_combo.setCurrentIndex(_jitter_weight_idx)
             # Post-processing parameter widgets
             self.btn_set_postprocess_output = QPushButton("Set Post-Process Output")
             self.btn_clear_postprocess_output = QPushButton("Unset Post-Process Output")
@@ -498,12 +515,6 @@ class _OrthoViewDialog:
             self._pp_mask_smoothing_size_spin = _qt_w.QSpinBox()
             self._pp_mask_smoothing_size_spin.setRange(0, 100)
             self._pp_mask_smoothing_size_spin.setValue(int(postprocess_mask_smoothing_size))
-            self._pp_merge_guard_max_paths_spin = _qt_w.QSpinBox()
-            self._pp_merge_guard_max_paths_spin.setRange(0, 1000000)
-            self._pp_merge_guard_max_paths_spin.setValue(int(postprocess_merge_guard_max_paths))
-            self._pp_merge_guard_max_nodes_spin = _qt_w.QSpinBox()
-            self._pp_merge_guard_max_nodes_spin.setRange(0, 10000000)
-            self._pp_merge_guard_max_nodes_spin.setValue(int(postprocess_merge_guard_max_nodes))
             self._pp_merge_timeout_seconds_spin = _qt_w.QDoubleSpinBox()
             self._pp_merge_timeout_seconds_spin.setRange(0.0, 3600.0)
             self._pp_merge_timeout_seconds_spin.setSingleStep(1.0)
@@ -631,12 +642,18 @@ class _OrthoViewDialog:
             left_layout.addWidget(QLabel("Seed Controls:"))
             left_layout.addWidget(self.btn_undo)
             left_layout.addWidget(self.btn_remove_selected_seed)
-            left_layout.addWidget(QLabel("Seed Order (Selected):"))
-            _seed_order_row = self._row_widget()
-            _seed_order_row.layout().addWidget(self._seed_order_spin, stretch=1)
-            _seed_order_row.layout().addWidget(self._seed_order_up_btn)
-            _seed_order_row.layout().addWidget(self._seed_order_down_btn)
-            left_layout.addWidget(_seed_order_row)
+            left_layout.addWidget(QLabel("Seed Jitter:"))
+            _seed_jitter_count_row = self._row_widget()
+            _seed_jitter_count_row.layout().addWidget(QLabel("Count:"))
+            _seed_jitter_count_row.layout().addWidget(self._trace_seed_jitter_count_spin, stretch=1)
+            left_layout.addWidget(_seed_jitter_count_row)
+            _seed_jitter_radius_row = self._row_widget()
+            _seed_jitter_radius_row.layout().addWidget(QLabel("Radius:"))
+            _seed_jitter_radius_row.layout().addWidget(self._trace_seed_jitter_radius_spin, stretch=1)
+            left_layout.addWidget(_seed_jitter_radius_row)
+            left_layout.addWidget(QLabel("Weight Strategy:"))
+            left_layout.addWidget(self._trace_seed_jitter_weight_combo)
+            left_layout.addWidget(self.btn_rejitter_seeds)
             left_layout.addWidget(self.btn_clear)
             if show_save_buttons:
                 left_layout.addWidget(self.btn_save_seeds)
@@ -841,10 +858,6 @@ class _OrthoViewDialog:
             _pp_lay.addWidget(self._pp_confidence_threshold_spin)
             _pp_lay.addWidget(QLabel("Mask Smoothing Size:"))
             _pp_lay.addWidget(self._pp_mask_smoothing_size_spin)
-            _pp_lay.addWidget(QLabel("Merge Guard Max Paths (0=off):"))
-            _pp_lay.addWidget(self._pp_merge_guard_max_paths_spin)
-            _pp_lay.addWidget(QLabel("Merge Guard Max Nodes (0=off):"))
-            _pp_lay.addWidget(self._pp_merge_guard_max_nodes_spin)
             _pp_lay.addWidget(QLabel("Merge Timeout Seconds (0=off):"))
             _pp_lay.addWidget(self._pp_merge_timeout_seconds_spin)
             _pp_lay.addWidget(self._sidebar_separator())
@@ -947,6 +960,7 @@ class _OrthoViewDialog:
         ]
         if mode == "seed":
             button_list.extend([self.btn_undo, self.btn_remove_selected_seed, self.btn_clear])
+            button_list.append(self.btn_rejitter_seeds)
             button_list.extend([self.btn_set_seeds_output, self.btn_set_trace_output, self.btn_set_model_weights])
             button_list.extend([self.btn_clear_seeds_output, self.btn_clear_trace_output, self.btn_clear_model_weights])
             button_list.extend([self.btn_set_image_dir, self.btn_set_seeds_input])
@@ -1008,9 +1022,7 @@ class _OrthoViewDialog:
             self.btn_undo.clicked.connect(self._undo_seed)
             self.btn_remove_selected_seed.clicked.connect(self._remove_selected_seed)
             self.btn_clear.clicked.connect(self._clear_seeds)
-            self._seed_order_spin.valueChanged.connect(self._on_seed_order_changed)
-            self._seed_order_up_btn.clicked.connect(self._move_selected_seed_up)
-            self._seed_order_down_btn.clicked.connect(self._move_selected_seed_down)
+            self.btn_rejitter_seeds.clicked.connect(self._rejitter_seeds)
             self.radio_tool_zoom.toggled.connect(self._on_tool_toggled)
             self.btn_approve_crop.clicked.connect(self._approve_crop_box)
             self.btn_apply_component_filter.clicked.connect(self._apply_component_filter)
@@ -1037,6 +1049,9 @@ class _OrthoViewDialog:
             self._trace_repeat_starts_check.toggled.connect(self._on_advanced_params_changed)
             self._trace_stochastic_check.toggled.connect(self._on_advanced_params_changed)
             self._trace_auto_seed_combo.currentIndexChanged.connect(self._on_advanced_params_changed)
+            self._trace_seed_jitter_count_spin.valueChanged.connect(self._on_advanced_params_changed)
+            self._trace_seed_jitter_radius_spin.valueChanged.connect(self._on_advanced_params_changed)
+            self._trace_seed_jitter_weight_combo.currentIndexChanged.connect(self._on_advanced_params_changed)
             self.btn_set_postprocess_output.clicked.connect(self._select_postprocess_output_dir)
             self.btn_clear_postprocess_output.clicked.connect(self._clear_postprocess_output_dir)
             self._pp_min_branch_length_spin.valueChanged.connect(self._on_postprocess_params_changed_slot)
@@ -1054,8 +1069,6 @@ class _OrthoViewDialog:
             self._pp_enable_merge_check.toggled.connect(self._on_postprocess_params_changed_slot)
             self._pp_enable_merge_check.toggled.connect(self._update_postprocess_step_controls)
             self._pp_mask_smoothing_size_spin.valueChanged.connect(self._on_postprocess_params_changed_slot)
-            self._pp_merge_guard_max_paths_spin.valueChanged.connect(self._on_postprocess_params_changed_slot)
-            self._pp_merge_guard_max_nodes_spin.valueChanged.connect(self._on_postprocess_params_changed_slot)
             self._pp_merge_timeout_seconds_spin.valueChanged.connect(self._on_postprocess_params_changed_slot)
             self.btn_set_eval_output.clicked.connect(self._select_eval_output_dir)
             self.btn_clear_eval_output.clicked.connect(self._clear_eval_output_dir)
@@ -1234,39 +1247,19 @@ class _OrthoViewDialog:
         self._redraw()
 
     def _refresh_seed_order_controls(self):
-        if self._seed_order_spin is None:
-            return
+        # Seed ordering widgets were removed; keep selected index in range and
+        # only enable removal when a valid seed is selected.
         seed_count = len(self.seeds)
-        self._seed_order_spin.blockSignals(True)
         if seed_count <= 0:
-            self._seed_order_spin.setRange(1, 1)
-            self._seed_order_spin.setValue(1)
-            self._seed_order_spin.setEnabled(False)
-            if self._seed_order_up_btn is not None:
-                self._seed_order_up_btn.setEnabled(False)
-            if self._seed_order_down_btn is not None:
-                self._seed_order_down_btn.setEnabled(False)
-            self._seed_order_spin.blockSignals(False)
+            self.selected_seed_index = None
+            self.btn_remove_selected_seed.setEnabled(False)
             return
-
-        self._seed_order_spin.setRange(1, seed_count)
         if self.selected_seed_index is None:
-            self._seed_order_spin.setValue(1)
-            self._seed_order_spin.setEnabled(False)
-            if self._seed_order_up_btn is not None:
-                self._seed_order_up_btn.setEnabled(False)
-            if self._seed_order_down_btn is not None:
-                self._seed_order_down_btn.setEnabled(False)
-        else:
-            selected_index = int(np.clip(self.selected_seed_index, 0, seed_count - 1))
-            self.selected_seed_index = selected_index
-            self._seed_order_spin.setValue(selected_index + 1)
-            self._seed_order_spin.setEnabled(True)
-            if self._seed_order_up_btn is not None:
-                self._seed_order_up_btn.setEnabled(selected_index > 0)
-            if self._seed_order_down_btn is not None:
-                self._seed_order_down_btn.setEnabled(selected_index < (seed_count - 1))
-        self._seed_order_spin.blockSignals(False)
+            self.btn_remove_selected_seed.setEnabled(False)
+            return
+        selected_index = int(np.clip(self.selected_seed_index, 0, seed_count - 1))
+        self.selected_seed_index = selected_index
+        self.btn_remove_selected_seed.setEnabled(True)
 
     def _move_selected_seed_to_index(self, new_index: int):
         if self.selected_seed_index is None or not self.seeds:
@@ -1642,6 +1635,13 @@ class _OrthoViewDialog:
             # Keep UI responsive even if the optional overlay callback fails.
             self.effective_seed_overlay = []
 
+    def _rejitter_seeds(self):
+        self._pending_trace_param_overrides = self.get_trace_params_overrides()
+        self._pending_trace_param_overrides["seed_jitter_nonce"] = int(np.random.default_rng().integers(1, 2**31 - 1))
+        self._flush_pending_trace_params()
+        self._refresh_effective_seed_overlay()
+        self._redraw()
+
     def _set_finished_paths(self, finished_paths):
         self.finished_paths = []
         if finished_paths is None:
@@ -1969,8 +1969,6 @@ class _OrthoViewDialog:
             "_pp_overlap_dist_threshold_spin",
             "_pp_confidence_threshold_spin",
             "_pp_mask_smoothing_size_spin",
-            "_pp_merge_guard_max_paths_spin",
-            "_pp_merge_guard_max_nodes_spin",
             "_pp_merge_timeout_seconds_spin",
         ]
         for name in spinboxes:
@@ -2168,6 +2166,9 @@ class _OrthoViewDialog:
             "repeat_starts": bool(self._trace_repeat_starts_check.isChecked()),
             "stochastic_actions": bool(self._trace_stochastic_check.isChecked()),
             "auto_seed_selection_mode": self._trace_auto_seed_combo.currentText(),
+            "seed_jitter_count": int(self._trace_seed_jitter_count_spin.value()),
+            "seed_jitter_radius": float(self._trace_seed_jitter_radius_spin.value()),
+            "seed_jitter_weight_strategy": self._trace_seed_jitter_weight_combo.currentText(),
         }
 
     def get_postprocess_params_overrides(self) -> Dict[str, object]:
@@ -2187,8 +2188,6 @@ class _OrthoViewDialog:
             "merge_threshold": float(self._pp_overlap_dist_threshold_spin.value()),
             "confidence_threshold": int(self._pp_confidence_threshold_spin.value()),
             "mask_smoothing_size": int(self._pp_mask_smoothing_size_spin.value()),
-            "merge_guard_max_paths": int(self._pp_merge_guard_max_paths_spin.value()),
-            "merge_guard_max_nodes": int(self._pp_merge_guard_max_nodes_spin.value()),
             "merge_timeout_seconds": float(self._pp_merge_timeout_seconds_spin.value()),
         }
 
@@ -2203,8 +2202,6 @@ class _OrthoViewDialog:
         self._pp_overlap_dist_threshold_spin.setEnabled(merge_enabled)
         self._pp_confidence_threshold_spin.setEnabled(merge_enabled)
         self._pp_mask_smoothing_size_spin.setEnabled(merge_enabled)
-        self._pp_merge_guard_max_paths_spin.setEnabled(merge_enabled)
-        self._pp_merge_guard_max_nodes_spin.setEnabled(merge_enabled)
         self._pp_merge_timeout_seconds_spin.setEnabled(merge_enabled)
 
     def get_eval_params_overrides(self) -> Dict[str, object]:
@@ -3125,6 +3122,10 @@ def interactive_seed_selection_step(
     on_select_trace_output_path: Optional[Callable[[], Optional[str]]] = None,
     model_weights_path: Optional[str] = None,
     on_select_model_weights_path: Optional[Callable[[], Optional[str]]] = None,
+    on_get_effective_seed_overlay: Optional[Callable[[np.ndarray], Optional[np.ndarray]]] = None,
+    trace_seed_jitter_count: int = 0,
+    trace_seed_jitter_radius: float = 0.0,
+    trace_seed_jitter_weight_strategy: str = "uniform",
 ) -> Tuple[torch.Tensor, str]:
     """Single-image seed editor step that returns selected seeds and navigation action."""
     if _is_jupyter_notebook():
@@ -3161,6 +3162,10 @@ def interactive_seed_selection_step(
         on_select_trace_output_path=on_select_trace_output_path,
         model_weights_path=model_weights_path,
         on_select_model_weights_path=on_select_model_weights_path,
+        on_get_effective_seed_overlay=on_get_effective_seed_overlay,
+        trace_seed_jitter_count=trace_seed_jitter_count,
+        trace_seed_jitter_radius=trace_seed_jitter_radius,
+        trace_seed_jitter_weight_strategy=trace_seed_jitter_weight_strategy,
     )
     _run_ortho_dialog(dialog)
 
@@ -3211,6 +3216,9 @@ def interactive_seed_selection_session(
     trace_repeat_starts: bool = False,
     trace_stochastic_actions: bool = False,
     trace_auto_seed_mode: str = "remote_endnode",
+    trace_seed_jitter_count: int = 0,
+    trace_seed_jitter_radius: float = 0.0,
+    trace_seed_jitter_weight_strategy: str = "uniform",
     on_trace_params_changed: Optional[Callable[[Dict[str, object]], None]] = None,
     show_postprocess_controls: bool = False,
     on_run_postprocess: Optional[Callable[[], None]] = None,
@@ -3235,8 +3243,6 @@ def interactive_seed_selection_session(
     postprocess_merge_threshold: float = 1.0,
     postprocess_confidence_threshold: int = 0,
     postprocess_mask_smoothing_size: int = 0,
-    postprocess_merge_guard_max_paths: int = 0,
-    postprocess_merge_guard_max_nodes: int = 0,
     postprocess_merge_timeout_seconds: float = 30.0,
     on_select_postprocess_output_dir: Optional[Callable[[], Optional[str]]] = None,
     on_clear_postprocess_output_dir: Optional[Callable[[], Optional[str]]] = None,
@@ -3310,6 +3316,9 @@ def interactive_seed_selection_session(
         trace_repeat_starts=trace_repeat_starts,
         trace_stochastic_actions=trace_stochastic_actions,
         trace_auto_seed_mode=trace_auto_seed_mode,
+        trace_seed_jitter_count=trace_seed_jitter_count,
+        trace_seed_jitter_radius=trace_seed_jitter_radius,
+        trace_seed_jitter_weight_strategy=trace_seed_jitter_weight_strategy,
         on_trace_params_changed=on_trace_params_changed,
         on_prev_image=on_prev_image,
         on_next_image=on_next_image,
@@ -3339,8 +3348,6 @@ def interactive_seed_selection_session(
         postprocess_merge_threshold=postprocess_merge_threshold,
         postprocess_confidence_threshold=postprocess_confidence_threshold,
         postprocess_mask_smoothing_size=postprocess_mask_smoothing_size,
-        postprocess_merge_guard_max_paths=postprocess_merge_guard_max_paths,
-        postprocess_merge_guard_max_nodes=postprocess_merge_guard_max_nodes,
         postprocess_merge_timeout_seconds=postprocess_merge_timeout_seconds,
         on_select_postprocess_output_dir=on_select_postprocess_output_dir,
         on_clear_postprocess_output_dir=on_clear_postprocess_output_dir,

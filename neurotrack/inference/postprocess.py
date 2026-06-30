@@ -203,12 +203,9 @@ def filter_paths_by_length(
 
 def _restructure_paths(paths: List[np.ndarray]) -> List[np.ndarray]:
     """Normalize path hierarchy/order via tree.restructure_neuron_tree."""
-    paths_as_tensors = [_path_to_tensor(path) for path in paths]
-    sections = tree.restructure_neuron_tree(paths_as_tensors, input_type="paths")
-    return [
-        section.detach().cpu().numpy() if isinstance(section, torch.Tensor) else np.asarray(section)
-        for section in sections.values()
-    ]
+    paths_np = [np.asarray(path, dtype=np.float32) for path in paths]
+    sections = tree.restructure_neuron_tree(paths_np, input_type="paths")
+    return [np.asarray(section, dtype=np.float32) for section in sections.values()]
 
 
 def smooth_paths(paths: List[np.ndarray], window_size: int = 5) -> List[np.ndarray]:
@@ -352,6 +349,7 @@ def _confidence_clip_paths(
     input_paths: List[np.ndarray],
     merge_threshold: float,
     confidence_threshold: int,
+    consecutive_low_confidence_clip_len: int,
 ) -> List[np.ndarray]:
     """Trim low-confidence distal tails from the merged paths.
 
@@ -377,6 +375,7 @@ def _confidence_clip_paths(
         input_path = np.asarray(input_path)
         if len(input_path) == 0:
             continue
+        # Get all points in the merged tree that are within merge_threshold of any point in the input path.
         neighbor_lists = node_tree.query_ball_point(
             np.asarray(input_path[:, :3], dtype=np.float64), r=merge_threshold
         )
@@ -408,6 +407,12 @@ def _confidence_clip_paths(
         _coord_key_xyz(np.asarray(row[2:5], dtype=np.float32)): int(row[0])
         for row in swc_list
     }
+    children_by_id: Dict[int, List[int]] = {}
+    for row in swc_list:
+        node_id = int(row[0])
+        parent_id = int(row[6])
+        if parent_id != -1:
+            children_by_id.setdefault(parent_id, []).append(node_id)
 
     # Keep every confident node and all of its ancestors; everything else is a
     # low-confidence tail (or hangs off one).  The ancestor walk is memoized via
@@ -422,6 +427,39 @@ def _confidence_clip_paths(
             keep_ids.add(current)
             current = id_to_parent.get(current, -1)
 
+    forced_drop_ids: set[int] = set()
+    if int(consecutive_low_confidence_clip_len) > 0:
+        min_run_len = int(consecutive_low_confidence_clip_len)
+        for path in merged_paths:
+            low_run_start = None
+            low_run_length = 0
+            for idx, node in enumerate(path):
+                node_key = _coord_key_xyz(node[:3])
+                if coord_support.get(node_key, 0) < confidence_threshold:
+                    if low_run_start is None:
+                        low_run_start = idx
+                    low_run_length += 1
+                    if low_run_length >= min_run_len:
+                        for tail_node in path[low_run_start:]:
+                            tail_node_id = coord_to_node_id.get(_coord_key_xyz(tail_node[:3]))
+                            if tail_node_id is not None:
+                                forced_drop_ids.add(tail_node_id)
+                        break
+                else:
+                    low_run_start = None
+                    low_run_length = 0
+
+    # Forced low-confidence clipping must cascade to all descendants in the
+    # SWC topology, otherwise side branches can remain hanging from a dropped node.
+    if forced_drop_ids:
+        stack = list(forced_drop_ids)
+        while stack:
+            node_id = stack.pop()
+            for child_id in children_by_id.get(node_id, []):
+                if child_id not in forced_drop_ids:
+                    forced_drop_ids.add(child_id)
+                    stack.append(child_id)
+
     # Rebuild each path as its kept root-side prefix.  ``keep_ids`` is
     # ancestor-closed, so the first dropped node ends the path and a branch whose
     # anchor was dropped collapses to nothing (cascading the removal).
@@ -430,7 +468,7 @@ def _confidence_clip_paths(
         kept = []
         for node in path:
             node_id = coord_to_node_id.get(_coord_key_xyz(node[:3]))
-            if node_id is None or node_id not in keep_ids:
+            if node_id is None or node_id not in keep_ids or node_id in forced_drop_ids:
                 break
             kept.append(np.asarray(node[:3], dtype=np.float32))
         if kept:
@@ -444,24 +482,29 @@ def merge_paths(
     merge_threshold: float = 2.0,
     mask_smoothing_size: int = 0,
     confidence_threshold: int = 0,
-        merge_guard_max_paths: int = 0,
-        merge_guard_max_nodes: int = 0,
-        merge_timeout_seconds: float = 30.0,
+    merge_timeout_seconds: float = 30.0,
+    _suppress_stats: bool = False,
+    _stats: Dict[str, int] | None = None,
 ) -> List[np.ndarray]:
     """Merge overlapping paths into longer paths while preserving unique runs.
 
-    When ``confidence_threshold > 1`` a confidence filter runs after merging:
-    each finalized node is scored by how many input paths have a node within
+    When ``confidence_threshold > 1`` a confidence filter runs before merging:
+    each node is scored by how many input paths have a node within
     ``merge_threshold``, and low-confidence distal tails (nodes with no
     descendant supported by at least ``confidence_threshold`` input paths) are
-    clipped, cascading to any branch hanging off a removed tail.
+    clipped before overlap merging.
 
         Guardrails:
-        - ``merge_guard_max_paths`` / ``merge_guard_max_nodes``: when positive, skip
-            merge entirely if the input exceeds the corresponding budget.
         - ``merge_timeout_seconds``: when positive, abort merge after the time budget
             and pass through remaining unprocessed paths unchanged.
     """
+
+    if _stats is None:
+        _stats = {"merged_paths": 0, "clipped_nodes": 0}
+
+    # Clip a path from the start of the first low-confidence run once that run
+    # persists for this many consecutive nodes, even if support rises later.
+    consecutive_low_confidence_clip_len = 10
 
     merged_paths = []
     for path in paths:
@@ -473,27 +516,30 @@ def merge_paths(
     # Snapshot the numpy input paths as the confidence reference before merging.
     input_paths_np = list(merged_paths)
 
+    if int(confidence_threshold) > 1:
+        n_nodes_before = sum(len(path) for path in merged_paths)
+        merged_paths = _confidence_clip_paths(
+            merged_paths,
+            input_paths_np,
+            merge_threshold,
+            int(confidence_threshold),
+            consecutive_low_confidence_clip_len,
+        )
+        n_nodes_after = sum(len(path) for path in merged_paths)
+        clipped_count = int(n_nodes_before - n_nodes_after)
+        _stats["clipped_nodes"] += clipped_count
+        if not _suppress_stats:
+            print(
+                f"    Confidence-clipped {clipped_count} low-confidence "
+                f"node(s) (threshold={int(confidence_threshold)})"
+            )
+
     n_merge_modified = 0
     n_paths = len(merged_paths)
-    n_total_nodes = int(sum(len(path) for path in merged_paths))
-    if int(merge_guard_max_paths) > 0 and n_paths > int(merge_guard_max_paths):
-        print(
-            "    Skipped merge_paths: "
-            f"n_paths={n_paths} exceeds merge_guard_max_paths={int(merge_guard_max_paths)}"
-        )
-        return merged_paths
-    if int(merge_guard_max_nodes) > 0 and n_total_nodes > int(merge_guard_max_nodes):
-        print(
-            "    Skipped merge_paths: "
-            f"n_nodes={n_total_nodes} exceeds merge_guard_max_nodes={int(merge_guard_max_nodes)}"
-        )
-        return merged_paths
 
     order = sorted(range(n_paths), key=lambda i: len(merged_paths[i]), reverse=True)
     finalized: Dict[int, List[np.ndarray]] = {}
     reference_points_list: List[np.ndarray] = []
-    pending_points: List[np.ndarray] = []
-    current_len = None
     reference_points = None
     tree_others = None
     merge_start_time = time.perf_counter()
@@ -516,29 +562,16 @@ def merge_paths(
             break
 
         path = merged_paths[oi]
-        path_len = len(path)
-        if current_len is None:
-            current_len = path_len
-        if path_len < current_len:
-            # The equal-length group is complete; only now does it join
-            # the reference, preserving the strict "longer" rule.
-            reference_points_list.extend(pending_points)
-            pending_points = []
-            current_len = path_len
-            reference_points = None
-            tree_others = None
-
-        if path_len == 0:
+        if len(path) == 0:
             finalized[oi] = []
             continue
         if not reference_points_list:
-            # Longest group: nothing strictly longer to merge into.
+            # Seed the reference with the first path. Subsequent paths, even of
+            # equal length, may merge onto already-processed ones.
             finalized[oi] = [path]
-            pending_points.append(path)
+            reference_points_list.append(path)
             continue
 
-        # Reuse the same KDTree for all paths in an equal-length group since
-        # the reference set does not change until we move to the next group.
         if tree_others is None:
             reference_points = np.vstack(reference_points_list)
             tree_others = KDTree(reference_points)
@@ -547,12 +580,17 @@ def merge_paths(
 
         if not np.any(overlap_mask):
             finalized[oi] = [path]
-            pending_points.append(path)
+            reference_points_list.append(path)
+            reference_points = None
+            tree_others = None
             continue
 
         segments = _merge_runs(path, overlap_mask, nn_idx, reference_points)
         finalized[oi] = segments
-        pending_points.extend(segments)
+        if segments:
+            reference_points_list.extend(segments)
+            reference_points = None
+            tree_others = None
         # Only count as modified if path actually changed:
         # - If 0 segments: path was completely absorbed (successful merge)
         # - If 1+ segments but path changed: it was split/re-anchored (actual modification)
@@ -573,18 +611,9 @@ def merge_paths(
         rebuilt_paths.extend(finalized.get(oi, []))
     merged_paths = rebuilt_paths
 
-    print(f"    Merged {n_merge_modified} overlapping path(s) onto longer paths")
-
-    if int(confidence_threshold) > 1:
-        n_nodes_before = sum(len(path) for path in merged_paths)
-        merged_paths = _confidence_clip_paths(
-            merged_paths, input_paths_np, merge_threshold, int(confidence_threshold)
-        )
-        n_nodes_after = sum(len(path) for path in merged_paths)
-        print(
-            f"    Confidence-clipped {n_nodes_before - n_nodes_after} low-confidence "
-            f"node(s) (threshold={int(confidence_threshold)})"
-        )
+    _stats["merged_paths"] += int(n_merge_modified)
+    if not _suppress_stats:
+        print(f"    Merged {n_merge_modified} overlapping path(s) onto longer paths")
 
     return merged_paths
 
@@ -612,8 +641,6 @@ def process_results(results: List[Dict[str, Any]], params: Dict[str, Any]) -> Li
     merge_threshold = float(params.get("merge_threshold", 1.0))
     confidence_threshold = int(params.get("confidence_threshold", 0))
     mask_smoothing_size = int(params.get("mask_smoothing_size", 0))
-    merge_guard_max_paths = int(params.get("merge_guard_max_paths", 0))
-    merge_guard_max_nodes = int(params.get("merge_guard_max_nodes", 0))
     merge_timeout_seconds = float(params.get("merge_timeout_seconds", 30.0))
     max_branch_label = "inf" if not np.isfinite(max_branch_length) else f"{max_branch_length}"
 
@@ -634,36 +661,41 @@ def process_results(results: List[Dict[str, Any]], params: Dict[str, Any]) -> Li
               enable_merge: {enable_merge}\n\
               merge_threshold: {merge_threshold}\n\
               confidence_threshold: {confidence_threshold}\n\
-              merge_guard_max_paths: {merge_guard_max_paths}\n\
-              merge_guard_max_nodes: {merge_guard_max_nodes}\n\
               merge_timeout_seconds: {merge_timeout_seconds}\n\
               mask_smoothing_size: {mask_smoothing_size}\n")
         try:
+            total_paths = len(raw_paths)
+            total_nodes = int(sum(len(path) for path in raw_paths))
+            print(f"    Initial paths count: {total_paths}, total nodes: {total_nodes}")
+            print("    Restructuring paths...")
             paths = _restructure_paths(raw_paths)
-
-            if enable_resample:
-                paths = tree.resample_tree(paths, step_size=resampling_step_size)
-            if enable_smooth_paths:
-                paths = smooth_paths(paths, window_size=smoothing_window)
             if enable_merge:
+                print("    Merging overlapping paths...")
                 paths = merge_paths(
                     paths,
                     merge_threshold=merge_threshold,
                     mask_smoothing_size=mask_smoothing_size,
                     confidence_threshold=confidence_threshold,
-                    merge_guard_max_paths=merge_guard_max_paths,
-                    merge_guard_max_nodes=merge_guard_max_nodes,
                     merge_timeout_seconds=merge_timeout_seconds,
                 )
                 # Merge can split/re-anchor sections; re-normalize hierarchy before
                 # descendant-cascade length filtering.
+                print(f"    Merged paths count: {len(paths)}")
+                print("    Restructuring paths after merge...")
                 paths = _restructure_paths(paths)
             if enable_length_filter:
+                print("    Filtering paths by length...")
                 paths = filter_paths_by_length(
                     paths,
                     min_length=min_branch_length,
                     max_length=max_branch_length,
                 )
+            if enable_resample:
+                print("    Resampling paths...")
+                paths = tree.resample_tree(paths, step_size=resampling_step_size)
+            if enable_smooth_paths:
+                print("    Smoothing paths...")
+                paths = smooth_paths(paths, window_size=smoothing_window)
 
             post_paths = [
                 torch.from_numpy(path.astype(np.float32))
@@ -694,6 +726,7 @@ def process_results(results: List[Dict[str, Any]], params: Dict[str, Any]) -> Li
                 "n_swc_nodes": 0,
                 "error": str(exc),
             })
+        print(f"Finished processing neuron '{neuron_name}'\n")
 
     return processed_results
 

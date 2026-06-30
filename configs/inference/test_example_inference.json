@@ -5,14 +5,14 @@
   "seeds_path": "/home/brysongray/data/neurotrack_data/gold166/gold166_cropped/soma_removed_seeds.json",
   "test_name": "jitter_8_radius_15_confidence_1_merge_5",
 
-  "sac_weights": "/home/brysongray/data/neurotrack_data/model_weights/bc_weights/training_outputs/model_state_dicts_all_fold1_training_round14_2026-06-02_09-21-23.pt",
+  "sac_weights": "/home/brysongray/data/neurotrack_data/model_weights/bc_weights/training_outputs/model_state_dicts_all_fold4_training_round50_2026-06-02_19-31-17.pt",
   "step_width": 2.0,
   "repeat_starts": false,
   "max_len": 10000,
   "max_paths": 1000,
   "rng_seed": 1,
   "n_trials": 1,
-  "seed_jitter_count": 50,
+  "seed_jitter_count": 40,
   "seed_jitter_radius": 15.0,
   "seed_jitter_weight_strategy": "boundary_weighted",
   "review_before_next": true,
@@ -30,12 +30,12 @@
   "false_stop_distance_threshold": 1.0,
 
   "filter_branches_by_length": false,
-  "resample": true,
-  "resampling_step_size": 2.0,
+  "resample": false,
+  "resampling_step_size": 1.0,
   "smooth_paths": false,
   "enable_merge": true,
-  "merge_threshold": 5.0,
-  "confidence_threshold": 1,
+  "merge_threshold": 8.0,
+  "confidence_threshold": 2,
 
   "run_evaluation": true,
   "eval_distance_threshold": 2.0

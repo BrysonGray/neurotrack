@@ -1,5 +1,9 @@
 """Pipeline orchestrator for interactively selecting, tracing, post-processing,
 and evaluating neuron reconstructions.
+
+Developer note: prediction tracing is rebuilt only from the editable prediction
+graph plus the current seeds. Reference post-processing stays isolated so
+reference edits can be evaluated without mutating prediction trace state.
 """
 
 from __future__ import annotations
@@ -27,6 +31,7 @@ from neurotrack.core.pipeline_config import PostprocessConfig, flexible_image_ke
 from neurotrack.inference.postprocess import process_results
 from neurotrack.inference.runtime import load_models
 from neurotrack.inference.tracing import trace_image as sac_trace_image
+from neurotrack.visualization.editor_state import AnnotationGraph
 from neurotrack.evaluation.io import (
     compute_pipeline_summary,
     upsert_evaluation_results_csv,
@@ -342,6 +347,23 @@ def _draw_mask_from_paths_xyz(
     return mask_image.data[0].detach().cpu().numpy()
 
 
+class _PredictionGraphInitializationAdapter:
+    """Convert an editable prediction graph into runtime initialization inputs."""
+
+    def __init__(self, prediction_paths: Optional[List[List[List[float]]]]) -> None:
+        self._prediction_graph = AnnotationGraph.from_paths(prediction_paths)
+
+    def build_initial_path_mask(
+        self,
+        image_shape_zyx: Tuple[int, int, int],
+        width: float,
+    ) -> Optional[np.ndarray]:
+        paths_xyz = self._prediction_graph.to_paths()
+        if len(paths_xyz) == 0:
+            return None
+        return _draw_mask_from_paths_xyz(paths_xyz, image_shape_zyx, width=width, mask_dtype=np.uint8)
+
+
 class _TraceRuntime:
     """Stateful tracer for current image set used by GUI session callbacks."""
 
@@ -415,8 +437,8 @@ class _TraceRuntime:
         image_index: int,
         image_relative_key: str,
         seed_rows: List[List[float]],
+        prediction_paths: Optional[List[List[List[float]]]] = None,
         cancel_event: Optional[threading.Event] = None,
-        initial_path_mask: Optional[np.ndarray] = None,
     ) -> Dict[str, object]:
         with self._lock:
             dataset_index, resolved_key = self._resolve_dataset_index(
@@ -426,6 +448,18 @@ class _TraceRuntime:
             normalized_seed_rows = [[float(coord) for coord in row] for row in seed_rows]
             self._dataset.seed_points_by_image[image_relative_key] = normalized_seed_rows
             self._dataset.seed_points_by_image[resolved_key] = normalized_seed_rows
+
+            initial_path_mask = None
+            if prediction_paths is not None:
+                sample = self._dataset[dataset_index]
+                sample_image = sample.get("image", None) if isinstance(sample, dict) else None
+                if sample_image is not None:
+                    image_shape_zyx = tuple(int(v) for v in np.asarray(sample_image).shape[-3:])
+                    initial_path_mask = _PredictionGraphInitializationAdapter(prediction_paths).build_initial_path_mask(
+                        image_shape_zyx=image_shape_zyx,
+                        width=float(self.trace_params.get("step_width", 4.0)),
+                    )
+
             result = sac_trace_image(
                 env=self._env,
                 actor=self._actor,
@@ -497,13 +531,14 @@ class _TraceSessionManager:
         self.enabled = False
 
         self.trace_results_by_key: Dict[str, List[List[List[float]]]] = {}
-        self._revision_state_by_key: Dict[str, Dict[str, object]] = {}
+        self.traced_seed_rows_by_key: Dict[str, List[List[float]]] = {}
         self._trace_output_dir: Optional[Path] = None
         self._temp_dir = tempfile.TemporaryDirectory(prefix="neurotrack_trace_session_")
         self._temp_root = Path(self._temp_dir.name)
         self._message = ""
         self._token = 0
         self._overlay_token = 0
+        self._postprocess_token = 0
         self._running = False
         self._thread: Optional[threading.Thread] = None
         self._cancel_event: Optional[threading.Event] = None
@@ -514,8 +549,10 @@ class _TraceSessionManager:
 
         # post-processing and evaluation state
         self.postprocess_results_by_key: Dict[str, Dict[str, object]] = {}
+        self.reference_postprocess_results_by_key: Dict[str, Dict[str, object]] = {}
         self.eval_results_by_key: Dict[str, Dict[str, object]] = {}
         self._pre_postprocess_trace_cache_by_key: Dict[str, List[List[List[float]]]] = {}
+        self._pre_postprocess_reference_cache_by_key: Dict[str, List[List[float]]] = {}
         self.filtered_swc_by_key: Dict[str, List[List[float]]] = {}
         self._gt_swc_cache_by_key: Dict[str, List[List[float]]] = {}
         self._gt_swc_dir: Optional[Path] = None
@@ -543,6 +580,10 @@ class _TraceSessionManager:
     def _increment_overlay_token(self) -> None:
         with self._state_lock:
             self._overlay_token += 1
+
+    def _increment_postprocess_token(self) -> None:
+        with self._state_lock:
+            self._postprocess_token += 1
 
     def close(self):
         self.cancel_trace_all()
@@ -603,9 +644,6 @@ class _TraceSessionManager:
             data_save.write_swc(swc_list, str(dst))
         self._set_state(f"Saved all traces to: {out_dir}", increment_token=True)
 
-    def _clear_revision_state(self, image_key: str) -> None:
-        self._revision_state_by_key.pop(image_key, None)
-
     def _clear_derived_results(self, image_key: str) -> None:
         self.postprocess_results_by_key.pop(image_key, None)
         self.eval_results_by_key.pop(image_key, None)
@@ -618,35 +656,94 @@ class _TraceSessionManager:
             normalized.append(path.tolist())
         return normalized
 
+    @staticmethod
+    def _normalize_seed_rows_payload(seed_rows: List[List[float]]) -> List[List[float]]:
+        normalized: List[List[float]] = []
+        for row in seed_rows or []:
+            row_np = np.asarray(row, dtype=np.float32).reshape(-1)
+            if row_np.shape[0] < 3:
+                continue
+            normalized.append([float(row_np[0]), float(row_np[1]), float(row_np[2])])
+        return normalized
+
+    @staticmethod
+    def _seed_row_key(seed_row: List[float], decimals: int = 4) -> Tuple[float, float, float]:
+        row_np = np.asarray(seed_row, dtype=np.float32).reshape(-1)
+        rounded = np.round(row_np[:3].astype(np.float64), decimals=decimals)
+        return float(rounded[0]), float(rounded[1]), float(rounded[2])
+
+    def _pending_seed_rows(self, image_key: str, seed_rows: List[List[float]]) -> List[List[float]]:
+        normalized_rows = self._normalize_seed_rows_payload(seed_rows)
+        consumed_rows = self.traced_seed_rows_by_key.get(image_key, [])
+        if not consumed_rows:
+            return normalized_rows
+        consumed_keys = {self._seed_row_key(row) for row in consumed_rows}
+        return [row for row in normalized_rows if self._seed_row_key(row) not in consumed_keys]
+
+    def _mark_seed_rows_traced(self, image_key: str, seed_rows: List[List[float]]) -> None:
+        normalized_rows = self._normalize_seed_rows_payload(seed_rows)
+        if not normalized_rows:
+            return
+        existing_rows = self._normalize_seed_rows_payload(self.traced_seed_rows_by_key.get(image_key, []))
+        seen_keys = {self._seed_row_key(row) for row in existing_rows}
+        merged_rows = list(existing_rows)
+        for row in normalized_rows:
+            row_key = self._seed_row_key(row)
+            if row_key in seen_keys:
+                continue
+            merged_rows.append(row)
+            seen_keys.add(row_key)
+        self.traced_seed_rows_by_key[image_key] = merged_rows
+
+    def _append_trace_paths(self, image_key: str, new_paths: List[List[List[float]]]) -> List[List[List[float]]]:
+        existing_paths = self._normalize_paths_payload(self.trace_results_by_key.get(image_key, []))
+        appended_paths = existing_paths + self._normalize_paths_payload(new_paths)
+        self.trace_results_by_key[image_key] = appended_paths
+        return appended_paths
+
     def discard_trace(self, image_key: str) -> None:
         if image_key not in self.trace_results_by_key:
             self._set_state(f"No trace to discard for {image_key}.", increment_token=True)
             return
         self.trace_results_by_key.pop(image_key, None)
+        self.traced_seed_rows_by_key.pop(image_key, None)
         self._clear_derived_results(image_key)
-        self._clear_revision_state(image_key)
         trace_tmp_path = self._temp_root / Path(image_key).with_suffix(".json")
         if trace_tmp_path.exists():
             trace_tmp_path.unlink(missing_ok=True)
         self._increment_overlay_token()
         self._set_state(f"Discarded current predicted trace for {image_key}.", increment_token=True)
 
-    def undo_postprocess(self, image_key: str) -> Optional[List[List[List[float]]]]:
-        original = self._pre_postprocess_trace_cache_by_key.get(image_key)
-        if original is None:
-            self._set_state(f"No cached pre-processed trace to restore for {image_key}.", increment_token=True)
+    def undo_postprocess(self, image_key: str, target: str = "prediction") -> Optional[object]:
+        target = str(target or "prediction")
+        if target == "prediction":
+            original = self._pre_postprocess_trace_cache_by_key.get(image_key)
+            if original is None:
+                self._set_state(f"No cached pre-processed trace to restore for {image_key}.", increment_token=True)
+                return None
+
+            restored = self._normalize_paths_payload(original)
+            self.trace_results_by_key[image_key] = restored
+            self._write_temp_trace(image_key=image_key, paths=restored)
+            self.eval_results_by_key.pop(image_key, None)
+            self._pre_postprocess_trace_cache_by_key.pop(image_key, None)
+            self._increment_overlay_token()
+            self._increment_postprocess_token()
+            self._set_state(f"Restored original predicted trace for {image_key}.", increment_token=True)
+            return restored
+
+        original_rows = self._pre_postprocess_reference_cache_by_key.get(image_key)
+        if original_rows is None:
+            self._set_state(f"No cached pre-processed annotation to restore for {image_key}.", increment_token=True)
             return None
 
-        restored = self._normalize_paths_payload(original)
-        self.trace_results_by_key[image_key] = restored
-        self._write_temp_trace(image_key=image_key, paths=restored)
-        self.postprocess_results_by_key.pop(image_key, None)
-        self.eval_results_by_key.pop(image_key, None)
-        self._pre_postprocess_trace_cache_by_key.pop(image_key, None)
-        self._clear_revision_state(image_key)
-        self._increment_overlay_token()
-        self._set_state(f"Restored original predicted trace for {image_key}.", increment_token=True)
-        return restored
+        restored_rows = [[float(v) for v in row[:7]] for row in original_rows]
+        self.filtered_swc_by_key[image_key] = restored_rows
+        self.reference_postprocess_results_by_key.pop(image_key, None)
+        self._pre_postprocess_reference_cache_by_key.pop(image_key, None)
+        self._increment_postprocess_token()
+        self._set_state(f"Restored original reference annotation for {image_key}.", increment_token=True)
+        return restored_rows
 
     def _store_trace_timing(self, image_key: str, timing_ms: Optional[object]) -> None:
         if isinstance(timing_ms, dict):
@@ -669,177 +766,6 @@ class _TraceSessionManager:
             f"env_step={float(env_step or 0.0):.1f}ms, "
             f"get_state={float(get_state or 0.0):.1f}ms]"
         )
-
-    def select_revision_node(
-        self,
-        image_key: str,
-        selected_point_zyx: np.ndarray,
-    ) -> Optional[Dict[str, object]]:
-        paths_raw = self.trace_results_by_key.get(image_key, [])
-        if len(paths_raw) == 0:
-            self._set_state(
-                f"No trace available for revision on {image_key}. Run tracing first.",
-                increment_token=True,
-            )
-            return None
-
-        point_zyx = np.asarray(selected_point_zyx, dtype=np.float32).reshape(-1)
-        if point_zyx.shape[0] < 3:
-            self._set_state("Revision point must have three coordinates (z, y, x).", increment_token=True)
-            return None
-        query_xyz = np.array([point_zyx[2], point_zyx[1], point_zyx[0]], dtype=np.float32)
-
-        paths_xyz = _coerce_paths_xyz(paths_raw)
-        closest = _find_closest_node_xyz(paths_xyz=paths_xyz, query_xyz=query_xyz)
-        if closest is None:
-            self._set_state("Could not identify a nearby node on the predicted tree.", increment_token=True)
-            return None
-
-        path_idx, node_idx, node_xyz = closest
-        self._revision_state_by_key[image_key] = {
-            "selected_path_index": int(path_idx),
-            "selected_node_index": int(node_idx),
-            "selected_node_xyz": node_xyz.tolist(),
-            "selected_point_zyx": point_zyx[:3].tolist(),
-            "preview_paths": None,
-        }
-        self._set_state(
-            (
-                "Revision point selected at "
-                f"(x={query_xyz[0]:.1f}, y={query_xyz[1]:.1f}, z={query_xyz[2]:.1f}); "
-                "trim anchor at "
-                f"(x={node_xyz[0]:.1f}, y={node_xyz[1]:.1f}, z={node_xyz[2]:.1f}) for {image_key}."
-            ),
-            increment_token=True,
-        )
-        return {
-            "selected_node_xyz": node_xyz.tolist(),
-            "selected_point_xyz": query_xyz.tolist(),
-        }
-
-    def preview_trace_revision(self, image_key: str) -> Optional[List[List[List[float]]]]:
-        state = self._revision_state_by_key.get(image_key)
-        if state is None:
-            self._set_state("Select a revision point before previewing.", increment_token=True)
-            return None
-
-        paths_xyz = _coerce_paths_xyz(self.trace_results_by_key.get(image_key, []))
-        if len(paths_xyz) == 0:
-            self._set_state(f"No trace available to preview for {image_key}.", increment_token=True)
-            return None
-
-        selected_path_idx = int(state.get("selected_path_index", -1))
-        selected_node_idx = int(state.get("selected_node_index", -1))
-        selected_node_xyz = np.asarray(state.get("selected_node_xyz", []), dtype=np.float32)
-        if selected_node_xyz.size < 3:
-            self._set_state("Invalid selected node for revision preview.", increment_token=True)
-            return None
-
-        trimmed_paths_xyz = _trim_paths_downstream(
-            paths_xyz=paths_xyz,
-            selected_path_idx=selected_path_idx,
-            selected_node_idx=selected_node_idx,
-            selected_node_xyz=selected_node_xyz,
-        )
-        preview_paths = [path.tolist() for path in trimmed_paths_xyz if path.shape[0] > 0]
-        state["preview_paths"] = preview_paths
-        self._set_state(
-            f"Revision preview ready for {image_key} ({len(preview_paths)} path(s)).",
-            increment_token=True,
-        )
-        return preview_paths
-
-    def launch_trace_revision(
-        self,
-        image_index: int,
-        image_key: str,
-        volume_shape: tuple[int, int, int],
-    ) -> Optional[List[List[List[float]]]]:
-        if not self.enabled or self._runtime is None:
-            self._set_state("Tracing is disabled (missing model config).", increment_token=True)
-            return None
-        if self._running:
-            self._set_state("Trace All is running. Cancel it before launching revision retrace.", increment_token=True)
-            return None
-
-        state = self._revision_state_by_key.get(image_key)
-        if state is None:
-            self._set_state("Select a revision point before launching retrace.", increment_token=True)
-            return None
-
-        preview_paths = state.get("preview_paths")
-        if not isinstance(preview_paths, list):
-            preview_paths = self.preview_trace_revision(image_key=image_key)
-            state = self._revision_state_by_key.get(image_key)
-        if preview_paths is None:
-            return None
-
-        selected_node_xyz = np.asarray(state.get("selected_node_xyz", []), dtype=np.float32)
-        if selected_node_xyz.size < 3:
-            self._set_state("Invalid selected node for revision retrace.", increment_token=True)
-            return None
-        selected_node_xyz = selected_node_xyz[:3].astype(np.float32, copy=True)
-
-        selected_point_zyx = np.asarray(state.get("selected_point_zyx", []), dtype=np.float32)
-        if selected_point_zyx.size < 3:
-            # Backward-compatible fallback for sessions that predate selected_point_zyx state.
-            selected_point_zyx = np.asarray(
-                [selected_node_xyz[2], selected_node_xyz[1], selected_node_xyz[0]],
-                dtype=np.float32,
-            )
-        selected_point_zyx = selected_point_zyx[:3].astype(np.float32, copy=True)
-        selected_point_xyz = np.asarray(
-            [selected_point_zyx[2], selected_point_zyx[1], selected_point_zyx[0]],
-            dtype=np.float32,
-        )
-
-        trimmed_mask = _draw_mask_from_paths_xyz(
-            paths_xyz=_coerce_paths_xyz(preview_paths),
-            shape_zyx=volume_shape,
-            width=float(self.trace_params.get("step_width", 4.0)),
-            mask_dtype=np.float32,
-        )
-        revision_seed_rows = [[
-            float(selected_point_zyx[0]),
-            float(selected_point_zyx[1]),
-            float(selected_point_zyx[2]),
-        ]]
-
-        self._set_state(f"Launching revision retrace for {image_key}...", increment_token=False)
-        result = self._runtime.trace_image(
-            image_index=image_index,
-            image_relative_key=image_key,
-            seed_rows=revision_seed_rows,
-            cancel_event=None,
-            initial_path_mask=trimmed_mask,
-        )
-        self._store_trace_timing(image_key=image_key, timing_ms=result.get("timing_ms", None))
-        new_paths_xyz = _coerce_paths_xyz(result["paths"])
-
-        paths: List[List[List[float]]] = [
-            path.tolist() for path in _coerce_paths_xyz(preview_paths) if path.shape[0] > 0
-        ]
-        if len(new_paths_xyz) > 0:
-            bridge_target_xyz = selected_point_xyz
-            closest_new = _find_closest_node_xyz(paths_xyz=new_paths_xyz, query_xyz=selected_point_xyz)
-            if closest_new is not None:
-                bridge_target_xyz = np.asarray(closest_new[2], dtype=np.float32)[:3]
-            if float(np.linalg.norm(selected_node_xyz - bridge_target_xyz)) > 1e-3:
-                bridge_path = np.asarray([selected_node_xyz, bridge_target_xyz], dtype=np.float32)
-                paths.append(bridge_path.tolist())
-        paths.extend(path.tolist() for path in new_paths_xyz if path.shape[0] > 0)
-
-        self.trace_results_by_key[image_key] = paths
-        self._increment_overlay_token()
-        self._write_temp_trace(image_key=image_key, paths=paths)
-        self._clear_derived_results(image_key)
-        self._clear_revision_state(image_key)
-        self._set_state(
-            f"Revision retrace complete: {image_key}"
-            f"{self._format_timing_summary(self._trace_timing_by_key.get(image_key))}",
-            increment_token=True,
-        )
-        return paths
 
     # ------------------------------------------------------------------
     # Post-processing helpers
@@ -1042,34 +968,46 @@ class _TraceSessionManager:
         self._set_state(f"Saved filtered SWC: {output_path}", increment_token=True)
         return str(out_dir)
 
-    def run_postprocess(self, image_key: str) -> Optional[Dict[str, object]]:
-        """Post-process current predicted paths and replace current prediction with the result."""
-        if image_key not in self.trace_results_by_key:
-            self._set_state(
-                f"No trace to post-process for {image_key}. Trace the image first.",
-                increment_token=True,
-            )
+    def run_postprocess(self, image_key: str, target: str = "prediction") -> Optional[Dict[str, object]]:
+        """Post-process the active annotation target for *image_key* and replace it in memory."""
+        target = str(target or "prediction")
+        if target not in {"prediction", "reference"}:
+            self._set_state(f"Unsupported post-process target for {image_key}: {target}", increment_token=True)
             return None
 
-        # Re-run postprocess from the same pre-postprocess baseline so repeated
-        # clicks do not compound transforms on already-processed output.
-        if image_key not in self._pre_postprocess_trace_cache_by_key:
-            self._pre_postprocess_trace_cache_by_key[image_key] = self._normalize_paths_payload(
-                self.trace_results_by_key[image_key]
-            )
-
-        raw_paths = self._normalize_paths_payload(self._pre_postprocess_trace_cache_by_key[image_key])
-        raw_paths_xyz = _coerce_paths_xyz(raw_paths)
-        if len(raw_paths_xyz) == 0:
-            self._set_state("Empty prediction — post-processing skipped.", increment_token=True)
-            return None
+        if target == "prediction":
+            if image_key not in self.trace_results_by_key:
+                self._set_state(
+                    f"No trace to post-process for {image_key}. Trace the image first.",
+                    increment_token=True,
+                )
+                return None
+            if image_key not in self._pre_postprocess_trace_cache_by_key:
+                self._pre_postprocess_trace_cache_by_key[image_key] = self._normalize_paths_payload(
+                    self.trace_results_by_key[image_key]
+                )
+            raw_paths = self._normalize_paths_payload(self._pre_postprocess_trace_cache_by_key[image_key])
+            raw_paths_xyz = _coerce_paths_xyz(raw_paths)
+            if len(raw_paths_xyz) == 0:
+                self._set_state("Empty prediction — post-processing skipped.", increment_token=True)
+                return None
+        else:
+            if image_key not in self._pre_postprocess_reference_cache_by_key:
+                self._pre_postprocess_reference_cache_by_key[image_key] = [
+                    [float(v) for v in row[:7]] for row in self.get_tree_swc_rows(image_key)
+                ]
+            raw_reference_rows = self._pre_postprocess_reference_cache_by_key[image_key]
+            raw_paths_xyz = _coerce_paths_xyz(AnnotationGraph.from_swc_rows(raw_reference_rows).to_paths())
+            if len(raw_paths_xyz) == 0:
+                self._set_state("Empty reference annotation — post-processing skipped.", increment_token=True)
+                return None
 
         raw_result = {
             "neuron_name": image_key,
             "paths": raw_paths_xyz,
         }
         try:
-            self._set_state(f"Post-processing {image_key}...", increment_token=False)
+            self._set_state(f"Post-processing {image_key} ({target})...", increment_token=False)
             processed = process_results([raw_result], self.postprocess_config.scaled_params_for_image(image_key))
             if processed:
                 result = processed[0]
@@ -1078,39 +1016,63 @@ class _TraceSessionManager:
                     self._set_state("Post-processing produced no paths.", increment_token=True)
                     return None
 
-                self.trace_results_by_key[image_key] = processed_paths
-                self._write_temp_trace(image_key=image_key, paths=processed_paths)
-                self._increment_overlay_token()
-                self.eval_results_by_key.pop(image_key, None)
-                self._clear_revision_state(image_key)
-                self.postprocess_results_by_key[image_key] = result
                 n = result.get("n_processed_paths", 0)
-                self._set_state(
-                    (
-                        f"Post-processing complete: {n} paths for {image_key}. "
-                        "Use 'Undo Post-Process' to restore the original trace."
-                    ),
-                    increment_token=True,
-                )
+                if target == "prediction":
+                    self.postprocess_results_by_key[image_key] = result
+                    self.trace_results_by_key[image_key] = processed_paths
+                    self._write_temp_trace(image_key=image_key, paths=processed_paths)
+                    self._increment_overlay_token()
+                    self._increment_postprocess_token()
+                    self.eval_results_by_key.pop(image_key, None)
+                    self._set_state(
+                        (
+                            f"Post-processing complete: {n} paths for {image_key} ({target}). "
+                            "Use 'Undo Post-Process' to restore the original trace."
+                        ),
+                        increment_token=True,
+                    )
+                else:
+                    self.reference_postprocess_results_by_key[image_key] = result
+                    processed_swc_rows = [
+                        [float(v) for v in row[:7]]
+                        for row in data_save.paths_to_swc(_coerce_paths_xyz(processed_paths))
+                    ]
+                    if len(processed_swc_rows) == 0:
+                        self._set_state("Post-processing produced no reference rows.", increment_token=True)
+                        return None
+                    self.filtered_swc_by_key[image_key] = processed_swc_rows
+                    self._increment_postprocess_token()
+                    self._set_state(
+                        (
+                            f"Post-processing complete: {n} paths for {image_key} ({target}). "
+                            "Use 'Undo Post-Process' to restore the original annotation."
+                        ),
+                        increment_token=True,
+                    )
                 return result
         except Exception as exc:
             self._set_state(f"Post-processing failed: {exc}", increment_token=True)
         return None
 
-    def run_postprocess_all(self) -> List[Dict[str, object]]:
-        """Post-process every currently available trace in the session."""
-        if len(self.trace_results_by_key) == 0:
-            self._set_state("No traces available to post-process.", increment_token=True)
-            return []
+    def run_postprocess_all(self, target: str = "prediction") -> List[Dict[str, object]]:
+        """Post-process every currently available annotation for the chosen target."""
+        target = str(target or "prediction")
+        if target == "prediction":
+            image_keys = sorted(self.trace_results_by_key.keys())
+            if len(image_keys) == 0:
+                self._set_state("No traces available to post-process.", increment_token=True)
+                return []
+        else:
+            image_keys = [path.relative_to(self.image_root).as_posix() for path in self.image_paths]
 
         processed_results: List[Dict[str, object]] = []
-        for image_key in sorted(self.trace_results_by_key.keys()):
-            result = self.run_postprocess(image_key)
+        for image_key in image_keys:
+            result = self.run_postprocess(image_key, target=target)
             if result is not None:
                 processed_results.append(result)
 
         self._set_state(
-            f"Post-processing complete for {len(processed_results)} trace(s).",
+            f"Post-processing complete for {len(processed_results)} {target} annotation(s).",
             increment_token=True,
         )
         return processed_results
@@ -1260,14 +1222,31 @@ class _TraceSessionManager:
     # Status
     # ------------------------------------------------------------------
 
-    def get_status(self, current_key: str) -> Dict[str, object]:
+    def get_status(self, current_key: str, target: str = "prediction") -> Dict[str, object]:
+        target = str(target or "prediction")
         with self._state_lock:
+            # Deep-copying the reference SWC rows is the most expensive part of a
+            # status poll. The viewer only consumes ``reference_swc_rows`` /
+            # reference ``postprocess_paths`` when the active target is reference,
+            # so skip the copy entirely for the common prediction-editing case and
+            # compute it at most once when it is actually needed.
+            tree_rows_cache: Optional[List[List[float]]] = None
+
+            def _tree_rows() -> List[List[float]]:
+                nonlocal tree_rows_cache
+                if tree_rows_cache is None:
+                    tree_rows_cache = self.get_tree_swc_rows(current_key)
+                return tree_rows_cache
+
+            is_prediction = target == "prediction"
             status: Dict[str, object] = {
                 "running": self._running,
                 "message": self._message,
                 "token": self._token,
                 "overlay_token": self._overlay_token,
+                "postprocess_token": self._postprocess_token,
                 "overlay_paths": self.trace_results_by_key.get(current_key, []),
+                "reference_swc_rows": [] if is_prediction else _tree_rows(),
                 "trace_timing_ms": self._trace_timing_by_key.get(current_key, None),
                 "trace_output_dir": None if self._trace_output_dir is None else str(self._trace_output_dir),
                 "model_weights_path": self.get_model_weights_path(),
@@ -1275,7 +1254,15 @@ class _TraceSessionManager:
                 "progress_total": self._progress_total,
                 "eval_report_text": None,
                 "gt_swc_path": self.get_gt_swc_path(),
-                "can_undo_postprocess": current_key in self._pre_postprocess_trace_cache_by_key,
+                "postprocess_target": target,
+                "postprocess_paths": self.trace_results_by_key.get(current_key, [])
+                if is_prediction
+                else _tree_rows(),
+                "can_undo_postprocess": (
+                    current_key in self._pre_postprocess_trace_cache_by_key
+                    if target == "prediction"
+                    else current_key in self._pre_postprocess_reference_cache_by_key
+                ),
             }
             eval_result = self.eval_results_by_key.get(current_key)
             if eval_result is not None:
@@ -1369,20 +1356,26 @@ class _TraceSessionManager:
             self._set_state("Trace All is running. Cancel it before tracing a single image.", increment_token=True)
             return self.trace_results_by_key.get(image_key, [])
 
+        normalized_seed_rows = self._normalize_seed_rows_payload(seed_rows)
+        pending_seed_rows = self._pending_seed_rows(image_key=image_key, seed_rows=seed_rows)
+        if len(normalized_seed_rows) > 0 and len(pending_seed_rows) == 0 and image_key in self.trace_results_by_key:
+            self._set_state(f"No new seeds to trace for {image_key}.", increment_token=True)
+            return self.trace_results_by_key.get(image_key, [])
+
         self._set_state(f"Tracing {image_key}...", increment_token=False)
         result = self._runtime.trace_image(
             image_index=image_index,
             image_relative_key=image_key,
-            seed_rows=seed_rows,
+            seed_rows=pending_seed_rows,
+            prediction_paths=self._normalize_paths_payload(self.trace_results_by_key.get(image_key, [])),
             cancel_event=None,
         )
         self._store_trace_timing(image_key=image_key, timing_ms=result.get("timing_ms", None))
-        paths = result["paths"]
-        self.trace_results_by_key[image_key] = paths
+        paths = self._append_trace_paths(image_key=image_key, new_paths=result["paths"])
+        self._mark_seed_rows_traced(image_key=image_key, seed_rows=pending_seed_rows)
         self._increment_overlay_token()
         self._write_temp_trace(image_key=image_key, paths=paths)
         self._clear_derived_results(image_key)
-        self._clear_revision_state(image_key)
         self._set_state(
             f"Trace complete: {image_key}{self._format_timing_summary(self._trace_timing_by_key.get(image_key))}",
             increment_token=True,
@@ -1414,19 +1407,26 @@ class _TraceSessionManager:
                     key = image_path.relative_to(self.image_root).as_posix()
                     self._set_state(f"Tracing {idx + 1}/{total}: {key}", increment_token=False)
                     seed_rows = flexible_image_key_lookup(seeds_by_key, key, default=[])
+                    normalized_seed_rows = self._normalize_seed_rows_payload(seed_rows)
+                    pending_seed_rows = self._pending_seed_rows(image_key=key, seed_rows=seed_rows)
+                    if len(normalized_seed_rows) > 0 and len(pending_seed_rows) == 0 and key in self.trace_results_by_key:
+                        with self._state_lock:
+                            self._progress_completed = idx + 1
+                        self._set_state(f"Skipped {idx + 1}/{total}: {key} (no new seeds)", increment_token=True)
+                        continue
                     result = self._runtime.trace_image(
                         image_index=idx,
                         image_relative_key=key,
-                        seed_rows=seed_rows,
+                        seed_rows=pending_seed_rows,
+                        prediction_paths=self._normalize_paths_payload(self.trace_results_by_key.get(key, [])),
                         cancel_event=self._cancel_event,
                     )
                     self._store_trace_timing(image_key=key, timing_ms=result.get("timing_ms", None))
-                    paths = result["paths"]
-                    self.trace_results_by_key[key] = paths
+                    paths = self._append_trace_paths(image_key=key, new_paths=result["paths"])
+                    self._mark_seed_rows_traced(image_key=key, seed_rows=pending_seed_rows)
                     self._increment_overlay_token()
                     self._write_temp_trace(image_key=key, paths=paths)
                     self._clear_derived_results(key)
-                    self._clear_revision_state(key)
                     with self._state_lock:
                         self._progress_completed = idx + 1
                     self._set_state(
@@ -1671,10 +1671,6 @@ class _SessionState:
         self.write_seeds_merge(out_path=out_path, updates=self.selected_seeds)
         print(f"Saved all seeds to: {out_path}")
 
-    # ------------------------------------------------------------------
-    # Trace callback
-    # ------------------------------------------------------------------
-
     def trace_current(
         self, seed_array: np.ndarray, trace_manager: _TraceSessionManager
     ) -> Optional[List[List[List[float]]]]:
@@ -1686,32 +1682,6 @@ class _SessionState:
             image_index=self.current_index,
             image_key=relative_key,
             seed_rows=self.selected_seeds.get(relative_key, []),
-        )
-
-    def select_trace_revision_node(
-        self,
-        selected_point_zyx: np.ndarray,
-        trace_manager: _TraceSessionManager,
-    ) -> Optional[Dict[str, object]]:
-        return trace_manager.select_revision_node(
-            image_key=self.current_relative_key(),
-            selected_point_zyx=selected_point_zyx,
-        )
-
-    def preview_trace_revision(
-        self,
-        trace_manager: _TraceSessionManager,
-    ) -> Optional[List[List[List[float]]]]:
-        return trace_manager.preview_trace_revision(image_key=self.current_relative_key())
-
-    def launch_trace_revision(
-        self,
-        trace_manager: _TraceSessionManager,
-    ) -> Optional[List[List[List[float]]]]:
-        return trace_manager.launch_trace_revision(
-            image_index=self.current_index,
-            image_key=self.current_relative_key(),
-            volume_shape=self.current_volume_shape,
         )
 
     # ------------------------------------------------------------------
@@ -1803,7 +1773,6 @@ def run_interactive_tracing_session(
         "repeat_starts": config.get("repeat_starts", False),
         "n_trials": config.get("n_trials", 1),
         "stochastic_actions": config.get("stochastic_actions", False),
-        "auto_seed_selection_mode": config.get("auto_seed_selection_mode", "remote_endnode"),
         "retry_on_no_long_paths": config.get("retry_on_no_long_paths", True),
         "retry_initial_radius": config.get("retry_initial_radius", 5.0),
         "retry_radius_step": config.get("retry_radius_step", 5.0),
@@ -1911,6 +1880,11 @@ def run_interactive_tracing_session(
     def _on_filtered_swc_changed(image_key: str, swc_rows: List[List[float]]) -> None:
         trace_manager.set_filtered_swc_rows(image_key=image_key, swc_rows=swc_rows)
 
+    def _on_prediction_paths_changed(image_key: str, prediction_paths: List[List[List[float]]]) -> None:
+        trace_manager.trace_results_by_key[image_key] = trace_manager._normalize_paths_payload(prediction_paths)
+        trace_manager._increment_overlay_token()
+        trace_manager._clear_derived_results(image_key)
+
     def _clear_model_weights_path() -> Optional[str]:
         return trace_manager.clear_model_weights_path()
 
@@ -1931,10 +1905,9 @@ def run_interactive_tracing_session(
             on_trace_current=lambda arr: session.trace_current(arr, trace_manager),
             on_trace_all=lambda: trace_manager.start_trace_all(session.selected_seeds),
             on_cancel_trace=trace_manager.cancel_trace_all,
-            on_trace_revision_select_point=lambda arr: session.select_trace_revision_node(arr, trace_manager),
-            on_trace_revision_preview=lambda: session.preview_trace_revision(trace_manager),
-            on_trace_revision_launch=lambda: session.launch_trace_revision(trace_manager),
-            get_trace_status=lambda: trace_manager.get_status(current_key=session.current_relative_key()),
+            get_trace_status=lambda target: trace_manager.get_status(
+                current_key=session.current_relative_key(), target=target
+            ),
             on_save_trace=lambda: trace_manager.save_trace(
                 session.current_relative_key(), default_dir=image_root / "trace_outputs"
             ),
@@ -1961,7 +1934,6 @@ def run_interactive_tracing_session(
             trace_branching=bool(trace_params.get("branching", True)),
             trace_repeat_starts=bool(trace_params.get("repeat_starts", False)),
             trace_stochastic_actions=bool(trace_params.get("stochastic_actions", False)),
-            trace_auto_seed_mode=str(trace_params.get("auto_seed_selection_mode", "remote_endnode")),
             trace_seed_jitter_count=int(trace_params.get("seed_jitter_count", 0)),
             trace_seed_jitter_radius=float(trace_params.get("seed_jitter_radius", 0.0)),
             trace_seed_jitter_weight_strategy=str(
@@ -1969,9 +1941,13 @@ def run_interactive_tracing_session(
             ),
             on_trace_params_changed=trace_manager.update_trace_params,
             show_postprocess_controls=True,
-            on_run_postprocess=lambda: trace_manager.run_postprocess(session.current_relative_key()),
-            on_run_postprocess_all=trace_manager.run_postprocess_all,
-            on_undo_postprocess=lambda: trace_manager.undo_postprocess(session.current_relative_key()),
+            on_run_postprocess=lambda target: trace_manager.run_postprocess(
+                session.current_relative_key(), target=target
+            ),
+            on_run_postprocess_all=lambda target: trace_manager.run_postprocess_all(target=target),
+            on_undo_postprocess=lambda target: trace_manager.undo_postprocess(
+                session.current_relative_key(), target=target
+            ),
             on_run_evaluation=lambda: trace_manager.run_evaluation(session.current_relative_key()),
             on_run_evaluation_all=trace_manager.evaluate_all,
             on_save_eval_report=lambda: trace_manager.save_eval_report(default_dir=image_root / "evaluation"),
@@ -2005,6 +1981,7 @@ def run_interactive_tracing_session(
             on_clear_filtered_swc_output_dir=_clear_filtered_swc_output_dir,
             on_save_filtered_swc=_save_filtered_swc,
             on_filtered_swc_changed=_on_filtered_swc_changed,
+            on_prediction_paths_changed=_on_prediction_paths_changed,
         )
         session.selected_seeds[session.current_relative_key()] = _normalize_seed_array(
             final_seeds.detach().cpu().numpy(),

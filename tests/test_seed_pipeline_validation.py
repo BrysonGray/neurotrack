@@ -3,6 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
+from types import SimpleNamespace
 
 import numpy as np
 import tifffile as tf
@@ -12,6 +13,8 @@ from neurotrack.data import NeuronPatchDataset, adjacency_dict, save_seeds_json
 from neurotrack.environments import NeuronTrackingEnvironment
 from neurotrack.inference.runtime import build_env
 from neurotrack.pipelines import interactive_tracing_pipeline as interactive_pipeline
+from neurotrack.visualization.editor_state import AnnotationGraph
+from neurotrack.visualization import ortho_viewer
 import neurotrack.data.datasets as datasets_module
 
 
@@ -73,7 +76,241 @@ def _make_chain_rows(num_nodes: int, start_xyz=(8.0, 20.0, 20.0), step_xyz=(1.0,
     return rows
 
 
+def _make_viewer_stub(
+    *,
+    seeds=None,
+    reference_rows=None,
+    prediction_paths=None,
+    active_annotation="reference",
+    projection_mode="slice",
+):
+    viewer = ortho_viewer._OrthoViewDialog.__new__(ortho_viewer._OrthoViewDialog)
+    viewer.Qt = ortho_viewer.importlib.import_module("qtpy.QtCore").Qt
+    viewer._editor_state = ortho_viewer.ViewerSessionState()
+    viewer._editor_state.active_annotation = active_annotation
+    if reference_rows is None:
+        reference_rows = np.asarray(_make_chain_rows(1, start_xyz=(1.0, 1.0, 1.0)), dtype=np.float32)
+    viewer._editor_state.set_reference_swc_rows(reference_rows)
+    viewer._editor_state.set_prediction_paths(prediction_paths)
+    viewer.mode = "seed"
+    viewer.projection_mode = projection_mode
+    viewer.shape = (16, 16, 16)
+    viewer.current_z = 0
+    viewer.current_y = 0
+    viewer.current_x = 0
+    viewer.seeds = list(seeds or [])
+    viewer.selected_seed_index = None
+    viewer.effective_seed_overlay = []
+    viewer.finished_paths = []
+    viewer.trace_overlay_visible = False
+    viewer.gt_overlay_visible = True
+    viewer._shift_held = False
+    viewer._active_tool = "zoom"
+    viewer._drag_start = None
+    viewer._drag_view = None
+    viewer._drag_rect = None
+    viewer._has_image_dir = lambda: True
+    viewer._refresh_seed_order_controls = lambda: None
+    viewer._refresh_edit_action_controls = lambda: None
+    viewer._refresh_effective_seed_overlay = lambda: None
+    viewer._sync_sliders_from_cursor = lambda: None
+    viewer._redraw = lambda *args, **kwargs: None
+    viewer.canvas = SimpleNamespace(draw_idle=lambda: None)
+    viewer.dialog = SimpleNamespace(accept=lambda: None)
+    viewer._sync_annotation_graph_to_view = lambda target: None
+    viewer._clear_current_selection = ortho_viewer._OrthoViewDialog._clear_current_selection.__get__(viewer)
+    viewer._add_current_seed = ortho_viewer._OrthoViewDialog._add_current_seed.__get__(viewer)
+    viewer._add_branch_seed_from_selected_node = ortho_viewer._OrthoViewDialog._add_branch_seed_from_selected_node.__get__(viewer)
+    viewer._remove_selected = ortho_viewer._OrthoViewDialog._remove_selected.__get__(viewer)
+    viewer._set_cursor_from_view_coords = ortho_viewer._OrthoViewDialog._set_cursor_from_view_coords.__get__(viewer)
+    viewer._select_seed_at_view_coords = ortho_viewer._OrthoViewDialog._select_seed_at_view_coords.__get__(viewer)
+    viewer._select_annotation_node_at_view_coords = ortho_viewer._OrthoViewDialog._select_annotation_node_at_view_coords.__get__(viewer)
+    viewer._select_annotation_nodes_in_view_rect = ortho_viewer._OrthoViewDialog._select_annotation_nodes_in_view_rect.__get__(viewer)
+    viewer._handle_click_without_drag = ortho_viewer._OrthoViewDialog._handle_click_without_drag.__get__(viewer)
+    viewer._handle_drag_release = ortho_viewer._OrthoViewDialog._handle_drag_release.__get__(viewer)
+    viewer._make_keypress_handler = ortho_viewer._OrthoViewDialog._make_keypress_handler.__get__(viewer)
+    viewer._active_annotation_graph = ortho_viewer._OrthoViewDialog._active_annotation_graph.__get__(viewer)
+    return viewer
+
+
 class SeedPipelineValidationTests(unittest.TestCase):
+    def test_annotation_graph_roundtrip_and_mutation(self):
+        rows = np.asarray(
+            [
+                [1, 3, 1.0, 1.0, 1.0, 1.0, -1],
+                [2, 3, 2.0, 1.0, 1.0, 1.0, 1],
+                [3, 3, 2.0, 2.0, 1.0, 1.0, 1],
+            ],
+            dtype=np.float32,
+        )
+
+        graph = AnnotationGraph.from_swc_rows(rows)
+        self.assertEqual(graph.root_ids, [1])
+        self.assertEqual(graph.nodes_by_id[1].child_ids, [2, 3])
+
+        paths = graph.to_paths()
+        self.assertEqual(len(paths), 2)
+
+        roundtrip = AnnotationGraph.from_swc_rows(graph.to_swc_rows())
+        self.assertEqual(roundtrip.root_ids, [1])
+        self.assertEqual(roundtrip.nodes_by_id[1].child_ids, [2, 3])
+
+        added_id = roundtrip.add_child(1, (3.0, 1.0, 1.0))
+        self.assertIn(added_id, roundtrip.nodes_by_id)
+        self.assertIn(added_id, roundtrip.nodes_by_id[1].child_ids)
+
+        roundtrip.remove_nodes({2})
+        self.assertNotIn(2, roundtrip.nodes_by_id)
+        self.assertEqual(roundtrip.nodes_by_id[1].child_ids, [3, added_id])
+
+    def test_interaction_controller_resolves_seed_first_and_preserves_selection_on_empty_click(self):
+        viewer = _make_viewer_stub(
+            seeds=[(0, 0, 0)],
+            reference_rows=np.asarray([[1, 3, 0.0, 0.0, 0.0, 1.0, -1]], dtype=np.float32),
+            active_annotation="reference",
+        )
+        viewer._editor_state.selection.selected_annotation_node_ids.add(1)
+
+        viewer._handle_click_without_drag("xy", 0.0, 0.0)
+        self.assertEqual(viewer.selected_seed_index, 0)
+        self.assertEqual(viewer._editor_state.selection.selected_annotation_node_ids, set())
+
+        viewer.selected_seed_index = 0
+        viewer._editor_state.selection.selected_annotation_node_ids = {1}
+        viewer._editor_state.selection.clip_preview_node_ids = {1}
+        viewer._editor_state.selection.pending_branch_seed_xyz = (1.0, 1.0, 1.0)
+
+        viewer._handle_click_without_drag("xy", 12.0, 12.0)
+        self.assertEqual(viewer.selected_seed_index, 0)
+        self.assertEqual(viewer._editor_state.selection.selected_annotation_node_ids, {1})
+        self.assertEqual(viewer._editor_state.selection.clip_preview_node_ids, {1})
+        self.assertEqual(viewer._editor_state.selection.pending_branch_seed_xyz, (1.0, 1.0, 1.0))
+
+    def test_interaction_controller_remove_selected_handles_seed_clip_and_annotation_nodes(self):
+        viewer = _make_viewer_stub(
+            seeds=[(0, 0, 0), (1, 1, 1)],
+            reference_rows=np.asarray(
+                [
+                    [1, 3, 1.0, 1.0, 1.0, 1.0, -1],
+                    [2, 3, 2.0, 1.0, 1.0, 1.0, 1],
+                    [3, 3, 3.0, 1.0, 1.0, 1.0, 2],
+                ],
+                dtype=np.float32,
+            ),
+        )
+
+        viewer._editor_state.selection.clip_preview_node_ids = {1, 2}
+        viewer._remove_selected()
+        self.assertEqual(set(viewer._editor_state.reference_annotation.nodes_by_id.keys()), {3})
+        self.assertEqual(viewer._editor_state.selection.clip_preview_node_ids, set())
+
+        viewer = _make_viewer_stub(seeds=[(0, 0, 0), (1, 1, 1)])
+        viewer.selected_seed_index = 0
+        viewer._remove_selected()
+        self.assertEqual(viewer.seeds, [(1, 1, 1)])
+        self.assertIsNone(viewer.selected_seed_index)
+
+        viewer = _make_viewer_stub(
+            reference_rows=np.asarray(
+                [
+                    [1, 3, 1.0, 1.0, 1.0, 1.0, -1],
+                    [2, 3, 2.0, 1.0, 1.0, 1.0, 1],
+                ],
+                dtype=np.float32,
+            ),
+        )
+        viewer._editor_state.selection.selected_annotation_node_ids = {2}
+        viewer._remove_selected()
+        self.assertEqual(set(viewer._editor_state.reference_annotation.nodes_by_id.keys()), {1})
+        self.assertEqual(viewer._editor_state.selection.selected_annotation_node_ids, set())
+
+    def test_interaction_controller_space_and_branch_actions_create_expected_nodes_and_seeds(self):
+        viewer = _make_viewer_stub(
+            reference_rows=np.asarray(
+                [
+                    [1, 3, 4.0, 5.0, 6.0, 1.0, -1],
+                ],
+                dtype=np.float32,
+            ),
+        )
+        viewer.current_x = 7
+        viewer.current_y = 8
+        viewer.current_z = 9
+        viewer._editor_state.selection.selected_annotation_node_ids = {1}
+        viewer._editor_state.selection.selection_view = "xy"
+        viewer._editor_state.selection.pending_branch_seed_xyz = (4.0, 5.0, 6.0)
+
+        viewer._add_current_seed()
+        self.assertEqual(viewer.selected_seed_index, None)
+        self.assertEqual(viewer._editor_state.selection.selected_annotation_node_ids, {2})
+        self.assertEqual(viewer._editor_state.selection.selection_view, "xy")
+        self.assertIsNone(viewer._editor_state.selection.pending_branch_seed_xyz)
+        self.assertEqual(viewer._editor_state.reference_annotation.nodes_by_id[2].parent_id, 1)
+        self.assertEqual(viewer._editor_state.reference_annotation.nodes_by_id[2].xyz, (7.0, 8.0, 9.0))
+
+        viewer._editor_state.selection.selected_annotation_node_ids = {1}
+        viewer.seeds = []
+        self.assertTrue(viewer._add_branch_seed_from_selected_node())
+        self.assertEqual(viewer.seeds[-1], (6, 5, 4))
+        self.assertEqual(viewer._editor_state.selection.pending_branch_seed_xyz, (4.0, 5.0, 6.0))
+
+    def test_interaction_controller_keypress_routes_space_delete_and_enter(self):
+        viewer = _make_viewer_stub()
+        calls = []
+        viewer._add_current_seed = lambda: calls.append("add")
+        viewer._remove_selected = lambda: calls.append("remove")
+        viewer.dialog = SimpleNamespace(accept=lambda: calls.append("accept"))
+
+        handler = viewer._make_keypress_handler(lambda event: calls.append(f"fallback:{event.key()}"))
+
+        handler(SimpleNamespace(key=lambda: viewer.Qt.Key_Space))
+        handler(SimpleNamespace(key=lambda: viewer.Qt.Key_Delete))
+        handler(SimpleNamespace(key=lambda: viewer.Qt.Key_Return))
+
+        self.assertEqual(calls, ["add", "remove", "accept"])
+
+    def test_interaction_controller_escape_clears_selection(self):
+        viewer = _make_viewer_stub(seeds=[(0, 0, 0)])
+        viewer.selected_seed_index = 0
+        viewer._editor_state.selection.selected_annotation_node_ids = {1}
+        viewer._editor_state.selection.clip_preview_node_ids = {1}
+        viewer._editor_state.selection.pending_branch_seed_xyz = (1.0, 1.0, 1.0)
+
+        handler = viewer._make_keypress_handler(lambda event: None)
+        handler(SimpleNamespace(key=lambda: viewer.Qt.Key_Escape))
+
+        self.assertIsNone(viewer.selected_seed_index)
+        self.assertEqual(viewer._editor_state.selection.selected_annotation_node_ids, set())
+        self.assertEqual(viewer._editor_state.selection.clip_preview_node_ids, set())
+        self.assertIsNone(viewer._editor_state.selection.pending_branch_seed_xyz)
+
+    def test_interaction_controller_select_drag_box_selects_visible_annotation_nodes(self):
+        viewer = _make_viewer_stub(
+            reference_rows=np.asarray(
+                [
+                    [1, 3, 1.0, 1.0, 0.0, 1.0, -1],
+                    [2, 3, 3.0, 3.0, 0.0, 1.0, 1],
+                    [3, 3, 8.0, 8.0, 0.0, 1.0, 2],
+                ],
+                dtype=np.float32,
+            ),
+        )
+        viewer._active_tool = "select"
+        viewer.current_z = 0
+
+        event = SimpleNamespace(inaxes=SimpleNamespace())
+        viewer._handle_drag_release(
+            event=event,
+            view="xy",
+            start_x=0.5,
+            start_y=0.5,
+            end_x=4.5,
+            end_y=4.5,
+        )
+
+        self.assertEqual(viewer._editor_state.selection.selected_annotation_node_ids, {1, 2})
+        self.assertIsNone(viewer.selected_seed_index)
+
     def test_format_eval_report_includes_special_node_metrics(self):
         report = interactive_pipeline._format_eval_report(
             "sample.tif",
@@ -680,6 +917,49 @@ class SeedPipelineValidationTests(unittest.TestCase):
             self.assertEqual(captured["seed_map"]["b.tif"], seed_rows)
             torch.testing.assert_close(captured["seed"], torch.tensor(seed_rows[0], dtype=torch.float32))
 
+    def test_interactive_trace_uses_current_prediction_graph_as_initial_path_mask(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            img_dir = root / "images"
+            img_dir.mkdir()
+
+            _write_volume(img_dir / "sample.tif", shape=(16, 16, 16))
+            captured = {}
+
+            def fake_trace_image(env, actor, dataset_idx, **kwargs):
+                del env, actor, dataset_idx
+                captured["initial_path_mask"] = kwargs.get("initial_path_mask", None)
+                return {
+                    "paths": [[[1.0, 2.0, 3.0]]],
+                    "labeled_neuron": np.zeros((16, 16, 16), dtype=np.uint8),
+                    "timing_ms": {"reset": 1.0},
+                }
+
+            with mock.patch.object(interactive_pipeline, "load_models", return_value=(object(), None)):
+                with mock.patch.object(interactive_pipeline, "sac_trace_image", side_effect=fake_trace_image):
+                    runtime = interactive_pipeline._TraceRuntime(
+                        {
+                            "img_dir": str(img_dir),
+                            "step_width": 4.0,
+                            "n_trials": 1,
+                            "max_len": 10,
+                            "max_paths": 1,
+                            "branching": False,
+                            "repeat_starts": False,
+                        }
+                    )
+                    runtime.trace_image(
+                        0,
+                        "sample.tif",
+                        seed_rows=[],
+                        prediction_paths=[[[2.0, 2.0, 2.0], [2.0, 2.0, 8.0]]],
+                    )
+
+            initial_path_mask = captured["initial_path_mask"]
+            self.assertIsNotNone(initial_path_mask)
+            self.assertEqual(tuple(initial_path_mask.shape), (16, 16, 16))
+            self.assertGreater(int(np.count_nonzero(initial_path_mask)), 0)
+
     def test_interactive_session_accepts_inference_style_config_aliases(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)
@@ -729,6 +1009,372 @@ class SeedPipelineValidationTests(unittest.TestCase):
             self.assertEqual(captured_prompt_args["seeds_input_path"], str(seeds_path))
             self.assertIsNone(captured_prompt_args["seeds_output_path"])
             self.assertTrue(out_dir.exists())
+
+    def test_postprocess_prediction_target_updates_and_undo_restores_trace(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            image_path = root / "sample.tif"
+            _write_volume(image_path, shape=(12, 12, 12))
+            image_key = image_path.relative_to(root).as_posix()
+
+            manager = interactive_pipeline._TraceSessionManager(
+                image_paths=[image_path],
+                image_root=root,
+                trace_params={},
+                postprocess_config=interactive_pipeline.PostprocessConfig(),
+            )
+
+            original_paths = [
+                [[1.0, 1.0, 1.0], [2.0, 1.0, 1.0], [3.0, 1.0, 1.0]],
+            ]
+            processed_paths = [
+                [[10.0, 10.0, 10.0], [11.0, 10.0, 10.0]],
+            ]
+            manager.trace_results_by_key[image_key] = original_paths
+
+            with mock.patch.object(
+                interactive_pipeline,
+                "process_results",
+                return_value=[
+                    {
+                        "neuron_name": image_key,
+                        "processed_paths": processed_paths,
+                        "n_processed_paths": 1,
+                    }
+                ],
+            ):
+                result = manager.run_postprocess(image_key=image_key, target="prediction")
+
+            self.assertIsNotNone(result)
+            self.assertEqual(len(manager.trace_results_by_key[image_key]), 1)
+            np.testing.assert_allclose(
+                np.asarray(manager.trace_results_by_key[image_key][0], dtype=np.float32),
+                np.asarray(processed_paths[0], dtype=np.float32),
+            )
+
+            status_before_undo = manager.get_status(current_key=image_key, target="prediction")
+            self.assertTrue(bool(status_before_undo.get("can_undo_postprocess", False)))
+
+            restored = manager.undo_postprocess(image_key=image_key, target="prediction")
+            self.assertIsNotNone(restored)
+            np.testing.assert_allclose(
+                np.asarray(manager.trace_results_by_key[image_key][0], dtype=np.float32),
+                np.asarray(original_paths[0], dtype=np.float32),
+            )
+
+            status_after_undo = manager.get_status(current_key=image_key, target="prediction")
+            self.assertFalse(bool(status_after_undo.get("can_undo_postprocess", False)))
+
+    def test_postprocess_reference_target_updates_and_undo_restores_reference_rows(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            image_path = root / "sample.tif"
+            _write_volume(image_path, shape=(16, 16, 16))
+            image_key = image_path.relative_to(root).as_posix()
+
+            manager = interactive_pipeline._TraceSessionManager(
+                image_paths=[image_path],
+                image_root=root,
+                trace_params={},
+                postprocess_config=interactive_pipeline.PostprocessConfig(),
+            )
+
+            original_rows = [
+                [1.0, 0.0, 2.0, 2.0, 2.0, 1.0, -1.0],
+                [2.0, 0.0, 3.0, 2.0, 2.0, 1.0, 1.0],
+                [3.0, 0.0, 4.0, 2.0, 2.0, 1.0, 2.0],
+            ]
+            manager.set_filtered_swc_rows(image_key=image_key, swc_rows=original_rows)
+
+            processed_paths = [
+                [[20.0, 20.0, 20.0], [21.0, 20.0, 20.0], [22.0, 20.0, 20.0]],
+            ]
+            with mock.patch.object(
+                interactive_pipeline,
+                "process_results",
+                return_value=[
+                    {
+                        "neuron_name": image_key,
+                        "processed_paths": processed_paths,
+                        "n_processed_paths": 1,
+                    }
+                ],
+            ):
+                result = manager.run_postprocess(image_key=image_key, target="reference")
+
+            self.assertIsNotNone(result)
+            processed_rows = manager.filtered_swc_by_key[image_key]
+            self.assertGreaterEqual(len(processed_rows), 2)
+            np.testing.assert_allclose(
+                np.asarray(processed_rows[0][2:5], dtype=np.float32),
+                np.asarray(processed_paths[0][0], dtype=np.float32),
+            )
+
+            status_before_undo = manager.get_status(current_key=image_key, target="reference")
+            self.assertTrue(bool(status_before_undo.get("can_undo_postprocess", False)))
+
+            restored = manager.undo_postprocess(image_key=image_key, target="reference")
+            self.assertIsNotNone(restored)
+            np.testing.assert_allclose(
+                np.asarray(manager.filtered_swc_by_key[image_key], dtype=np.float32),
+                np.asarray(original_rows, dtype=np.float32),
+            )
+
+            status_after_undo = manager.get_status(current_key=image_key, target="reference")
+            self.assertFalse(bool(status_after_undo.get("can_undo_postprocess", False)))
+
+    def test_trace_current_appends_new_paths_instead_of_replacing_prediction(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            image_path = root / "sample.tif"
+            _write_volume(image_path, shape=(12, 12, 12))
+            image_key = image_path.relative_to(root).as_posix()
+
+            manager = interactive_pipeline._TraceSessionManager(
+                image_paths=[image_path],
+                image_root=root,
+                trace_params={},
+                postprocess_config=interactive_pipeline.PostprocessConfig(),
+            )
+            manager.enabled = True
+
+            class _RuntimeStub:
+                def __init__(self):
+                    self.calls = 0
+
+                def trace_image(self, image_index, image_relative_key, seed_rows, prediction_paths=None, cancel_event=None):
+                    del image_index, image_relative_key, seed_rows, prediction_paths, cancel_event
+                    self.calls += 1
+                    if self.calls == 1:
+                        return {
+                            "paths": [[[5.0, 5.0, 5.0], [6.0, 5.0, 5.0]]],
+                            "timing_ms": {"total": 1.0, "steps": 1},
+                        }
+                    return {
+                        "paths": [[[9.0, 9.0, 9.0], [10.0, 9.0, 9.0]]],
+                        "timing_ms": {"total": 1.0, "steps": 1},
+                    }
+
+            manager._runtime = _RuntimeStub()
+            manager.trace_results_by_key[image_key] = [
+                [[1.0, 1.0, 1.0], [2.0, 1.0, 1.0]],
+            ]
+
+            first = manager.trace_current(image_index=0, image_key=image_key, seed_rows=[])
+            self.assertIsNotNone(first)
+            self.assertEqual(len(manager.trace_results_by_key[image_key]), 2)
+            np.testing.assert_allclose(
+                np.asarray(manager.trace_results_by_key[image_key][0], dtype=np.float32),
+                np.asarray([[1.0, 1.0, 1.0], [2.0, 1.0, 1.0]], dtype=np.float32),
+            )
+            np.testing.assert_allclose(
+                np.asarray(manager.trace_results_by_key[image_key][1], dtype=np.float32),
+                np.asarray([[5.0, 5.0, 5.0], [6.0, 5.0, 5.0]], dtype=np.float32),
+            )
+
+            second = manager.trace_current(image_index=0, image_key=image_key, seed_rows=[])
+            self.assertIsNotNone(second)
+            self.assertEqual(len(manager.trace_results_by_key[image_key]), 3)
+            np.testing.assert_allclose(
+                np.asarray(manager.trace_results_by_key[image_key][2], dtype=np.float32),
+                np.asarray([[9.0, 9.0, 9.0], [10.0, 9.0, 9.0]], dtype=np.float32),
+            )
+
+    def test_trace_current_append_keeps_path_order_existing_then_new(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            image_path = root / "sample.tif"
+            _write_volume(image_path, shape=(12, 12, 12))
+            image_key = image_path.relative_to(root).as_posix()
+
+            manager = interactive_pipeline._TraceSessionManager(
+                image_paths=[image_path],
+                image_root=root,
+                trace_params={},
+                postprocess_config=interactive_pipeline.PostprocessConfig(),
+            )
+            manager.enabled = True
+
+            class _RuntimeStub:
+                def trace_image(self, image_index, image_relative_key, seed_rows, prediction_paths=None, cancel_event=None):
+                    del image_index, image_relative_key, seed_rows, prediction_paths, cancel_event
+                    return {
+                        "paths": [
+                            [[20.0, 20.0, 20.0], [21.0, 20.0, 20.0]],
+                            [[30.0, 30.0, 30.0], [31.0, 30.0, 30.0]],
+                        ],
+                        "timing_ms": {"total": 1.0, "steps": 1},
+                    }
+
+            manager._runtime = _RuntimeStub()
+            manager.trace_results_by_key[image_key] = [
+                [[1.0, 1.0, 1.0], [2.0, 1.0, 1.0]],
+                [[3.0, 3.0, 3.0], [4.0, 3.0, 3.0]],
+            ]
+
+            merged = manager.trace_current(image_index=0, image_key=image_key, seed_rows=[])
+            self.assertIsNotNone(merged)
+            self.assertEqual(len(merged), 4)
+            np.testing.assert_allclose(np.asarray(merged[0], dtype=np.float32), np.asarray([[1.0, 1.0, 1.0], [2.0, 1.0, 1.0]], dtype=np.float32))
+            np.testing.assert_allclose(np.asarray(merged[1], dtype=np.float32), np.asarray([[3.0, 3.0, 3.0], [4.0, 3.0, 3.0]], dtype=np.float32))
+            np.testing.assert_allclose(np.asarray(merged[2], dtype=np.float32), np.asarray([[20.0, 20.0, 20.0], [21.0, 20.0, 20.0]], dtype=np.float32))
+            np.testing.assert_allclose(np.asarray(merged[3], dtype=np.float32), np.asarray([[30.0, 30.0, 30.0], [31.0, 30.0, 30.0]], dtype=np.float32))
+
+    def test_trace_current_rerun_uses_only_new_seed_rows_and_keeps_prediction_history(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            image_path = root / "sample.tif"
+            _write_volume(image_path, shape=(12, 12, 12))
+            image_key = image_path.relative_to(root).as_posix()
+
+            manager = interactive_pipeline._TraceSessionManager(
+                image_paths=[image_path],
+                image_root=root,
+                trace_params={},
+                postprocess_config=interactive_pipeline.PostprocessConfig(),
+            )
+            manager.enabled = True
+            manager.trace_results_by_key[image_key] = [
+                [[1.0, 1.0, 1.0], [2.0, 1.0, 1.0]],
+            ]
+            manager.traced_seed_rows_by_key[image_key] = [[5.0, 5.0, 5.0]]
+
+            captured_seed_rows = []
+            captured_prediction_paths = []
+
+            class _RuntimeStub:
+                def trace_image(self, image_index, image_relative_key, seed_rows, prediction_paths=None, cancel_event=None):
+                    del image_index, image_relative_key, cancel_event
+                    captured_seed_rows.append(seed_rows)
+                    captured_prediction_paths.append(prediction_paths)
+                    return {
+                        "paths": [[[9.0, 9.0, 9.0], [10.0, 9.0, 9.0]]],
+                        "timing_ms": {"total": 1.0, "steps": 1},
+                    }
+
+            manager._runtime = _RuntimeStub()
+
+            merged = manager.trace_current(
+                image_index=0,
+                image_key=image_key,
+                seed_rows=[[5.0, 5.0, 5.0], [7.0, 7.0, 7.0]],
+            )
+
+            self.assertIsNotNone(merged)
+            self.assertEqual(captured_seed_rows, [[[7.0, 7.0, 7.0]]])
+            np.testing.assert_allclose(
+                np.asarray(captured_prediction_paths[0], dtype=np.float32),
+                np.asarray([[[1.0, 1.0, 1.0], [2.0, 1.0, 1.0]]], dtype=np.float32),
+            )
+            self.assertEqual(manager.traced_seed_rows_by_key[image_key], [[5.0, 5.0, 5.0], [7.0, 7.0, 7.0]])
+
+    def test_reference_postprocess_does_not_change_prediction_trace_state(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            image_path = root / "sample.tif"
+            _write_volume(image_path, shape=(12, 12, 12))
+            image_key = image_path.relative_to(root).as_posix()
+
+            manager = interactive_pipeline._TraceSessionManager(
+                image_paths=[image_path],
+                image_root=root,
+                trace_params={},
+                postprocess_config=interactive_pipeline.PostprocessConfig(),
+            )
+            manager.enabled = True
+
+            original_prediction = [
+                [[1.0, 1.0, 1.0], [2.0, 1.0, 1.0]],
+            ]
+            manager.trace_results_by_key[image_key] = [
+                [list(point) for point in path] for path in original_prediction
+            ]
+            manager.filtered_swc_by_key[image_key] = _make_chain_rows(3)
+
+            def fake_process_results(results, params):
+                del params
+                return [
+                    {
+                        "processed_paths": results[0]["paths"],
+                        "n_processed_paths": len(results[0]["paths"]),
+                    }
+                ]
+
+            class _RuntimeStub:
+                def __init__(self):
+                    self.captured_prediction_paths = None
+
+                def trace_image(self, image_index, image_relative_key, seed_rows, prediction_paths=None, cancel_event=None):
+                    del image_index, image_relative_key, seed_rows, cancel_event
+                    self.captured_prediction_paths = prediction_paths
+                    return {
+                        "paths": [[[9.0, 9.0, 9.0], [10.0, 9.0, 9.0]]],
+                        "timing_ms": {"total": 1.0, "steps": 1},
+                    }
+
+            runtime_stub = _RuntimeStub()
+            manager._runtime = runtime_stub
+
+            with mock.patch.object(interactive_pipeline, "process_results", side_effect=fake_process_results):
+                manager.run_postprocess(image_key, target="reference")
+
+            np.testing.assert_allclose(
+                np.asarray(manager.trace_results_by_key[image_key], dtype=np.float32),
+                np.asarray(original_prediction, dtype=np.float32),
+            )
+
+            manager.trace_current(image_index=0, image_key=image_key, seed_rows=[])
+
+            np.testing.assert_allclose(
+                np.asarray(runtime_stub.captured_prediction_paths, dtype=np.float32),
+                np.asarray(original_prediction, dtype=np.float32),
+            )
+
+    def test_start_trace_all_uses_edited_prediction_state_and_appends_results(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            image_path = root / "sample.tif"
+            _write_volume(image_path, shape=(12, 12, 12))
+            image_key = image_path.relative_to(root).as_posix()
+
+            manager = interactive_pipeline._TraceSessionManager(
+                image_paths=[image_path],
+                image_root=root,
+                trace_params={},
+                postprocess_config=interactive_pipeline.PostprocessConfig(),
+            )
+            manager.enabled = True
+            manager.trace_results_by_key[image_key] = [
+                [[1.0, 1.0, 1.0], [2.0, 1.0, 1.0]],
+            ]
+
+            captured_prediction_paths = []
+
+            class _RuntimeStub:
+                def trace_image(self, image_index, image_relative_key, seed_rows, prediction_paths=None, cancel_event=None):
+                    del image_index, image_relative_key, seed_rows, cancel_event
+                    captured_prediction_paths.append(prediction_paths)
+                    return {
+                        "paths": [[[9.0, 9.0, 9.0], [10.0, 9.0, 9.0]]],
+                        "timing_ms": {"total": 1.0, "steps": 1},
+                    }
+
+            manager._runtime = _RuntimeStub()
+            manager.start_trace_all(seeds_by_key={image_key: [[5.0, 5.0, 5.0]]})
+
+            self.assertIsNotNone(manager._thread)
+            manager._thread.join(timeout=5.0)
+            self.assertFalse(manager._thread.is_alive())
+            self.assertEqual(len(captured_prediction_paths), 1)
+            np.testing.assert_allclose(
+                np.asarray(captured_prediction_paths[0], dtype=np.float32),
+                np.asarray(manager._normalize_paths_payload([[[1.0, 1.0, 1.0], [2.0, 1.0, 1.0]]]), dtype=np.float32),
+            )
+            self.assertEqual(len(manager.trace_results_by_key[image_key]), 2)
+            np.testing.assert_allclose(
+                np.asarray(manager.trace_results_by_key[image_key][1], dtype=np.float32),
+                np.asarray([[9.0, 9.0, 9.0], [10.0, 9.0, 9.0]], dtype=np.float32),
+            )
 
 
 if __name__ == "__main__":

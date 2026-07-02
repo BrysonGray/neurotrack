@@ -21,6 +21,16 @@ from matplotlib.patches import Rectangle
 import numpy as np
 import torch
 
+from neurotrack.visualization.editor_state import AnnotationTarget, ViewerSessionState
+from neurotrack.visualization.selection_utils import (
+    annotation_node_visible_in_view,
+    annotation_plot_coords,
+    hit_test_annotation_node,
+    hit_test_seed,
+    seed_plot_coords,
+    seed_visible_in_view,
+    visible_seed_indices,
+)
 from neurotrack.visualization._qt_utils import (
     _is_jupyter_notebook,
     _has_gui_display,
@@ -52,6 +62,14 @@ def _normalize_swc_rows(swc_rows: Optional[object]) -> np.ndarray:
 class _OrthoViewDialog:
     """Qt dialog with synchronized XY/XZ/YZ orthoviews and controls."""
 
+    @property
+    def selected_seed_index(self) -> Optional[int]:
+        return self._editor_state.selection.selected_seed_index
+
+    @selected_seed_index.setter
+    def selected_seed_index(self, value: Optional[int]) -> None:
+        self._editor_state.selection.selected_seed_index = value
+
     def __init__(
         self,
         image_data: np.ndarray,
@@ -70,10 +88,7 @@ class _OrthoViewDialog:
         on_trace_current: Optional[Callable[[np.ndarray], Optional[List[np.ndarray]]]] = None,
         on_trace_all: Optional[Callable[[], None]] = None,
         on_cancel_trace: Optional[Callable[[], None]] = None,
-        on_trace_revision_select_point: Optional[Callable[[np.ndarray], Optional[Dict[str, object]]]] = None,
-        on_trace_revision_preview: Optional[Callable[[], Optional[List[np.ndarray]]]] = None,
-        on_trace_revision_launch: Optional[Callable[[], Optional[List[np.ndarray]]]] = None,
-        get_trace_status: Optional[Callable[[], Dict[str, object]]] = None,
+        get_trace_status: Optional[Callable[[str], Dict[str, object]]] = None,
         on_save_trace: Optional[Callable[[], None]] = None,
         on_save_all_traces: Optional[Callable[[], None]] = None,
         on_discard_trace: Optional[Callable[[], None]] = None,
@@ -86,28 +101,15 @@ class _OrthoViewDialog:
         model_weights_path: Optional[str] = None,
         on_select_model_weights_path: Optional[Callable[[], Optional[str]]] = None,
         on_clear_model_weights_path: Optional[Callable[[], Optional[str]]] = None,
-        on_prev_image: Optional[Callable[[np.ndarray], Optional[Dict[str, object]]]] = None,
-        on_next_image: Optional[Callable[[np.ndarray], Optional[Dict[str, object]]]] = None,
-        on_get_effective_seed_overlay: Optional[Callable[[np.ndarray], Optional[np.ndarray]]] = None,
-        show_postprocess_controls: bool = False,
-        on_run_postprocess: Optional[Callable[[], None]] = None,
-        on_run_postprocess_all: Optional[Callable[[], None]] = None,
-        on_undo_postprocess: Optional[Callable[[], None]] = None,
-        on_run_evaluation: Optional[Callable[[], None]] = None,
-        on_run_evaluation_all: Optional[Callable[[], None]] = None,
-        on_save_eval_report: Optional[Callable[[], None]] = None,
-        gt_swc_path: Optional[str] = None,
-        on_select_gt_swc_path: Optional[Callable[[], Optional[str]]] = None,
-        on_clear_gt_swc_path: Optional[Callable[[], Optional[str]]] = None,
-        scales_path: Optional[str] = None,
-        on_select_scales_path: Optional[Callable[[], Optional[str]]] = None,
-        on_clear_scales_path: Optional[Callable[[], Optional[str]]] = None,
         image_dir: Optional[str] = None,
         seeds_input_path: Optional[str] = None,
         on_select_image_dir: Optional[Callable[[], Optional[str]]] = None,
         on_select_seeds_input_path: Optional[Callable[[], Optional[str]]] = None,
         on_clear_image_dir: Optional[Callable[[], Optional[str]]] = None,
         on_clear_seeds_input_path: Optional[Callable[[], Optional[str]]] = None,
+        on_prev_image: Optional[Callable[[np.ndarray], Optional[Dict[str, object]]]] = None,
+        on_next_image: Optional[Callable[[np.ndarray], Optional[Dict[str, object]]]] = None,
+        on_get_effective_seed_overlay: Optional[Callable[[np.ndarray], Optional[np.ndarray]]] = None,
         trace_step_width: float = 4.0,
         trace_n_trials: int = 1,
         trace_max_len: int = 10000,
@@ -115,11 +117,23 @@ class _OrthoViewDialog:
         trace_branching: bool = True,
         trace_repeat_starts: bool = False,
         trace_stochastic_actions: bool = False,
-        trace_auto_seed_mode: str = "remote_endnode",
         trace_seed_jitter_count: int = 0,
         trace_seed_jitter_radius: float = 0.0,
         trace_seed_jitter_weight_strategy: str = "uniform",
         on_trace_params_changed: Optional[Callable[[Dict[str, object]], None]] = None,
+        gt_swc_path: Optional[str] = None,
+        scales_path: Optional[str] = None,
+        show_postprocess_controls: bool = False,
+        on_run_postprocess: Optional[Callable[[str], None]] = None,
+        on_run_postprocess_all: Optional[Callable[[str], None]] = None,
+        on_undo_postprocess: Optional[Callable[[str], None]] = None,
+        on_run_evaluation: Optional[Callable[[], None]] = None,
+        on_run_evaluation_all: Optional[Callable[[], None]] = None,
+        on_save_eval_report: Optional[Callable[[], None]] = None,
+        on_select_gt_swc_path: Optional[Callable[[], Optional[str]]] = None,
+        on_clear_gt_swc_path: Optional[Callable[[], Optional[str]]] = None,
+        on_select_scales_path: Optional[Callable[[], Optional[str]]] = None,
+        on_clear_scales_path: Optional[Callable[[], Optional[str]]] = None,
         postprocess_output_dir: Optional[str] = None,
         postprocess_enable_length_filter: bool = True,
         postprocess_min_branch_length: float = 5.0,
@@ -146,34 +160,21 @@ class _OrthoViewDialog:
         on_clear_filtered_swc_output_dir: Optional[Callable[[], Optional[str]]] = None,
         on_save_filtered_swc: Optional[Callable[[str, List[List[float]]], Optional[str]]] = None,
         on_filtered_swc_changed: Optional[Callable[[str, List[List[float]]], None]] = None,
+        on_prediction_paths_changed: Optional[Callable[[str, List[List[List[float]]]], None]] = None,
     ):
-        (
-            QApplication,
-            QWidget,
-            QDialog,
-            QVBoxLayout,
-            QHBoxLayout,
-            QPushButton,
-            QLabel,
-            QSlider,
-            QComboBox,
-            Qt,
-            FigureCanvas,
-        ) = _try_import_ui_dependencies()
-
         _ensure_qapplication()
+        QApplication, QWidget, QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QSlider, QComboBox, Qt, FigureCanvas = _try_import_ui_dependencies()
 
         self.QApplication = QApplication
         self.Qt = Qt
         self.mode = mode
         self.img_np = _extract_first_channel_numpy(image_data)
         self.shape = self.img_np.shape
-        self.finished_paths = []
-        if finished_paths is not None:
-            for path in finished_paths:
-                path_np = np.asarray(path, dtype=np.float32)
-                if path_np.ndim == 2 and path_np.shape[0] >= 2 and path_np.shape[1] >= 3:
-                    self.finished_paths.append(path_np[:, :3])
+        self._editor_state = ViewerSessionState()
+        self.finished_paths: List[np.ndarray] = []
+        self._tree_swc_committed = np.empty((0, 7), dtype=np.float32)
+        self._set_prediction_paths(finished_paths)
+        self._set_reference_swc_rows(tree_swc_rows)
 
         self.current_z = int(self.shape[0] // 2)
         self.current_y = int(self.shape[1] // 2)
@@ -223,9 +224,6 @@ class _OrthoViewDialog:
         self._on_trace_current = on_trace_current
         self._on_trace_all = on_trace_all
         self._on_cancel_trace = on_cancel_trace
-        self._on_trace_revision_select_point = on_trace_revision_select_point
-        self._on_trace_revision_preview = on_trace_revision_preview
-        self._on_trace_revision_launch = on_trace_revision_launch
         self._get_trace_status = get_trace_status
         self._on_save_trace = on_save_trace
         self._on_save_all_traces = on_save_all_traces
@@ -275,16 +273,16 @@ class _OrthoViewDialog:
         self._on_clear_filtered_swc_output_dir = on_clear_filtered_swc_output_dir
         self._on_save_filtered_swc = on_save_filtered_swc
         self._on_filtered_swc_changed = on_filtered_swc_changed
+        self._on_prediction_paths_changed = on_prediction_paths_changed
         self._current_image_key = str(neuron_name or "")
 
-        self._tree_swc_committed = _normalize_swc_rows(tree_swc_rows)
+        self._annotation_undo_stack: List[Tuple[str, np.ndarray, List[List[List[float]]]]] = []
+
         self._tree_swc_preview_source = np.empty((0, 7), dtype=np.float32)
         self._tree_swc_preview_filtered = np.empty((0, 7), dtype=np.float32)
         self._tree_preview_seed_points: List[Tuple[float, float, float]] = []
         self._tree_preview_removed_ids: set[int] = set()
-        self._has_crop_preview = False
-        self._crop_box: Optional[Tuple[int, int, int, int, int, int]] = None
-        self._crop_axes_initialized: set[str] = set()
+        self._has_clip_preview = False
         self._active_tool = "zoom"
         self._tree_overlay_cache_source_id: Optional[int] = None
         self._tree_overlay_cache: Dict[str, np.ndarray] = {
@@ -297,18 +295,14 @@ class _OrthoViewDialog:
 
         self._trace_status_token = None
         self._trace_overlay_token = None
+        self._trace_postprocess_token = None
         self._trace_controls_running_state: Optional[bool] = None
         self._last_trace_status_message = ""
         self._last_trace_progress_text = ""
         self._pending_trace_param_overrides: Optional[Dict[str, object]] = None
         self._trace_params_debounce_timer = None
-        self.trace_overlay_visible = True
-        self.gt_overlay_visible = False
-        self.trace_revision_mode_enabled = False
-        self.trace_revision_selected_node_xyz: Optional[np.ndarray] = None
-        self.trace_revision_selected_point_xyz: Optional[np.ndarray] = None
-        self.trace_revision_preview_paths: List[np.ndarray] = []
-        self.trace_revision_preview_active = False
+        self.trace_overlay_visible = self._editor_state.show_prediction_overlay
+        self.gt_overlay_visible = self._editor_state.show_reference_overlay
         self._qt_timer = None
         self._show_prev_button = bool(show_prev_button)
         self._show_next_button = bool(show_next_button)
@@ -321,12 +315,12 @@ class _OrthoViewDialog:
         self.dialog.setWindowTitle(title)
         self.dialog.resize(1400, 860)
 
-        # Root layout: vertical (canvas row on top, footer on bottom)
+        # Root layout: vertical (top controls, canvas row, footer)
         outer = QVBoxLayout(self.dialog)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
 
-        # Main horizontal row: left sidebar | center canvas | right sidebar
+        # Main horizontal row: left sidebar | center canvas
         # Uses QSplitter so each panel can be drag-resized by the user.
         _QtWidgetsMod = importlib.import_module("qtpy.QtWidgets")
         main_splitter = _QtWidgetsMod.QSplitter(Qt.Horizontal)
@@ -352,15 +346,13 @@ class _OrthoViewDialog:
         self.btn_save_trace = QPushButton("Save Trace")
         self.btn_save_all_traces = QPushButton("Save All Traces")
         self.btn_discard_trace = QPushButton("Discard Trace")
+        self.projection_combo = QComboBox()
+        self.projection_combo.addItems(["Slice", "MIP"])
         _qt_w = importlib.import_module("qtpy.QtWidgets")
-        self.chk_trace_overlay = _qt_w.QCheckBox("Show Predicted Overlay")
-        self.chk_gt_overlay = _qt_w.QCheckBox("Show GT Overlay")
+        self.chk_trace_overlay = _qt_w.QCheckBox("Show Prediction Overlay")
+        self.chk_gt_overlay = _qt_w.QCheckBox("Show Reference Overlay")
         self.chk_trace_overlay.setChecked(self.trace_overlay_visible)
         self.chk_gt_overlay.setChecked(self.gt_overlay_visible)
-        self.btn_trace_revision_mode = QPushButton("Trace Revision Mode")
-        self.btn_trace_revision_mode.setCheckable(True)
-        self.btn_trace_revision_preview = QPushButton("Preview")
-        self.btn_trace_revision_launch = QPushButton("Launch Retrace")
         self.trace_progress_label = QLabel("")
         self.btn_run_postprocess = QPushButton("Run Post-Processing")
         self.btn_run_postprocess_all = QPushButton("Post-Process All")
@@ -370,7 +362,6 @@ class _OrthoViewDialog:
         self.btn_save_eval_report = QPushButton("Save Eval Report")
         if mode == "seed":
             self.btn_undo = QPushButton("Undo Last Seed")
-            self.btn_remove_selected_seed = QPushButton("Remove Selected Seed")
             self.btn_clear = QPushButton("Clear Seeds")
             self.btn_save_seeds = QPushButton("Save Seeds")
             self.btn_set_seeds_output = QPushButton("Set Seeds Output")
@@ -433,14 +424,6 @@ class _OrthoViewDialog:
             self._trace_repeat_starts_check.setChecked(trace_repeat_starts)
             self._trace_stochastic_check = _qt_w.QCheckBox("Stochastic Actions")
             self._trace_stochastic_check.setChecked(trace_stochastic_actions)
-            self._trace_auto_seed_combo = QComboBox()
-            self._trace_auto_seed_combo.addItems(["remote_endnode", "root_nodes"])
-            self._trace_auto_seed_combo.setSizePolicy(
-                _qt_w.QSizePolicy.Expanding, _qt_w.QSizePolicy.Fixed)
-            self._trace_auto_seed_combo.setMinimumWidth(0)
-            _auto_seed_idx = self._trace_auto_seed_combo.findText(trace_auto_seed_mode)
-            if _auto_seed_idx >= 0:
-                self._trace_auto_seed_combo.setCurrentIndex(_auto_seed_idx)
             self._trace_seed_jitter_count_spin = _qt_w.QSpinBox()
             self._trace_seed_jitter_count_spin.setRange(0, 10000)
             self._trace_seed_jitter_count_spin.setValue(int(max(0, trace_seed_jitter_count)))
@@ -521,8 +504,8 @@ class _OrthoViewDialog:
             self._pp_merge_timeout_seconds_spin.setDecimals(1)
             self._pp_merge_timeout_seconds_spin.setValue(float(postprocess_merge_timeout_seconds))
             # Postprocess/eval path widgets (always created in seed mode)
-            self.btn_set_gt_swc = QPushButton("Set GT SWC Dir")
-            self.btn_clear_gt_swc = QPushButton("Unset GT SWC Dir")
+            self.btn_set_gt_swc = QPushButton("Set Reference SWC Dir")
+            self.btn_clear_gt_swc = QPushButton("Unset Reference SWC Dir")
             self.gt_swc_value_label = QLabel("")
             self.gt_swc_value_label.setWordWrap(True)
             self.gt_swc_value_label.setMinimumWidth(0)
@@ -548,14 +531,18 @@ class _OrthoViewDialog:
             self.btn_set_eval_scales_path = QPushButton("Set Scales JSON")
             self.btn_clear_eval_scales_path = QPushButton("Unset Scales JSON")
 
-            # Crop/filter widgets (left panel)
+            # Tool and filter widgets (left panel)
             self._tool_button_group = _qt_w.QButtonGroup(self.dialog)
             self.radio_tool_zoom = _qt_w.QRadioButton("Zoom")
-            self.radio_tool_crop = _qt_w.QRadioButton("Crop")
+            self.radio_tool_select = _qt_w.QRadioButton("Select")
+            self.annotation_target_combo = QComboBox()
             self.radio_tool_zoom.setChecked(True)
             self._tool_button_group.addButton(self.radio_tool_zoom)
-            self._tool_button_group.addButton(self.radio_tool_crop)
-            self.btn_approve_crop = QPushButton("Approve Crop")
+            self._tool_button_group.addButton(self.radio_tool_select)
+            self.btn_remove_selected = QPushButton("Remove Selected")
+            self.btn_clip_selected = QPushButton("Clip Selected")
+            self.btn_undo_annotation = QPushButton("Undo Annotation Edit")
+            self.btn_undo_annotation.setEnabled(False)
             self._component_min_length_spin = _qt_w.QSpinBox()
             self._component_min_length_spin.setRange(1, 1000000)
             self._component_min_length_spin.setValue(50)
@@ -571,180 +558,155 @@ class _OrthoViewDialog:
         # LEFT SIDEBAR — view controls, sliders, seed & trace actions
         # -----------------------------------------------------------------
         left_sidebar = QWidget()
-        left_sidebar.setMinimumWidth(130)
         left_sidebar.setObjectName("leftSidebar")
         left_layout = QVBoxLayout(left_sidebar)
         left_layout.setContentsMargins(6, 6, 6, 6)
         left_layout.setSpacing(4)
 
-        # Projection
-        left_layout.addWidget(QLabel("Projection:"))
-        self.projection_combo = QComboBox()
-        self.projection_combo.addItems(["Slice", "MIP"])
-        left_layout.addWidget(self.projection_combo)
-
-        # Maximize view
-        left_layout.addWidget(self._sidebar_separator())
-        left_layout.addWidget(QLabel("Maximize View:"))
-        _max_row1 = self._row_widget()
-        _max_row1.layout().addWidget(self.btn_all)
-        _max_row1.layout().addWidget(self.btn_xy)
-        left_layout.addWidget(_max_row1)
-        _max_row2 = self._row_widget()
-        _max_row2.layout().addWidget(self.btn_xz)
-        _max_row2.layout().addWidget(self.btn_yz)
-        left_layout.addWidget(_max_row2)
-
-        # Zoom
-        _zoom_row = self._row_widget()
-        _zoom_row.layout().addWidget(self.btn_back)
-        _zoom_row.layout().addWidget(self.btn_home)
-        left_layout.addWidget(_zoom_row)
-
+        _left_tab_widget = None
+        _left_edit_lay = None
+        _left_trace_lay = None
+        _left_eval_lay = None
         if mode == "seed":
-            left_layout.addWidget(self._sidebar_separator())
-            left_layout.addWidget(QLabel("Tool Selector:"))
-            _tool_row = self._row_widget()
-            _tool_row.layout().addWidget(self.radio_tool_zoom)
-            _tool_row.layout().addWidget(self.radio_tool_crop)
-            left_layout.addWidget(_tool_row)
-            left_layout.addWidget(self.btn_approve_crop)
-            left_layout.addWidget(QLabel("Component Min Length:"))
-            left_layout.addWidget(self._component_min_length_spin)
-            left_layout.addWidget(self.btn_apply_component_filter)
-            left_layout.addWidget(QLabel("Filtered SWC Output:"))
-            left_layout.addWidget(self.filtered_swc_output_value_label)
-            left_layout.addWidget(self.btn_set_filtered_swc_output)
-            left_layout.addWidget(self.btn_clear_filtered_swc_output)
-            left_layout.addWidget(self.btn_save_filtered_swc)
+            _qt_widgets_mod = importlib.import_module("qtpy.QtWidgets")
+            _qt_core_mod = importlib.import_module("qtpy.QtCore")
+            _left_tab_widget = _qt_widgets_mod.QTabWidget()
+            _left_tab_widget.setDocumentMode(True)
+            _left_tab_widget.setTabPosition(_qt_widgets_mod.QTabWidget.West)
+            _left_tab_widget.setSizePolicy(
+                _qt_widgets_mod.QSizePolicy.MinimumExpanding,
+                _qt_widgets_mod.QSizePolicy.Expanding,
+            )
 
-        # Sliders
-        left_layout.addWidget(self._sidebar_separator())
-        left_layout.addWidget(QLabel("Slice Position:"))
-        self.z_slider = self._make_slider(0, self.shape[0] - 1, self.current_z, "Z", left_layout)
-        self.y_slider = self._make_slider(0, self.shape[1] - 1, self.current_y, "Y", left_layout)
-        self.x_slider = self._make_slider(0, self.shape[2] - 1, self.current_x, "X", left_layout)
-
-        if mode == "seed":
-            # Image navigation
-            left_layout.addWidget(self._sidebar_separator())
-            _nav_row = self._row_widget()
-            _nav_row.layout().addWidget(self.btn_prev_image)
-            _nav_row.layout().addWidget(self.btn_next_image)
-            left_layout.addWidget(_nav_row)
-            self.btn_prev_image.setVisible(self._show_prev_button)
-            self.btn_next_image.setVisible(self._show_next_button)
-            self.btn_prev_image.setEnabled(self._show_prev_button)
-            self.btn_next_image.setEnabled(self._show_next_button)
-
-            # Seed controls
-            left_layout.addWidget(self._sidebar_separator())
-            left_layout.addWidget(QLabel("Seed Controls:"))
-            left_layout.addWidget(self.btn_undo)
-            left_layout.addWidget(self.btn_remove_selected_seed)
-            left_layout.addWidget(QLabel("Seed Jitter:"))
-            _seed_jitter_count_row = self._row_widget()
-            _seed_jitter_count_row.layout().addWidget(QLabel("Count:"))
-            _seed_jitter_count_row.layout().addWidget(self._trace_seed_jitter_count_spin, stretch=1)
-            left_layout.addWidget(_seed_jitter_count_row)
-            _seed_jitter_radius_row = self._row_widget()
-            _seed_jitter_radius_row.layout().addWidget(QLabel("Radius:"))
-            _seed_jitter_radius_row.layout().addWidget(self._trace_seed_jitter_radius_spin, stretch=1)
-            left_layout.addWidget(_seed_jitter_radius_row)
-            left_layout.addWidget(QLabel("Weight Strategy:"))
-            left_layout.addWidget(self._trace_seed_jitter_weight_combo)
-            left_layout.addWidget(self.btn_rejitter_seeds)
-            left_layout.addWidget(self.btn_clear)
-            if show_save_buttons:
-                left_layout.addWidget(self.btn_save_seeds)
-                left_layout.addWidget(self.btn_save_all_seeds)
-
-            # Trace controls
-            if self._show_trace_controls:
-                left_layout.addWidget(self._sidebar_separator())
-                left_layout.addWidget(QLabel("Tracing:"))
-                left_layout.addWidget(self.btn_trace_neuron)
-                left_layout.addWidget(self.btn_trace_all)
-                left_layout.addWidget(self.btn_cancel_trace)
-                left_layout.addWidget(self.btn_save_trace)
-                left_layout.addWidget(self.btn_save_all_traces)
-                left_layout.addWidget(self.btn_discard_trace)
-                left_layout.addWidget(self.chk_trace_overlay)
-                left_layout.addWidget(self.chk_gt_overlay)
-                left_layout.addWidget(self.btn_trace_revision_mode)
-                left_layout.addWidget(self.btn_trace_revision_preview)
-                left_layout.addWidget(self.btn_trace_revision_launch)
-                left_layout.addWidget(self.trace_progress_label)
-
-        left_layout.addStretch(1)
-
-        main_splitter.addWidget(left_sidebar)
-
-        # -----------------------------------------------------------------
-        # CENTER — matplotlib canvas
-        # -----------------------------------------------------------------
-        center_widget = QWidget()
-        center_layout = QVBoxLayout(center_widget)
-        center_layout.setContentsMargins(0, 0, 0, 0)
-        center_layout.setSpacing(0)
-
-        self.figure = plt.Figure(figsize=(12, 6))
-        self.canvas = FigureCanvas(self.figure)
-        self._original_wheel_event = self.canvas.wheelEvent
-        self.canvas.wheelEvent = self._canvas_wheel_event
-        center_layout.addWidget(self.canvas, stretch=1)
-
-        main_splitter.addWidget(center_widget)
-
-        # -----------------------------------------------------------------
-        # RIGHT SIDEBAR — three-tab config panel
-        # -----------------------------------------------------------------
-        _qt_widgets_mod = importlib.import_module("qtpy.QtWidgets")
-        _qt_core_mod = importlib.import_module("qtpy.QtCore")
-
-        # Narrow toggle strip
-        right_toggle_btn = QPushButton("⚙")
-        right_toggle_btn.setFixedWidth(22)
-        right_toggle_btn.setToolTip("Toggle Config Panel")
-        right_toggle_btn.setCheckable(True)
-        right_toggle_btn.setChecked(True)
-        right_toggle_btn.setAutoDefault(False)
-        right_toggle_btn.setDefault(False)
-        right_toggle_btn.setFocusPolicy(self.Qt.NoFocus)
-
-        right_sidebar = QWidget()
-        right_sidebar.setMinimumWidth(200)
-        right_sidebar.setObjectName("rightSidebar")
-        right_layout = QVBoxLayout(right_sidebar)
-        right_layout.setContentsMargins(4, 4, 4, 4)
-        right_layout.setSpacing(2)
-
-        if mode == "seed":
-            _tab_widget = _qt_widgets_mod.QTabWidget()
-            _tab_widget.setDocumentMode(True)
-
-            def _make_tab_scroll():
+            def _make_left_tab_scroll():
                 _sa = _qt_widgets_mod.QScrollArea()
                 _sa.setWidgetResizable(True)
                 _sa.setHorizontalScrollBarPolicy(_qt_core_mod.Qt.ScrollBarAlwaysOff)
-                _sa.setMinimumWidth(0)
-                _sa.setSizePolicy(_qt_widgets_mod.QSizePolicy.Ignored, _qt_widgets_mod.QSizePolicy.Preferred)
+                _sa.setSizePolicy(
+                    _qt_widgets_mod.QSizePolicy.MinimumExpanding,
+                    _qt_widgets_mod.QSizePolicy.Expanding,
+                )
                 _tw = QWidget()
-                _tw.setMinimumWidth(0)
-                _tw.setSizePolicy(_qt_widgets_mod.QSizePolicy.Ignored, _qt_widgets_mod.QSizePolicy.Preferred)
+                _tw.setSizePolicy(
+                    _qt_widgets_mod.QSizePolicy.MinimumExpanding,
+                    _qt_widgets_mod.QSizePolicy.Preferred,
+                )
                 _tl = QVBoxLayout(_tw)
                 _tl.setContentsMargins(6, 6, 6, 6)
                 _tl.setSpacing(4)
                 _sa.setWidget(_tw)
                 return _sa, _tl
 
-            # ---- Tab 1: Tracing ----
-            _trace_sa, _trace_lay = _make_tab_scroll()
-            # Force Tracing controls to be horizontally shrinkable like the other tabs.
-            _sp_btn = (_qt_widgets_mod.QSizePolicy.Ignored,
-                       _qt_widgets_mod.QSizePolicy.Fixed)
-            _sp_lbl = (_qt_widgets_mod.QSizePolicy.Ignored,
-                       _qt_widgets_mod.QSizePolicy.Preferred)
+            _left_edit_sa, _left_edit_lay = _make_left_tab_scroll()
+            _left_trace_sa, _left_trace_lay = _make_left_tab_scroll()
+            _left_eval_sa, _left_eval_lay = _make_left_tab_scroll()
+            _left_tab_widget.addTab(_left_trace_sa, "Trace")
+            _left_tab_widget.addTab(_left_edit_sa, "Edit")
+            _left_tab_widget.addTab(_left_eval_sa, "Evaluate")
+
+        # Sliders
+        left_layout.addWidget(QLabel("Slice Position:"))
+        self.z_slider = self._make_slider(0, self.shape[0] - 1, self.current_z, "Z", left_layout)
+        self.y_slider = self._make_slider(0, self.shape[1] - 1, self.current_y, "Y", left_layout)
+        self.x_slider = self._make_slider(0, self.shape[2] - 1, self.current_x, "X", left_layout)
+
+        if mode == "seed":
+            left_layout.addWidget(QLabel("Tool:"))
+            _tool_row = self._row_widget()
+            _tool_row.layout().addWidget(self.radio_tool_zoom)
+            _tool_row.layout().addWidget(self.radio_tool_select)
+            left_layout.addWidget(_tool_row)
+
+        if mode == "seed":
+            self.btn_prev_image.setVisible(self._show_prev_button)
+            self.btn_next_image.setVisible(self._show_next_button)
+            self.btn_prev_image.setEnabled(self._show_prev_button)
+            self.btn_next_image.setEnabled(self._show_next_button)
+
+            if _left_trace_lay is not None and self._show_trace_controls:
+                _left_trace_lay.addWidget(QLabel("Tracing:"))
+                _left_trace_lay.addWidget(self.btn_trace_neuron)
+                _left_trace_lay.addWidget(self.btn_trace_all)
+                _left_trace_lay.addWidget(self.btn_cancel_trace)
+                _left_trace_lay.addWidget(self.btn_save_trace)
+                _left_trace_lay.addWidget(self.btn_save_all_traces)
+                _left_trace_lay.addWidget(self.btn_discard_trace)
+                _left_trace_lay.addWidget(self.trace_progress_label)
+                _left_trace_lay.addWidget(self._sidebar_separator())
+
+            if _left_edit_lay is not None:
+                _left_edit_lay.addWidget(QLabel("Annotation:"))
+                _left_edit_lay.addWidget(self.annotation_target_combo)
+                _left_edit_lay.addWidget(self.btn_remove_selected)
+                _left_edit_lay.addWidget(self.btn_clip_selected)
+                _left_edit_lay.addWidget(self.btn_undo_annotation)
+                _left_edit_lay.addWidget(self._sidebar_separator())
+                _left_edit_lay.addWidget(QLabel("Post-Processing:"))
+                _left_edit_lay.addWidget(QLabel("Output Directory:"))
+                _left_edit_lay.addWidget(self.postprocess_output_value_label)
+                _left_edit_lay.addWidget(self.btn_set_postprocess_output)
+                _left_edit_lay.addWidget(self.btn_clear_postprocess_output)
+                _left_edit_lay.addWidget(self._pp_enable_length_filter_check)
+                _left_edit_lay.addWidget(QLabel("Min Branch Length:"))
+                _left_edit_lay.addWidget(self._pp_min_branch_length_spin)
+                _left_edit_lay.addWidget(QLabel("Max Branch Length:"))
+                _left_edit_lay.addWidget(self._pp_max_branch_length_spin)
+                _left_edit_lay.addWidget(self._pp_enable_resample_check)
+                _left_edit_lay.addWidget(QLabel("Resampling Step Size:"))
+                _left_edit_lay.addWidget(self._pp_resampling_step_size_spin)
+                _left_edit_lay.addWidget(self._pp_enable_smooth_paths_check)
+                _left_edit_lay.addWidget(QLabel("Smoothing Window:"))
+                _left_edit_lay.addWidget(self._pp_smoothing_window_spin)
+                _left_edit_lay.addWidget(self._pp_enable_merge_check)
+                _left_edit_lay.addWidget(QLabel("Merge Threshold:"))
+                _left_edit_lay.addWidget(self._pp_overlap_dist_threshold_spin)
+                _left_edit_lay.addWidget(QLabel("Confidence Threshold:"))
+                _left_edit_lay.addWidget(self._pp_confidence_threshold_spin)
+                _left_edit_lay.addWidget(QLabel("Mask Smoothing Size:"))
+                _left_edit_lay.addWidget(self._pp_mask_smoothing_size_spin)
+                _left_edit_lay.addWidget(QLabel("Merge Timeout Seconds (0=off):"))
+                _left_edit_lay.addWidget(self._pp_merge_timeout_seconds_spin)
+                _left_edit_lay.addWidget(QLabel("Scales JSON (optional):"))
+                _left_edit_lay.addWidget(self.scales_path_value_label)
+                _left_edit_lay.addWidget(self.btn_set_scales_path)
+                _left_edit_lay.addWidget(self.btn_clear_scales_path)
+                if self._show_postprocess_controls:
+                    _left_edit_lay.addWidget(self.btn_run_postprocess)
+                    _left_edit_lay.addWidget(self.btn_run_postprocess_all)
+                    _left_edit_lay.addWidget(self.btn_undo_postprocess)
+                _left_edit_lay.addWidget(QLabel("Filtered SWC Output:"))
+                _left_edit_lay.addWidget(self.filtered_swc_output_value_label)
+                _left_edit_lay.addWidget(self.btn_set_filtered_swc_output)
+                _left_edit_lay.addWidget(self.btn_clear_filtered_swc_output)
+                _left_edit_lay.addWidget(self.btn_save_filtered_swc)
+                _left_edit_lay.addStretch(1)
+
+            if _left_trace_lay is not None:
+                _left_trace_lay.addWidget(QLabel("Seed Controls:"))
+                _left_trace_lay.addWidget(self.btn_undo)
+                _left_trace_lay.addWidget(QLabel("Seed Jitter:"))
+            _seed_jitter_count_row = self._row_widget()
+            _seed_jitter_count_row.layout().addWidget(QLabel("Count:"))
+            _seed_jitter_count_row.layout().addWidget(self._trace_seed_jitter_count_spin, stretch=1)
+            _left_trace_lay.addWidget(_seed_jitter_count_row)
+            _seed_jitter_radius_row = self._row_widget()
+            _seed_jitter_radius_row.layout().addWidget(QLabel("Radius:"))
+            _seed_jitter_radius_row.layout().addWidget(self._trace_seed_jitter_radius_spin, stretch=1)
+            _left_trace_lay.addWidget(_seed_jitter_radius_row)
+            _left_trace_lay.addWidget(QLabel("Weight Strategy:"))
+            _left_trace_lay.addWidget(self._trace_seed_jitter_weight_combo)
+            _left_trace_lay.addWidget(self.btn_rejitter_seeds)
+            _left_trace_lay.addWidget(self.btn_clear)
+            if show_save_buttons:
+                _left_trace_lay.addWidget(self.btn_save_seeds)
+                _left_trace_lay.addWidget(self.btn_save_all_seeds)
+
+            _left_trace_lay.addWidget(self._sidebar_separator())
+            _left_trace_lay.addWidget(QLabel("Input / Output:"))
+            _trace_io_sp_btn = (_qt_widgets_mod.QSizePolicy.Ignored,
+                                _qt_widgets_mod.QSizePolicy.Fixed)
+            _trace_io_sp_lbl = (_qt_widgets_mod.QSizePolicy.Ignored,
+                                _qt_widgets_mod.QSizePolicy.Preferred)
             for _tb in [
                 self.btn_set_image_dir, self.btn_clear_image_dir,
                 self.btn_set_model_weights, self.btn_clear_model_weights,
@@ -752,7 +714,7 @@ class _OrthoViewDialog:
                 self.btn_set_seeds_output, self.btn_clear_seeds_output,
                 self.btn_set_seeds_input, self.btn_clear_seeds_input,
             ]:
-                _tb.setSizePolicy(*_sp_btn)
+                _tb.setSizePolicy(*_trace_io_sp_btn)
                 _tb.setMinimumWidth(0)
             for _lv in [
                 self.image_dir_value_label,
@@ -761,29 +723,29 @@ class _OrthoViewDialog:
                 self.seeds_output_value_label,
                 self.seeds_input_value_label,
             ]:
-                _lv.setSizePolicy(*_sp_lbl)
+                _lv.setSizePolicy(*_trace_io_sp_lbl)
                 _lv.setMinimumWidth(0)
-            _trace_lay.addWidget(QLabel("Image Directory:"))
-            _trace_lay.addWidget(self.image_dir_value_label)
-            _trace_lay.addWidget(self.btn_set_image_dir)
-            _trace_lay.addWidget(self.btn_clear_image_dir)
-            _trace_lay.addWidget(QLabel("Model Weights:"))
-            _trace_lay.addWidget(self.model_weights_value_label)
-            _trace_lay.addWidget(self.btn_set_model_weights)
-            _trace_lay.addWidget(self.btn_clear_model_weights)
-            _trace_lay.addWidget(QLabel("Trace Output:"))
-            _trace_lay.addWidget(self.trace_output_value_label)
-            _trace_lay.addWidget(self.btn_set_trace_output)
-            _trace_lay.addWidget(self.btn_clear_trace_output)
-            _trace_lay.addWidget(QLabel("Seeds Output:"))
-            _trace_lay.addWidget(self.seeds_output_value_label)
-            _trace_lay.addWidget(self.btn_set_seeds_output)
-            _trace_lay.addWidget(self.btn_clear_seeds_output)
-            _trace_lay.addWidget(QLabel("Seeds Input (optional):"))
-            _trace_lay.addWidget(self.seeds_input_value_label)
-            _trace_lay.addWidget(self.btn_set_seeds_input)
-            _trace_lay.addWidget(self.btn_clear_seeds_input)
-            _trace_lay.addWidget(self._sidebar_separator())
+            _left_trace_lay.addWidget(QLabel("Image Directory:"))
+            _left_trace_lay.addWidget(self.image_dir_value_label)
+            _left_trace_lay.addWidget(self.btn_set_image_dir)
+            _left_trace_lay.addWidget(self.btn_clear_image_dir)
+            _left_trace_lay.addWidget(QLabel("Model Weights:"))
+            _left_trace_lay.addWidget(self.model_weights_value_label)
+            _left_trace_lay.addWidget(self.btn_set_model_weights)
+            _left_trace_lay.addWidget(self.btn_clear_model_weights)
+            _left_trace_lay.addWidget(QLabel("Trace Output:"))
+            _left_trace_lay.addWidget(self.trace_output_value_label)
+            _left_trace_lay.addWidget(self.btn_set_trace_output)
+            _left_trace_lay.addWidget(self.btn_clear_trace_output)
+            _left_trace_lay.addWidget(QLabel("Seeds Output:"))
+            _left_trace_lay.addWidget(self.seeds_output_value_label)
+            _left_trace_lay.addWidget(self.btn_set_seeds_output)
+            _left_trace_lay.addWidget(self.btn_clear_seeds_output)
+            _left_trace_lay.addWidget(QLabel("Seeds Input (optional):"))
+            _left_trace_lay.addWidget(self.seeds_input_value_label)
+            _left_trace_lay.addWidget(self.btn_set_seeds_input)
+            _left_trace_lay.addWidget(self.btn_clear_seeds_input)
+            _left_trace_lay.addWidget(self._sidebar_separator())
 
             _adv_toggle = _qt_widgets_mod.QToolButton()
             _adv_toggle.setText("▶ Advanced")
@@ -796,7 +758,7 @@ class _OrthoViewDialog:
                 _qt_widgets_mod.QSizePolicy.Fixed,
             )
             _adv_toggle.setMinimumWidth(0)
-            _trace_lay.addWidget(_adv_toggle)
+            _left_trace_lay.addWidget(_adv_toggle)
 
             _adv_panel = QWidget()
             _adv_panel.setVisible(False)
@@ -820,9 +782,7 @@ class _OrthoViewDialog:
             _adv_layout.addWidget(self._trace_branching_check)
             _adv_layout.addWidget(self._trace_repeat_starts_check)
             _adv_layout.addWidget(self._trace_stochastic_check)
-            _adv_layout.addWidget(QLabel("Auto Seed Mode:"))
-            _adv_layout.addWidget(self._trace_auto_seed_combo)
-            _trace_lay.addWidget(_adv_panel)
+            _left_trace_lay.addWidget(_adv_panel)
 
             def _toggle_adv_panel(checked, panel=_adv_panel, btn=_adv_toggle):
                 panel.setVisible(checked)
@@ -830,107 +790,104 @@ class _OrthoViewDialog:
                 btn.setText("▼ Advanced" if checked else "▶ Advanced")
 
             _adv_toggle.toggled.connect(_toggle_adv_panel)
-            _trace_lay.addStretch(1)
-            _tab_widget.addTab(_trace_sa, "Tracing")
 
-            # ---- Tab 2: Post-Processing ----
-            _pp_sa, _pp_lay = _make_tab_scroll()
-            _pp_lay.addWidget(QLabel("Output Directory:"))
-            _pp_lay.addWidget(self.postprocess_output_value_label)
-            _pp_lay.addWidget(self.btn_set_postprocess_output)
-            _pp_lay.addWidget(self.btn_clear_postprocess_output)
-            _pp_lay.addWidget(self._sidebar_separator())
-            _pp_lay.addWidget(self._pp_enable_length_filter_check)
-            _pp_lay.addWidget(QLabel("Min Branch Length:"))
-            _pp_lay.addWidget(self._pp_min_branch_length_spin)
-            _pp_lay.addWidget(QLabel("Max Branch Length:"))
-            _pp_lay.addWidget(self._pp_max_branch_length_spin)
-            _pp_lay.addWidget(self._pp_enable_resample_check)
-            _pp_lay.addWidget(QLabel("Resampling Step Size:"))
-            _pp_lay.addWidget(self._pp_resampling_step_size_spin)
-            _pp_lay.addWidget(self._pp_enable_smooth_paths_check)
-            _pp_lay.addWidget(QLabel("Smoothing Window:"))
-            _pp_lay.addWidget(self._pp_smoothing_window_spin)
-            _pp_lay.addWidget(self._pp_enable_merge_check)
-            _pp_lay.addWidget(QLabel("Merge Threshold:"))
-            _pp_lay.addWidget(self._pp_overlap_dist_threshold_spin)
-            _pp_lay.addWidget(QLabel("Confidence Threshold:"))
-            _pp_lay.addWidget(self._pp_confidence_threshold_spin)
-            _pp_lay.addWidget(QLabel("Mask Smoothing Size:"))
-            _pp_lay.addWidget(self._pp_mask_smoothing_size_spin)
-            _pp_lay.addWidget(QLabel("Merge Timeout Seconds (0=off):"))
-            _pp_lay.addWidget(self._pp_merge_timeout_seconds_spin)
-            _pp_lay.addWidget(self._sidebar_separator())
-            _pp_lay.addWidget(QLabel("Scales JSON (optional):"))
-            _pp_lay.addWidget(self.scales_path_value_label)
-            _pp_lay.addWidget(self.btn_set_scales_path)
-            _pp_lay.addWidget(self.btn_clear_scales_path)
-            if self._show_postprocess_controls:
-                _pp_lay.addWidget(self._sidebar_separator())
-                _pp_lay.addWidget(self.btn_run_postprocess)
-                _pp_lay.addWidget(self.btn_run_postprocess_all)
-                _pp_lay.addWidget(self.btn_undo_postprocess)
-            _pp_lay.addStretch(1)
-            _tab_widget.addTab(_pp_sa, "Post-Processing")
+            if _left_trace_lay is not None:
+                _left_trace_lay.addStretch(1)
 
-            # ---- Tab 3: Evaluation ----
-            _eval_sa, _eval_lay = _make_tab_scroll()
-            _eval_lay.addWidget(QLabel("GT SWC Directory:"))
-            _eval_lay.addWidget(self.gt_swc_value_label)
-            _eval_lay.addWidget(self.btn_set_gt_swc)
-            _eval_lay.addWidget(self.btn_clear_gt_swc)
-            _eval_lay.addWidget(QLabel("Eval Output Directory:"))
-            _eval_lay.addWidget(self.eval_output_value_label)
-            _eval_lay.addWidget(self.btn_set_eval_output)
-            _eval_lay.addWidget(self.btn_clear_eval_output)
-            _eval_lay.addWidget(self._sidebar_separator())
-            _eval_lay.addWidget(QLabel("Distance Threshold:"))
-            _eval_lay.addWidget(self._eval_distance_threshold_spin)
-            _eval_lay.addWidget(QLabel("Scales JSON (optional):"))
-            _eval_lay.addWidget(self.eval_scales_path_value_label)
-            _eval_lay.addWidget(self.btn_set_eval_scales_path)
-            _eval_lay.addWidget(self.btn_clear_eval_scales_path)
-            if self._show_postprocess_controls:
-                _eval_lay.addWidget(self._sidebar_separator())
-                _eval_lay.addWidget(self.btn_run_evaluation)
-                _eval_lay.addWidget(self.btn_run_evaluation_all)
-                _eval_lay.addWidget(self.btn_save_eval_report)
-                _eval_lay.addWidget(self._sidebar_separator())
-                _eval_lay.addWidget(QLabel("Evaluation Report:"))
-                self.eval_report_widget = _qt_widgets_mod.QTextEdit()
-                self.eval_report_widget.setReadOnly(True)
-                self.eval_report_widget.setPlaceholderText(
-                    "Evaluation report will appear here after running evaluation."
-                )
-                self.eval_report_widget.setMinimumHeight(120)
-                _eval_lay.addWidget(self.eval_report_widget)
-            else:
-                self.eval_report_widget = None
-            _eval_lay.addStretch(1)
-            _tab_widget.addTab(_eval_sa, "Evaluation")
+            if _left_eval_lay is not None:
+                _left_eval_lay.addWidget(QLabel("Reference SWC Directory:"))
+                _left_eval_lay.addWidget(self.gt_swc_value_label)
+                _left_eval_lay.addWidget(self.btn_set_gt_swc)
+                _left_eval_lay.addWidget(self.btn_clear_gt_swc)
+                _left_eval_lay.addWidget(QLabel("Eval Output Directory:"))
+                _left_eval_lay.addWidget(self.eval_output_value_label)
+                _left_eval_lay.addWidget(self.btn_set_eval_output)
+                _left_eval_lay.addWidget(self.btn_clear_eval_output)
+                _left_eval_lay.addWidget(self._sidebar_separator())
+                _left_eval_lay.addWidget(QLabel("Distance Threshold:"))
+                _left_eval_lay.addWidget(self._eval_distance_threshold_spin)
+                _left_eval_lay.addWidget(QLabel("Scales JSON (optional):"))
+                _left_eval_lay.addWidget(self.eval_scales_path_value_label)
+                _left_eval_lay.addWidget(self.btn_set_eval_scales_path)
+                _left_eval_lay.addWidget(self.btn_clear_eval_scales_path)
+                if self._show_postprocess_controls:
+                    _left_eval_lay.addWidget(self._sidebar_separator())
+                    _left_eval_lay.addWidget(self.btn_run_evaluation)
+                    _left_eval_lay.addWidget(self.btn_run_evaluation_all)
+                    _left_eval_lay.addWidget(self.btn_save_eval_report)
+                    _left_eval_lay.addWidget(self._sidebar_separator())
+                    _left_eval_lay.addWidget(QLabel("Evaluation Report:"))
+                    self.eval_report_widget = _qt_widgets_mod.QTextEdit()
+                    self.eval_report_widget.setReadOnly(True)
+                    self.eval_report_widget.setPlaceholderText(
+                        "Evaluation report will appear here after running evaluation."
+                    )
+                    self.eval_report_widget.setMinimumHeight(120)
+                    _left_eval_lay.addWidget(self.eval_report_widget)
+                else:
+                    self.eval_report_widget = None
+                _left_eval_lay.addStretch(1)
 
-            right_layout.addWidget(_tab_widget)
-        else:
-            self.eval_report_widget = None
+            left_layout.addWidget(self._sidebar_separator())
+            left_layout.addWidget(_left_tab_widget, stretch=1)
 
-        # Wrap toggle strip + sidebar panel side-by-side
-        right_area = QWidget()
-        right_area_layout = QHBoxLayout(right_area)
-        right_area_layout.setContentsMargins(0, 0, 0, 0)
-        right_area_layout.setSpacing(0)
-        right_area_layout.addWidget(right_toggle_btn)
-        right_area_layout.addWidget(right_sidebar)
-        main_splitter.addWidget(right_area)
+        left_sidebar.adjustSize()
+        left_min_width = max(left_sidebar.minimumSizeHint().width(), left_sidebar.sizeHint().width())
+        left_sidebar.setMinimumWidth(left_min_width)
 
-        # Set initial sizes [left, center, right] and lock only center to stretch
-        main_splitter.setSizes([210, 930, 282])
+        main_splitter.addWidget(left_sidebar)
+
+        # -----------------------------------------------------------------
+        # CENTER — matplotlib canvas
+        # -----------------------------------------------------------------
+        center_widget = QWidget()
+        center_layout = QVBoxLayout(center_widget)
+        center_layout.setContentsMargins(0, 0, 0, 0)
+        center_layout.setSpacing(0)
+
+        self.figure = plt.Figure(figsize=(12, 6))
+        self.canvas = FigureCanvas(self.figure)
+        self._original_wheel_event = self.canvas.wheelEvent
+        self.canvas.wheelEvent = self._canvas_wheel_event
+        center_layout.addWidget(self.canvas, stretch=1)
+
+        main_splitter.addWidget(center_widget)
+
+        # Set initial sizes [left, center] and lock only center to stretch
+        initial_left_width = max(left_sidebar.minimumWidth(), left_sidebar.sizeHint().width())
+        initial_center_width = max(1, self.dialog.width() - initial_left_width)
+        main_splitter.setSizes([initial_left_width, initial_center_width])
         main_splitter.setStretchFactor(0, 0)
         main_splitter.setStretchFactor(1, 1)
-        main_splitter.setStretchFactor(2, 0)
 
-        right_toggle_btn.toggled.connect(right_sidebar.setVisible)
+        # -----------------------------------------------------------------
+        # TOP BAR — horizontal view controls
+        # -----------------------------------------------------------------
+        top_bar = QWidget()
+        top_layout = QHBoxLayout(top_bar)
+        top_layout.setContentsMargins(6, 6, 6, 6)
+        top_layout.setSpacing(6)
+        top_layout.addWidget(QLabel("Projection:"))
+        top_layout.addWidget(self.projection_combo)
+        top_layout.addWidget(self._sidebar_separator())
+        top_layout.addWidget(QLabel("Maximize View:"))
+        top_layout.addWidget(self.btn_all)
+        top_layout.addWidget(self.btn_xy)
+        top_layout.addWidget(self.btn_xz)
+        top_layout.addWidget(self.btn_yz)
+        top_layout.addWidget(self._sidebar_separator())
+        top_layout.addWidget(self.btn_back)
+        top_layout.addWidget(self.btn_home)
+        if mode == "seed":
+            top_layout.addWidget(self.chk_trace_overlay)
+            top_layout.addWidget(self.chk_gt_overlay)
+            top_layout.addWidget(self.btn_prev_image)
+            top_layout.addWidget(self.btn_next_image)
+        top_layout.addStretch(1)
+        outer.insertWidget(0, top_bar)
 
         if mode == "seed":
+            self._refresh_annotation_target_options()
             self._refresh_output_path_labels()
 
         # -----------------------------------------------------------------
@@ -940,7 +897,7 @@ class _OrthoViewDialog:
         footer_layout = QHBoxLayout(footer)
         footer_layout.setContentsMargins(6, 2, 6, 2)
         self.info_label = QLabel(
-            "Space=Add seed, Backspace=Undo, Scroll=Slice, Drag=Tool Action (Zoom/Crop)"
+            "Space=Add seed/child, Right-click selected node=Add Branch, Delete/Backspace=Remove Selected, Scroll=Slice, Drag=Tool Action (Zoom/Select)"
             if mode == "seed"
             else "Scroll=Slice, Drag=Zoom Box, Enter=Finish"
         )
@@ -959,15 +916,16 @@ class _OrthoViewDialog:
             self.btn_home,
         ]
         if mode == "seed":
-            button_list.extend([self.btn_undo, self.btn_remove_selected_seed, self.btn_clear])
+            button_list.extend([self.btn_undo, self.btn_clear])
             button_list.append(self.btn_rejitter_seeds)
             button_list.extend([self.btn_set_seeds_output, self.btn_set_trace_output, self.btn_set_model_weights])
             button_list.extend([self.btn_clear_seeds_output, self.btn_clear_trace_output, self.btn_clear_model_weights])
             button_list.extend([self.btn_set_image_dir, self.btn_set_seeds_input])
             button_list.extend([self.btn_clear_image_dir, self.btn_clear_seeds_input])
             button_list.extend([
-                self.btn_approve_crop,
-                self.btn_apply_component_filter,
+                self.btn_remove_selected,
+                self.btn_clip_selected,
+                self.btn_undo_annotation,
                 self.btn_set_filtered_swc_output,
                 self.btn_clear_filtered_swc_output,
                 self.btn_save_filtered_swc,
@@ -987,9 +945,6 @@ class _OrthoViewDialog:
                     self.btn_save_trace,
                     self.btn_save_all_traces,
                     self.btn_discard_trace,
-                    self.btn_trace_revision_mode,
-                    self.btn_trace_revision_preview,
-                    self.btn_trace_revision_launch,
                 ])
             if self._show_postprocess_controls:
                 button_list.extend([
@@ -1020,12 +975,13 @@ class _OrthoViewDialog:
 
         if mode == "seed":
             self.btn_undo.clicked.connect(self._undo_seed)
-            self.btn_remove_selected_seed.clicked.connect(self._remove_selected_seed)
             self.btn_clear.clicked.connect(self._clear_seeds)
             self.btn_rejitter_seeds.clicked.connect(self._rejitter_seeds)
+            self.annotation_target_combo.currentIndexChanged.connect(self._on_annotation_target_changed)
             self.radio_tool_zoom.toggled.connect(self._on_tool_toggled)
-            self.btn_approve_crop.clicked.connect(self._approve_crop_box)
-            self.btn_apply_component_filter.clicked.connect(self._apply_component_filter)
+            self.btn_remove_selected.clicked.connect(self._remove_selected)
+            self.btn_clip_selected.clicked.connect(self._clip_selected)
+            self.btn_undo_annotation.clicked.connect(self._undo_annotation_edit)
             self.btn_set_filtered_swc_output.clicked.connect(self._select_filtered_swc_output_dir)
             self.btn_clear_filtered_swc_output.clicked.connect(self._clear_filtered_swc_output_dir)
             self.btn_save_filtered_swc.clicked.connect(self._save_filtered_swc)
@@ -1048,7 +1004,6 @@ class _OrthoViewDialog:
             self._trace_branching_check.toggled.connect(self._on_advanced_params_changed)
             self._trace_repeat_starts_check.toggled.connect(self._on_advanced_params_changed)
             self._trace_stochastic_check.toggled.connect(self._on_advanced_params_changed)
-            self._trace_auto_seed_combo.currentIndexChanged.connect(self._on_advanced_params_changed)
             self._trace_seed_jitter_count_spin.valueChanged.connect(self._on_advanced_params_changed)
             self._trace_seed_jitter_radius_spin.valueChanged.connect(self._on_advanced_params_changed)
             self._trace_seed_jitter_weight_combo.currentIndexChanged.connect(self._on_advanced_params_changed)
@@ -1087,9 +1042,6 @@ class _OrthoViewDialog:
                 self.btn_discard_trace.clicked.connect(self._discard_trace)
                 self.chk_trace_overlay.toggled.connect(self._toggle_trace_overlay)
                 self.chk_gt_overlay.toggled.connect(self._toggle_gt_overlay)
-                self.btn_trace_revision_mode.toggled.connect(self._toggle_trace_revision_mode)
-                self.btn_trace_revision_preview.clicked.connect(self._preview_trace_revision)
-                self.btn_trace_revision_launch.clicked.connect(self._launch_trace_revision)
             self.btn_set_gt_swc.clicked.connect(self._select_gt_swc_path)
             self.btn_clear_gt_swc.clicked.connect(self._clear_gt_swc_path)
             self.btn_set_scales_path.clicked.connect(self._select_scales_path)
@@ -1114,7 +1066,6 @@ class _OrthoViewDialog:
             self._trace_params_debounce_timer = qt_core.QTimer(self.dialog)
             self._trace_params_debounce_timer.setSingleShot(True)
             self._trace_params_debounce_timer.timeout.connect(self._flush_pending_trace_params)
-        self._update_trace_revision_controls()
         if mode == "seed":
             self._update_postprocess_step_controls()
             self._refresh_seed_order_controls()
@@ -1174,14 +1125,16 @@ class _OrthoViewDialog:
                 self._shift_held = True
                 original_handler(event)
                 return
+            if event.key() == self.Qt.Key_Escape:
+                if self.mode == "seed":
+                    self._clear_current_selection()
+                # Prevent accidental dialog close from Escape.
+                return
             if self.mode == "seed" and event.key() == self.Qt.Key_Space:
                 self._add_current_seed()
                 return
             if self.mode == "seed" and event.key() in (self.Qt.Key_Backspace, self.Qt.Key_Delete):
-                if self.selected_seed_index is not None:
-                    self._remove_selected_seed()
-                else:
-                    self._undo_seed()
+                self._remove_selected()
                 return
             if event.key() in (self.Qt.Key_Return, self.Qt.Key_Enter):
                 self.dialog.accept()
@@ -1225,19 +1178,59 @@ class _OrthoViewDialog:
             self._refresh_effective_seed_overlay()
             self._redraw()
 
-    def _remove_selected_seed(self):
-        if self.selected_seed_index is None:
-            return
-        idx = int(self.selected_seed_index)
-        if idx < 0 or idx >= len(self.seeds):
+    def _remove_selected(self):
+        removed = False
+
+        if self._editor_state.selection.clip_preview_node_ids:
+            target = self._editor_state.active_annotation
+            graph = self._active_annotation_graph()
+            self._push_annotation_undo_snapshot()
+            graph.remove_nodes(self._editor_state.selection.clip_preview_node_ids)
+            self._sync_annotation_graph_to_view(target)
+            removed = True
+        elif self.selected_seed_index is not None:
+            idx = int(self.selected_seed_index)
+            if 0 <= idx < len(self.seeds):
+                self.seeds.pop(idx)
+                removed = True
             self.selected_seed_index = None
-            self._refresh_seed_order_controls()
+        elif self._editor_state.selection.selected_annotation_node_ids:
+            target = self._editor_state.active_annotation
+            graph = self._active_annotation_graph()
+            self._push_annotation_undo_snapshot()
+            graph.remove_nodes(self._editor_state.selection.selected_annotation_node_ids)
+            self._sync_annotation_graph_to_view(target)
+            removed = True
+
+        if not removed:
             return
-        self.seeds.pop(idx)
-        self.selected_seed_index = None
-        self._refresh_seed_order_controls()
+
+        self._clear_current_selection()
         self._refresh_effective_seed_overlay()
         self._redraw()
+
+    def _clip_selected(self):
+        if self.selected_seed_index is not None:
+            return
+        selected_node_ids = self._editor_state.selection.selected_annotation_node_ids
+        if len(selected_node_ids) == 0:
+            return
+
+        anchor_node_id = int(sorted(selected_node_ids)[0])
+        graph = self._active_annotation_graph()
+        preview_node_ids = graph.descendant_ids_including(anchor_node_id)
+        if not preview_node_ids:
+            return
+
+        if preview_node_ids == self._editor_state.selection.clip_preview_node_ids:
+            self._remove_selected()
+            return
+
+        self._editor_state.selection.clip_preview_node_ids = set(preview_node_ids)
+        self._redraw()
+
+    def _remove_selected_seed(self):
+        self._remove_selected()
 
     def _clear_seeds(self):
         self.seeds.clear()
@@ -1247,19 +1240,30 @@ class _OrthoViewDialog:
         self._redraw()
 
     def _refresh_seed_order_controls(self):
-        # Seed ordering widgets were removed; keep selected index in range and
-        # only enable removal when a valid seed is selected.
+        # Seed ordering widgets were removed; keep selected index in range.
         seed_count = len(self.seeds)
         if seed_count <= 0:
             self.selected_seed_index = None
-            self.btn_remove_selected_seed.setEnabled(False)
+            self._refresh_edit_action_controls()
             return
         if self.selected_seed_index is None:
-            self.btn_remove_selected_seed.setEnabled(False)
+            self._refresh_edit_action_controls()
             return
         selected_index = int(np.clip(self.selected_seed_index, 0, seed_count - 1))
         self.selected_seed_index = selected_index
-        self.btn_remove_selected_seed.setEnabled(True)
+        self._refresh_edit_action_controls()
+
+    def _refresh_edit_action_controls(self) -> None:
+        if self.mode != "seed":
+            return
+        has_seed_selection = self.selected_seed_index is not None
+        has_node_selection = len(self._editor_state.selection.selected_annotation_node_ids) > 0
+        has_clip_preview = len(self._editor_state.selection.clip_preview_node_ids) > 0
+        can_remove = has_seed_selection or has_node_selection or has_clip_preview
+        can_clip = (not has_seed_selection) and len(self._editor_state.selection.selected_annotation_node_ids) > 0
+
+        self.btn_remove_selected.setEnabled(can_remove)
+        self.btn_clip_selected.setEnabled(can_clip)
 
     def _move_selected_seed_to_index(self, new_index: int):
         if self.selected_seed_index is None or not self.seeds:
@@ -1295,7 +1299,8 @@ class _OrthoViewDialog:
         self._move_selected_seed_to_index(one_based_index - 1)
 
     def _on_tool_toggled(self, checked: bool):
-        self._active_tool = "zoom" if checked else "crop"
+        self._active_tool = "zoom" if checked else "select"
+        self._editor_state.active_tool = self._active_tool
 
     def _invalidate_tree_overlay_cache(self) -> None:
         self._tree_overlay_cache_source_id = None
@@ -1344,18 +1349,9 @@ class _OrthoViewDialog:
         self._tree_overlay_cache_source_id = source_id
 
     def _active_tree_for_filters(self) -> np.ndarray:
-        if self._has_crop_preview:
+        if self._has_clip_preview:
             return self._tree_swc_preview_filtered.copy()
         return self._tree_swc_committed.copy()
-
-    def _clip_crop_box(self, box: Tuple[int, int, int, int, int, int]) -> Tuple[int, int, int, int, int, int]:
-        x0, x1, y0, y1, z0, z1 = [int(v) for v in box]
-        x0, x1 = sorted((max(0, x0), min(self.shape[2], x1)))
-        y0, y1 = sorted((max(0, y0), min(self.shape[1], y1)))
-        z0, z1 = sorted((max(0, z0), min(self.shape[0], z1)))
-        if x0 == x1 or y0 == y1 or z0 == z1:
-            raise ValueError("Crop box must have non-zero size in x, y, and z.")
-        return (x0, x1, y0, y1, z0, z1)
 
     @staticmethod
     def _seed_points_from_swc(swc_rows: np.ndarray) -> List[Tuple[float, float, float]]:
@@ -1365,114 +1361,6 @@ class _OrthoViewDialog:
         if roots.size == 0:
             return []
         return [tuple(map(float, row)) for row in roots[:, [4, 3, 2]].tolist()]
-
-    def _update_crop_box_from_view(self, view: str, x0f: float, x1f: float, y0f: float, y1f: float) -> None:
-        def _bounds(lo_f: float, hi_f: float) -> Tuple[int, int]:
-            lo = int(np.floor(min(lo_f, hi_f)))
-            hi = int(np.ceil(max(lo_f, hi_f)))
-            if hi <= lo:
-                hi = lo + 1
-            return lo, hi
-
-        if self._crop_box is None:
-            box = [0, self.shape[2], 0, self.shape[1], 0, self.shape[0]]
-        else:
-            box = list(self._crop_box)
-
-        if view == "xy":
-            x0, x1 = _bounds(x0f, x1f)
-            y0, y1 = _bounds(y0f, y1f)
-            box[0], box[1], box[2], box[3] = x0, x1, y0, y1
-            self._crop_axes_initialized.update({"x", "y"})
-            if "z" not in self._crop_axes_initialized:
-                box[4], box[5] = 0, self.shape[0]
-                self._crop_axes_initialized.add("z")
-        elif view == "xz":
-            x0, x1 = _bounds(x0f, x1f)
-            z0, z1 = _bounds(y0f, y1f)
-            box[0], box[1], box[4], box[5] = x0, x1, z0, z1
-            self._crop_axes_initialized.update({"x", "z"})
-            if "y" not in self._crop_axes_initialized:
-                box[2], box[3] = 0, self.shape[1]
-                self._crop_axes_initialized.add("y")
-        else:
-            y0, y1 = _bounds(x0f, x1f)
-            z0, z1 = _bounds(y0f, y1f)
-            box[2], box[3], box[4], box[5] = y0, y1, z0, z1
-            self._crop_axes_initialized.update({"y", "z"})
-            if "x" not in self._crop_axes_initialized:
-                box[0], box[1] = 0, self.shape[2]
-                self._crop_axes_initialized.add("x")
-
-        self._crop_box = self._clip_crop_box(tuple(box))
-
-    def _filter_swc_by_box(
-        self,
-        swc_rows: np.ndarray,
-        box: Tuple[int, int, int, int, int, int],
-    ) -> Tuple[set[int], np.ndarray, List[Tuple[float, float, float]]]:
-        if swc_rows.size == 0:
-            return set(), np.empty((0, 7), dtype=np.float32), []
-
-        x0, x1, y0, y1, z0, z1 = box
-        in_box = (
-            (swc_rows[:, 2] >= x0) & (swc_rows[:, 2] < x1)
-            & (swc_rows[:, 3] >= y0) & (swc_rows[:, 3] < y1)
-            & (swc_rows[:, 4] >= z0) & (swc_rows[:, 4] < z1)
-        )
-        removed_ids = set(swc_rows[in_box, 0].astype(int).tolist())
-        filtered = np.array([row.copy() for row in swc_rows if int(row[0]) not in removed_ids], dtype=np.float32)
-
-        if filtered.size == 0:
-            return removed_ids, np.empty((0, 7), dtype=np.float32), []
-
-        for row in filtered:
-            parent_id = int(row[6])
-            if parent_id in removed_ids:
-                row[6] = -1
-
-        seed_points = self._seed_points_from_swc(filtered)
-        return removed_ids, filtered, seed_points
-
-    def _apply_crop_preview(self):
-        if self._crop_box is None:
-            return
-        source = self._tree_swc_committed.copy()
-        removed_ids, filtered, seed_points = self._filter_swc_by_box(source, self._crop_box)
-        self._tree_swc_preview_source = source
-        self._tree_swc_preview_filtered = filtered
-        self._tree_preview_seed_points = seed_points
-        self._tree_preview_removed_ids = removed_ids
-        self._has_crop_preview = True
-        self._invalidate_tree_overlay_cache()
-        self._redraw()
-
-    def _approve_crop_box(self):
-        if not self._has_crop_preview:
-            return
-        self._tree_swc_committed = self._tree_swc_preview_filtered.copy()
-        self._tree_swc_preview_source = np.empty((0, 7), dtype=np.float32)
-        self._tree_swc_preview_filtered = np.empty((0, 7), dtype=np.float32)
-        self._tree_preview_removed_ids = set()
-        self._has_crop_preview = False
-        self._invalidate_tree_overlay_cache()
-
-        seed_points = self._tree_preview_seed_points
-        self.seeds = [
-            (
-                int(np.clip(round(z), 0, self.shape[0] - 1)),
-                int(np.clip(round(y), 0, self.shape[1] - 1)),
-                int(np.clip(round(x), 0, self.shape[2] - 1)),
-            )
-            for z, y, x in seed_points
-        ]
-        self.selected_seed_index = None
-        self._refresh_seed_order_controls()
-        self._refresh_effective_seed_overlay()
-
-        if self._on_filtered_swc_changed is not None:
-            self._on_filtered_swc_changed(self._current_image_key, self._tree_swc_committed.tolist())
-        self._redraw()
 
     def _filter_components_by_length(self, swc_rows: np.ndarray, min_length: int) -> np.ndarray:
         if swc_rows.size == 0:
@@ -1523,12 +1411,12 @@ class _OrthoViewDialog:
             return
         min_length = int(self._component_min_length_spin.value())
         filtered = self._filter_components_by_length(source, min_length=min_length)
-        self._tree_swc_committed = filtered
+        self._set_reference_swc_rows(filtered)
         self._tree_swc_preview_source = np.empty((0, 7), dtype=np.float32)
         self._tree_swc_preview_filtered = np.empty((0, 7), dtype=np.float32)
         self._tree_preview_removed_ids = set()
         self._tree_preview_seed_points = []
-        self._has_crop_preview = False
+        self._has_clip_preview = False
         self._invalidate_tree_overlay_cache()
 
         seed_points = self._seed_points_from_swc(filtered)
@@ -1643,13 +1531,7 @@ class _OrthoViewDialog:
         self._redraw()
 
     def _set_finished_paths(self, finished_paths):
-        self.finished_paths = []
-        if finished_paths is None:
-            return
-        for path in finished_paths:
-            path_np = np.asarray(path, dtype=np.float32)
-            if path_np.ndim == 2 and path_np.shape[0] >= 2 and path_np.shape[1] >= 3:
-                self.finished_paths.append(path_np[:, :3])
+        self._set_prediction_paths(finished_paths)
 
     def _update_slider_bounds(self):
         self.z_slider.blockSignals(True)
@@ -1685,14 +1567,13 @@ class _OrthoViewDialog:
         self._set_effective_seed_overlay_from_array(context.get("effective_seed_overlay"))
         self._set_finished_paths(context.get("finished_paths"))
         self._current_image_key = str(context.get("neuron_name", ""))
-        self._tree_swc_committed = _normalize_swc_rows(context.get("tree_swc_rows"))
+        self._set_reference_swc_rows(context.get("tree_swc_rows"))
+        self._refresh_annotation_target_options()
         self._tree_swc_preview_source = np.empty((0, 7), dtype=np.float32)
         self._tree_swc_preview_filtered = np.empty((0, 7), dtype=np.float32)
         self._tree_preview_seed_points = []
         self._tree_preview_removed_ids = set()
-        self._has_crop_preview = False
-        self._crop_box = None
-        self._crop_axes_initialized = set()
+        self._has_clip_preview = False
         self._invalidate_tree_overlay_cache()
 
         self._show_prev_button = bool(context.get("show_prev_button", False))
@@ -1723,13 +1604,6 @@ class _OrthoViewDialog:
         if isinstance(neuron_name, str) and len(neuron_name) > 0:
             title = f"{title}: {neuron_name}"
         self.dialog.setWindowTitle(title)
-
-        self.trace_revision_selected_node_xyz = None
-        self.trace_revision_selected_point_xyz = None
-        self.trace_revision_preview_paths = []
-        self.trace_revision_preview_active = False
-        self.trace_revision_mode_enabled = False
-        self._update_trace_revision_controls()
         if self.eval_report_widget is not None:
             eval_report_text = context.get("eval_report_text", None)
             self.eval_report_widget.setPlainText("")
@@ -1756,16 +1630,8 @@ class _OrthoViewDialog:
         self._flush_pending_trace_params()
         paths = self._on_trace_current(np.asarray(self.seeds, dtype=np.float32))
         if paths is not None:
-            self.finished_paths = []
-            for path in paths:
-                path_np = np.asarray(path, dtype=np.float32)
-                if path_np.ndim == 2 and path_np.shape[1] >= 3 and path_np.shape[0] >= 2:
-                    self.finished_paths.append(path_np[:, :3])
-            self.trace_revision_selected_node_xyz = None
-            self.trace_revision_selected_point_xyz = None
-            self.trace_revision_preview_paths = []
-            self.trace_revision_preview_active = False
-            self._update_trace_revision_controls()
+            self._set_prediction_paths(paths)
+            self._clear_transient_selection_state()
             self._redraw()
 
     def _trace_all_neurons(self):
@@ -1781,143 +1647,12 @@ class _OrthoViewDialog:
 
     def _toggle_trace_overlay(self, checked: bool):
         self.trace_overlay_visible = bool(checked)
+        self._editor_state.show_prediction_overlay = self.trace_overlay_visible
         self._redraw()
 
     def _toggle_gt_overlay(self, checked: bool):
         self.gt_overlay_visible = bool(checked)
-        self._redraw()
-
-    def _has_trace_revision_callbacks(self) -> bool:
-        return (
-            self._on_trace_revision_select_point is not None
-            and self._on_trace_revision_preview is not None
-            and self._on_trace_revision_launch is not None
-        )
-
-    def _update_trace_revision_controls(self):
-        if self.mode != "seed" or not self._show_trace_controls:
-            return
-        callbacks_ready = self._has_trace_revision_callbacks()
-
-        if self.btn_trace_revision_mode.isChecked() != self.trace_revision_mode_enabled:
-            self.btn_trace_revision_mode.blockSignals(True)
-            self.btn_trace_revision_mode.setChecked(self.trace_revision_mode_enabled)
-            self.btn_trace_revision_mode.blockSignals(False)
-
-        self.btn_trace_revision_mode.setEnabled(callbacks_ready)
-        self.btn_trace_revision_preview.setEnabled(
-            callbacks_ready
-            and self.trace_revision_mode_enabled
-            and self.trace_revision_selected_node_xyz is not None
-        )
-        self.btn_trace_revision_launch.setEnabled(
-            callbacks_ready and self.trace_revision_mode_enabled and self.trace_revision_preview_active
-        )
-
-    def _toggle_trace_revision_mode(self, checked: bool):
-        self.trace_revision_mode_enabled = bool(checked)
-        if not self.trace_revision_mode_enabled:
-            self.trace_revision_selected_node_xyz = None
-            self.trace_revision_selected_point_xyz = None
-            self.trace_revision_preview_paths = []
-            self.trace_revision_preview_active = False
-            self._redraw()
-        self._update_trace_revision_controls()
-
-    def _set_trace_revision_selected_node(self, node_xyz: Optional[object]):
-        if node_xyz is None:
-            self.trace_revision_selected_node_xyz = None
-            return
-        arr = np.asarray(node_xyz, dtype=np.float32).reshape(-1)
-        if arr.shape[0] < 3:
-            self.trace_revision_selected_node_xyz = None
-            return
-        self.trace_revision_selected_node_xyz = arr[:3].copy()
-
-    def _set_trace_revision_selected_point(self, point_xyz: Optional[object]):
-        if point_xyz is None:
-            self.trace_revision_selected_point_xyz = None
-            return
-        arr = np.asarray(point_xyz, dtype=np.float32).reshape(-1)
-        if arr.shape[0] < 3:
-            self.trace_revision_selected_point_xyz = None
-            return
-        self.trace_revision_selected_point_xyz = arr[:3].copy()
-
-    def _set_trace_revision_preview_paths(self, preview_paths: Optional[List[np.ndarray]]):
-        self.trace_revision_preview_paths = []
-        if preview_paths is None:
-            return
-        for path in preview_paths:
-            path_np = np.asarray(path, dtype=np.float32)
-            if path_np.ndim == 2 and path_np.shape[1] >= 3 and path_np.shape[0] > 0:
-                self.trace_revision_preview_paths.append(path_np[:, :3])
-
-    def _select_trace_revision_point(self):
-        if (
-            not self.trace_revision_mode_enabled
-            or self._on_trace_revision_select_point is None
-            or not self._has_trace_revision_callbacks()
-        ):
-            return
-
-        selected_point_zyx = np.asarray(
-            [self.current_z, self.current_y, self.current_x],
-            dtype=np.float32,
-        )
-        result = self._on_trace_revision_select_point(selected_point_zyx)
-
-        selected_node_xyz = result.get("selected_node_xyz") if isinstance(result, dict) else None
-        selected_point_xyz = result.get("selected_point_xyz") if isinstance(result, dict) else None
-        if selected_point_xyz is None and selected_node_xyz is not None:
-            selected_point_xyz = [
-                float(selected_point_zyx[2]),
-                float(selected_point_zyx[1]),
-                float(selected_point_zyx[0]),
-            ]
-        self._set_trace_revision_selected_node(selected_node_xyz)
-        self._set_trace_revision_selected_point(selected_point_xyz)
-        self.trace_revision_preview_active = False
-        self.trace_revision_preview_paths = []
-        self._update_trace_revision_controls()
-        self._redraw()
-
-    def _preview_trace_revision(self):
-        if (
-            not self.trace_revision_mode_enabled
-            or self._on_trace_revision_preview is None
-            or not self._has_trace_revision_callbacks()
-        ):
-            return
-        preview_paths = self._on_trace_revision_preview()
-        self._set_trace_revision_preview_paths(preview_paths)
-        self.trace_revision_preview_active = len(self.trace_revision_preview_paths) > 0
-        self._update_trace_revision_controls()
-        self._redraw()
-
-    def _launch_trace_revision(self):
-        if (
-            not self.trace_revision_mode_enabled
-            or self._on_trace_revision_launch is None
-            or not self._has_trace_revision_callbacks()
-        ):
-            return
-        self._flush_pending_trace_params()
-        paths = self._on_trace_revision_launch()
-        if paths is None:
-            return
-
-        self.finished_paths = []
-        for path in paths:
-            path_np = np.asarray(path, dtype=np.float32)
-            if path_np.ndim == 2 and path_np.shape[1] >= 3 and path_np.shape[0] >= 2:
-                self.finished_paths.append(path_np[:, :3])
-
-        self.trace_revision_selected_node_xyz = None
-        self.trace_revision_selected_point_xyz = None
-        self.trace_revision_preview_paths = []
-        self.trace_revision_preview_active = False
-        self._update_trace_revision_controls()
+        self._editor_state.show_reference_overlay = self.gt_overlay_visible
         self._redraw()
 
     def _save_trace(self):
@@ -1933,12 +1668,8 @@ class _OrthoViewDialog:
     def _discard_trace(self):
         if self._on_discard_trace is not None:
             self._on_discard_trace()
-        self.finished_paths = []
-        self.trace_revision_selected_node_xyz = None
-        self.trace_revision_selected_point_xyz = None
-        self.trace_revision_preview_paths = []
-        self.trace_revision_preview_active = False
-        self._update_trace_revision_controls()
+        self._set_prediction_paths([])
+        self._clear_transient_selection_state()
         self._redraw()
 
     def _run_postprocess(self):
@@ -1948,7 +1679,7 @@ class _OrthoViewDialog:
         self._on_postprocess_params_changed_slot()
         if self._on_run_postprocess is None:
             return
-        self._on_run_postprocess()
+        self._on_run_postprocess(self._current_annotation_target())
 
     def _run_postprocess_all(self):
         # Keep "Post-Process All" consistent with the currently visible UI
@@ -1957,7 +1688,7 @@ class _OrthoViewDialog:
         self._on_postprocess_params_changed_slot()
         if self._on_run_postprocess_all is None:
             return
-        self._on_run_postprocess_all()
+        self._on_run_postprocess_all(self._current_annotation_target())
 
     def _commit_postprocess_editor_values(self):
         """Force-commit any in-progress text edits in postprocess spin boxes."""
@@ -1979,7 +1710,7 @@ class _OrthoViewDialog:
     def _undo_postprocess(self):
         if self._on_undo_postprocess is None:
             return
-        self._on_undo_postprocess()
+        self._on_undo_postprocess(self._current_annotation_target())
 
     def _run_evaluation(self):
         if self._on_run_evaluation is None:
@@ -2165,7 +1896,6 @@ class _OrthoViewDialog:
             "branching": bool(self._trace_branching_check.isChecked()),
             "repeat_starts": bool(self._trace_repeat_starts_check.isChecked()),
             "stochastic_actions": bool(self._trace_stochastic_check.isChecked()),
-            "auto_seed_selection_mode": self._trace_auto_seed_combo.currentText(),
             "seed_jitter_count": int(self._trace_seed_jitter_count_spin.value()),
             "seed_jitter_radius": float(self._trace_seed_jitter_radius_spin.value()),
             "seed_jitter_weight_strategy": self._trace_seed_jitter_weight_combo.currentText(),
@@ -2250,10 +1980,160 @@ class _OrthoViewDialog:
             self._eval_output_dir = None
         self._refresh_output_path_labels()
 
+    def _set_reference_swc_rows(self, swc_rows: Optional[object]) -> None:
+        normalized = _normalize_swc_rows(swc_rows)
+        self._tree_swc_committed = normalized
+        self._editor_state.set_reference_swc_rows(normalized)
+
+    def _set_prediction_paths(self, finished_paths) -> None:
+        had_prediction = bool(self._editor_state.prediction_annotation.nodes_by_id)
+        normalized_paths: List[np.ndarray] = []
+        if finished_paths is not None:
+            for path in finished_paths:
+                path_np = np.asarray(path, dtype=np.float32)
+                if path_np.ndim == 2 and path_np.shape[0] >= 2 and path_np.shape[1] >= 3:
+                    normalized_paths.append(path_np[:, :3].copy())
+        self.finished_paths = normalized_paths
+        self._editor_state.set_prediction_paths(normalized_paths)
+        has_prediction = bool(self._editor_state.prediction_annotation.nodes_by_id)
+        if (not had_prediction) and has_prediction:
+            self._editor_state.active_annotation = AnnotationTarget.PREDICTION.value
+        if hasattr(self, "annotation_target_combo"):
+            self._refresh_annotation_target_options()
+
+    def _push_annotation_undo_snapshot(self) -> None:
+        if not hasattr(self, "_annotation_undo_stack"):
+            self._annotation_undo_stack = []
+        target = self._editor_state.active_annotation
+        reference_rows = self._editor_state.reference_annotation.to_swc_rows().copy()
+        prediction_paths = [path.tolist() for path in self._editor_state.prediction_annotation.to_paths()]
+        self._annotation_undo_stack.append((target, reference_rows, prediction_paths))
+        if hasattr(self, "btn_undo_annotation"):
+            self.btn_undo_annotation.setEnabled(True)
+
+    def _undo_annotation_edit(self) -> None:
+        if not hasattr(self, "_annotation_undo_stack"):
+            self._annotation_undo_stack = []
+        if not self._annotation_undo_stack:
+            return
+        target, reference_rows, prediction_paths = self._annotation_undo_stack.pop()
+        self._editor_state.set_reference_swc_rows(reference_rows)
+        self._editor_state.set_prediction_paths(prediction_paths)
+        self._editor_state.active_annotation = target
+        self._sync_annotation_graph_to_view(AnnotationTarget.REFERENCE.value)
+        self._sync_annotation_graph_to_view(AnnotationTarget.PREDICTION.value)
+        self._clear_current_selection()
+        self._refresh_annotation_target_options()
+        if hasattr(self, "btn_undo_annotation"):
+            self.btn_undo_annotation.setEnabled(bool(self._annotation_undo_stack))
+        self._redraw()
+
+    def _clear_transient_selection_state(self) -> None:
+        self._editor_state.clear_transient_selection()
+
+    def _clear_current_selection(self) -> None:
+        self._clear_transient_selection_state()
+        self._refresh_seed_order_controls()
+        self._refresh_edit_action_controls()
+
+    def _active_annotation_graph(self):
+        return self._editor_state.active_annotation_graph()
+
+    def _current_annotation_target(self) -> str:
+        return self._editor_state.active_annotation
+
+    def _has_prediction_annotation(self) -> bool:
+        return bool(self._editor_state.prediction_annotation.nodes_by_id)
+
+    def _refresh_annotation_target_options(self) -> None:
+        if not hasattr(self, "annotation_target_combo"):
+            return
+        combo = self.annotation_target_combo
+        current_target = self._editor_state.active_annotation
+        if current_target == AnnotationTarget.PREDICTION.value and not self._has_prediction_annotation():
+            current_target = AnnotationTarget.REFERENCE.value
+            self._editor_state.active_annotation = current_target
+            self._clear_current_selection()
+
+        combo.blockSignals(True)
+        combo.clear()
+        combo.addItem("Reference", AnnotationTarget.REFERENCE.value)
+        if self._has_prediction_annotation():
+            combo.addItem("Prediction", AnnotationTarget.PREDICTION.value)
+
+        selected_index = combo.findData(current_target)
+        if selected_index < 0:
+            selected_index = 0
+            current_target = str(combo.itemData(selected_index))
+            self._editor_state.active_annotation = current_target
+        combo.setCurrentIndex(selected_index)
+        combo.blockSignals(False)
+
+    def _on_annotation_target_changed(self, index: int) -> None:
+        if index < 0:
+            return
+        target = self.annotation_target_combo.itemData(index)
+        if not isinstance(target, str):
+            return
+        if self._editor_state.active_annotation == target:
+            return
+        self._editor_state.active_annotation = target
+        self._clear_current_selection()
+        self._redraw()
+
+    def _sync_annotation_graph_to_view(self, target: str) -> None:
+        if target == AnnotationTarget.PREDICTION.value:
+            prediction_paths = self._editor_state.prediction_annotation.to_paths()
+            self._set_prediction_paths(prediction_paths)
+            if self._on_prediction_paths_changed is not None:
+                self._on_prediction_paths_changed(
+                    self._current_image_key,
+                    [path.tolist() for path in prediction_paths],
+                )
+            return
+        self._set_reference_swc_rows(self._editor_state.reference_annotation.to_swc_rows())
+        if self._on_filtered_swc_changed is not None:
+            self._on_filtered_swc_changed(self._current_image_key, self._tree_swc_committed.tolist())
+
+    def _active_annotation_is_visible(self) -> bool:
+        active_annotation = self._editor_state.active_annotation
+        if active_annotation == "prediction":
+            return bool(self.trace_overlay_visible)
+        return bool(self.gt_overlay_visible)
+
+    def _select_annotation_node_at_view_coords(
+        self,
+        view: str,
+        xdata: float,
+        ydata: float,
+        tolerance: float = 4.0,
+    ) -> Optional[int]:
+        if not self._active_annotation_is_visible():
+            self._editor_state.selection.selected_annotation_node_ids.clear()
+            self._refresh_edit_action_controls()
+            return None
+        node_id = hit_test_annotation_node(
+            annotation=self._active_annotation_graph(),
+            view=view,
+            xdata=xdata,
+            ydata=ydata,
+            projection_mode=self.projection_mode,
+            cursor_zyx=(self.current_z, self.current_y, self.current_x),
+            tolerance=tolerance,
+        )
+        if node_id is None:
+            return None
+        self._editor_state.selection.selected_annotation_node_ids.clear()
+        self._editor_state.selection.selected_annotation_node_ids.add(int(node_id))
+        self._editor_state.selection.selection_view = view
+        self._refresh_edit_action_controls()
+        return node_id
+
     def _poll_trace_status(self):
         if self._get_trace_status is None:
             return
-        status = self._get_trace_status() or {}
+        active_target = self._current_annotation_target()
+        status = self._get_trace_status(active_target) or {}
         message = str(status.get("message", ""))
         if message != self._last_trace_status_message:
             self.trace_status_label.setText(message)
@@ -2281,18 +2161,25 @@ class _OrthoViewDialog:
             self._trace_overlay_token = overlay_token
             overlay_paths = status.get("overlay_paths", None)
             if overlay_paths is not None:
-                self.finished_paths = []
-                for path in overlay_paths:
-                    path_np = np.asarray(path, dtype=np.float32)
-                    if path_np.ndim == 2 and path_np.shape[1] >= 3 and path_np.shape[0] >= 2:
-                        self.finished_paths.append(path_np[:, :3])
-                # A new overlay invalidates any pending revision point/preview from the old trace.
-                self.trace_revision_selected_node_xyz = None
-                self.trace_revision_selected_point_xyz = None
-                self.trace_revision_preview_paths = []
-                self.trace_revision_preview_active = False
-                self._update_trace_revision_controls()
+                self._set_prediction_paths(overlay_paths)
+                self._clear_transient_selection_state()
                 self._redraw(fast=True)
+
+        postprocess_token = status.get("postprocess_token")
+        if postprocess_token is not None and postprocess_token != self._trace_postprocess_token:
+            self._trace_postprocess_token = postprocess_token
+            if active_target == AnnotationTarget.PREDICTION.value:
+                postprocess_paths = status.get("postprocess_paths", None)
+                if postprocess_paths is not None:
+                    self._set_prediction_paths(postprocess_paths)
+                    self._clear_transient_selection_state()
+                    self._redraw(fast=True)
+            else:
+                reference_rows = status.get("reference_swc_rows", None)
+                if reference_rows is not None:
+                    self._set_reference_swc_rows(reference_rows)
+                    self._clear_transient_selection_state()
+                    self._redraw(fast=True)
 
         token = status.get("token")
         if token is not None and token != self._trace_status_token:
@@ -2334,17 +2221,16 @@ class _OrthoViewDialog:
         self.btn_discard_trace.setEnabled(not running)
         self.chk_trace_overlay.setEnabled(not running)
         self.chk_gt_overlay.setEnabled(not running)
-        self.btn_approve_crop.setEnabled(not running)
         self.btn_apply_component_filter.setEnabled(not running)
         self.btn_save_filtered_swc.setEnabled(not running)
         self.btn_prev_image.setEnabled((not running) and self._show_prev_button)
         self.btn_next_image.setEnabled((not running) and self._show_next_button)
         self.btn_cancel_trace.setEnabled(running)
-        self._update_trace_revision_controls()
         if running:
-            self.btn_trace_revision_mode.setEnabled(False)
-            self.btn_trace_revision_preview.setEnabled(False)
-            self.btn_trace_revision_launch.setEnabled(False)
+            self.btn_remove_selected.setEnabled(False)
+            self.btn_clip_selected.setEnabled(False)
+        else:
+            self._refresh_edit_action_controls()
         if self._show_postprocess_controls:
             self.btn_run_postprocess.setEnabled(not running)
             self.btn_undo_postprocess.setEnabled((not running) and self._can_undo_postprocess)
@@ -2489,7 +2375,7 @@ class _OrthoViewDialog:
                 self.overlay_artists[view] = self._draw_overlay(ax, view)
 
             # Re-enforce limits AFTER drawing overlays so that ax.plot() calls
-            # inside _plot_path_in_view cannot trigger matplotlib autoscale and
+            # inside overlay drawing cannot trigger matplotlib autoscale and
             # zoom out to world-coordinate extents (which would push seeds off-screen).
             if view in self.zoom_limits:
                 xlim, ylim = self.zoom_limits[view]
@@ -2502,21 +2388,11 @@ class _OrthoViewDialog:
 
         self.canvas.draw_idle()
         if self.mode == "seed":
-            crop_state = "preview" if self._has_crop_preview else "none"
             self.info_label.setText(
-                f"Tool: {self._active_tool} | Crop: {crop_state} | Seeds: {len(self.seeds)}"
+                f"Tool: {self._active_tool} | Seeds: {len(self.seeds)}"
                 f" | Effective: {len(self.effective_seed_overlay)} | "
                 f"Cursor (z,y,x)=({self.current_z}, {self.current_y}, {self.current_x})"
             )
-
-    def _revision_marker_visible(self, point_xyz: np.ndarray, view: str) -> bool:
-        if self.projection_mode == "mip":
-            return True
-        if view == "xy":
-            return bool(np.isclose(point_xyz[2], self.current_z, atol=0.5))
-        if view == "xz":
-            return bool(np.isclose(point_xyz[1], self.current_y, atol=0.5))
-        return bool(np.isclose(point_xyz[0], self.current_x, atol=0.5))
 
     @staticmethod
     def _project_xyz_to_view(point_xyz: np.ndarray, view: str) -> Tuple[float, float]:
@@ -2526,26 +2402,9 @@ class _OrthoViewDialog:
             return float(point_xyz[0]), float(point_xyz[2])
         return float(point_xyz[1]), float(point_xyz[2])
 
-    def _draw_crop_box_overlay(self, ax, view: str):
-        artists = []
-        if self._crop_box is None:
-            return artists
-        x0, x1, y0, y1, z0, z1 = self._crop_box
-        if view == "xy":
-            xs = [x0, x1, x1, x0, x0]
-            ys = [y0, y0, y1, y1, y0]
-        elif view == "xz":
-            xs = [x0, x1, x1, x0, x0]
-            ys = [z0, z0, z1, z1, z0]
-        else:
-            xs = [y0, y1, y1, y0, y0]
-            ys = [z0, z0, z1, z1, z0]
-        artists.extend(ax.plot(xs, ys, color="cyan", linewidth=1.5))
-        return artists
-
     def _draw_tree_overlay(self, ax, view: str):
         artists = []
-        if self._has_crop_preview:
+        if self._has_clip_preview:
             swc_source = self._tree_swc_preview_source
         else:
             swc_source = self._tree_swc_committed
@@ -2581,42 +2440,15 @@ class _OrthoViewDialog:
 
                 segments = np.stack((start_points[visible], end_points[visible]), axis=1)
 
-                if self._has_crop_preview and self._crop_box is not None:
-                    x0, x1, y0, y1, z0, z1 = self._crop_box
-                    in_box = (
-                        (swc_source[:, 2] >= x0) & (swc_source[:, 2] < x1)
-                        & (swc_source[:, 3] >= y0) & (swc_source[:, 3] < y1)
-                        & (swc_source[:, 4] >= z0) & (swc_source[:, 4] < z1)
-                    )
-                    edge_in_box = in_box[child_idx] | in_box[parent_idx]
-                    edge_in_box_visible = edge_in_box[visible]
+                collection = LineCollection(
+                    segments,
+                    colors="tomato",
+                    linewidths=1.2,
+                    alpha=0.85,
+                )
+                artists.append(ax.add_collection(collection))
 
-                    if np.any(edge_in_box_visible):
-                        red_collection = LineCollection(
-                            segments[edge_in_box_visible],
-                            colors="red",
-                            linewidths=1.2,
-                            alpha=0.85,
-                        )
-                        artists.append(ax.add_collection(red_collection))
-                    if np.any(~edge_in_box_visible):
-                        green_collection = LineCollection(
-                            segments[~edge_in_box_visible],
-                            colors="lime",
-                            linewidths=1.2,
-                            alpha=0.85,
-                        )
-                        artists.append(ax.add_collection(green_collection))
-                else:
-                    collection = LineCollection(
-                        segments,
-                        colors="tomato",
-                        linewidths=1.2,
-                        alpha=0.85,
-                    )
-                    artists.append(ax.add_collection(collection))
-
-        if self._has_crop_preview:
+        if self._has_clip_preview:
             roots_source = self._tree_swc_preview_filtered
         else:
             roots_source = self._tree_swc_committed
@@ -2632,47 +2464,34 @@ class _OrthoViewDialog:
         return artists
 
     def _seed_visible_in_view(self, seed: Tuple[int, int, int], view: str) -> bool:
-        if self.projection_mode == "mip":
-            return True
-        z, y, x = seed
-        if view == "xy":
-            return z == self.current_z
-        if view == "xz":
-            return y == self.current_y
-        return x == self.current_x
+        return seed_visible_in_view(
+            seed=seed,
+            view=view,
+            projection_mode=self.projection_mode,
+            cursor_zyx=(self.current_z, self.current_y, self.current_x),
+        )
 
     def _seed_plot_coords(self, seed: Tuple[int, int, int], view: str) -> Tuple[float, float]:
-        z, y, x = seed
-        if view == "xy":
-            return float(x), float(y)
-        if view == "xz":
-            return float(x), float(z)
-        return float(y), float(z)
+        return seed_plot_coords(seed=seed, view=view)
 
     def _select_seed_at_view_coords(self, view: str, xdata: float, ydata: float, tolerance: float = 4.0) -> Optional[int]:
-        if not self.seeds:
-            self.selected_seed_index = None
+        best_idx = hit_test_seed(
+            seeds=self.seeds,
+            view=view,
+            xdata=xdata,
+            ydata=ydata,
+            projection_mode=self.projection_mode,
+            cursor_zyx=(self.current_z, self.current_y, self.current_x),
+            tolerance=tolerance,
+        )
+        if best_idx is None:
             return None
-        best_idx: Optional[int] = None
-        best_dist_sq = tolerance * tolerance
-        # In MIP mode, all seeds are candidates regardless of current slice cursor.
-        if self.projection_mode == "mip":
-            candidate_indices = range(len(self.seeds))
-        else:
-            candidate_indices = [
-                idx for idx, seed in enumerate(self.seeds)
-                if self._seed_visible_in_view(seed, view)
-            ]
-
-        for idx in candidate_indices:
-            seed = self.seeds[idx]
-            sx, sy = self._seed_plot_coords(seed, view)
-            dist_sq = (sx - xdata) ** 2 + (sy - ydata) ** 2
-            if dist_sq <= best_dist_sq:
-                best_idx = idx
-                best_dist_sq = dist_sq
         self.selected_seed_index = best_idx
+        self._editor_state.selection.selected_annotation_node_ids.clear()
+        self._editor_state.selection.clip_preview_node_ids.clear()
+        self._editor_state.selection.selection_view = view
         self._refresh_seed_order_controls()
+        self._refresh_edit_action_controls()
         return best_idx
 
     def _draw_overlay(self, ax, view: str):
@@ -2682,14 +2501,58 @@ class _OrthoViewDialog:
 
         if self.gt_overlay_visible:
             artists.extend(self._draw_tree_overlay(ax=ax, view=view))
-        artists.extend(self._draw_crop_box_overlay(ax=ax, view=view))
+        clip_preview_node_ids = self._editor_state.selection.clip_preview_node_ids
+        if clip_preview_node_ids:
+            active_annotation = self._active_annotation_graph()
+            xs_clip = []
+            ys_clip = []
+            for node_id in sorted(clip_preview_node_ids):
+                node = active_annotation.nodes_by_id.get(int(node_id))
+                if node is None:
+                    continue
+                if not annotation_node_visible_in_view(
+                    xyz=node.xyz,
+                    view=view,
+                    projection_mode=self.projection_mode,
+                    cursor_zyx=(self.current_z, self.current_y, self.current_x),
+                ):
+                    continue
+                px, py = annotation_plot_coords(node.xyz, view=view)
+                xs_clip.append(px)
+                ys_clip.append(py)
+            if xs_clip:
+                artists.append(ax.scatter(xs_clip, ys_clip, s=86, c="crimson", edgecolors="black", zorder=5))
+
+        selected_node_ids = self._editor_state.selection.selected_annotation_node_ids
+        if selected_node_ids:
+            active_annotation = self._active_annotation_graph()
+            xs_nodes = []
+            ys_nodes = []
+            for node_id in sorted(selected_node_ids):
+                node = active_annotation.nodes_by_id.get(int(node_id))
+                if node is None:
+                    continue
+                if not annotation_node_visible_in_view(
+                    xyz=node.xyz,
+                    view=view,
+                    projection_mode=self.projection_mode,
+                    cursor_zyx=(self.current_z, self.current_y, self.current_x),
+                ):
+                    continue
+                px, py = annotation_plot_coords(node.xyz, view=view)
+                xs_nodes.append(px)
+                ys_nodes.append(py)
+            if xs_nodes:
+                artists.append(ax.scatter(xs_nodes, ys_nodes, s=72, c="gold", edgecolors="black", zorder=6))
 
         if self.seeds:
             if self.effective_seed_overlay:
-                effective_visible_indices = [
-                    idx for idx, seed in enumerate(self.effective_seed_overlay)
-                    if self._seed_visible_in_view(seed, view)
-                ]
+                effective_visible_indices = visible_seed_indices(
+                    seeds=self.effective_seed_overlay,
+                    view=view,
+                    projection_mode=self.projection_mode,
+                    cursor_zyx=(self.current_z, self.current_y, self.current_x),
+                )
                 if effective_visible_indices:
                     xs_eff = []
                     ys_eff = []
@@ -2701,7 +2564,12 @@ class _OrthoViewDialog:
                         ax.scatter(xs_eff, ys_eff, s=22, c="deepskyblue", alpha=0.45, edgecolors="none")
                     )
 
-            visible_indices = [idx for idx, seed in enumerate(self.seeds) if self._seed_visible_in_view(seed, view)]
+            visible_indices = visible_seed_indices(
+                seeds=self.seeds,
+                view=view,
+                projection_mode=self.projection_mode,
+                cursor_zyx=(self.current_z, self.current_y, self.current_x),
+            )
             if visible_indices:
                 xs = []
                 ys = []
@@ -2717,72 +2585,72 @@ class _OrthoViewDialog:
                 artists.append(ax.scatter(xs, ys, s=sizes, c=colors, edgecolors="black"))
 
         if self.trace_overlay_visible:
-            trace_paths = self.finished_paths
-            trace_color = "deepskyblue"
-            if self.trace_revision_preview_active and self.trace_revision_preview_paths:
-                trace_paths = self.trace_revision_preview_paths
-                trace_color = "gold"
-            for path in trace_paths:
-                artists.extend(self._plot_path_in_view(ax=ax, path=path, view=view, color=trace_color))
-
-        if self.trace_revision_selected_point_xyz is not None:
-            point = self.trace_revision_selected_point_xyz
-            if self._revision_marker_visible(point, view=view):
-                px, py = self._project_xyz_to_view(point, view=view)
-                artists.append(ax.scatter([px], [py], s=50, c="green", edgecolors="black"))
-
-        if self.trace_revision_selected_node_xyz is not None:
-            node = self.trace_revision_selected_node_xyz
-            if self._revision_marker_visible(node, view=view):
-                px, py = self._project_xyz_to_view(node, view=view)
-                artists.append(ax.scatter([px], [py], s=55, c="red", edgecolors="black"))
+            artists.extend(self._draw_prediction_paths(ax=ax, view=view, color="deepskyblue"))
 
         return artists
 
-    def _plot_path_in_view(self, ax, path: np.ndarray, view: str, color: str = "lime"):
+    def _draw_prediction_paths(self, ax, view: str, color: str = "deepskyblue"):
+        """Draw every finished path for *view* using a single LineCollection.
+
+        All in-slice (or MIP-projected) segments across all paths are collected and
+        rendered as one LineCollection plus one scatter for isolated points. Keeping
+        the artist count constant regardless of path count greatly reduces matplotlib
+        draw overhead when scrubbing slices or selecting with a trace overlay visible.
+        """
         artists = []
-        if path.ndim != 2 or path.shape[1] < 3 or path.shape[0] == 0:
-            return artists
+        line_segments: List[np.ndarray] = []
+        point_xs: List[float] = []
+        point_ys: List[float] = []
 
-        if self.projection_mode == "mip":
+        mip = self.projection_mode == "mip"
+        for path in self.finished_paths:
+            if path.ndim != 2 or path.shape[1] < 3 or path.shape[0] == 0:
+                continue
+
+            if mip:
+                if view == "xy":
+                    xs, ys = path[:, 0], path[:, 1]
+                elif view == "xz":
+                    xs, ys = path[:, 0], path[:, 2]
+                else:
+                    xs, ys = path[:, 1], path[:, 2]
+                if xs.shape[0] >= 2:
+                    line_segments.append(np.column_stack((xs, ys)))
+                elif xs.shape[0] == 1:
+                    point_xs.append(float(xs[0]))
+                    point_ys.append(float(ys[0]))
+                continue
+
             if view == "xy":
-                # paths in XYZ: horizontal=X(0), vertical=Y(1)
-                artists.extend(ax.plot(path[:, 0], path[:, 1], color=color, linewidth=1.5))
+                in_slice = np.isclose(path[:, 2], self.current_z, atol=0.5)
+                x_coords = path[:, 0]  # X
+                y_coords = path[:, 1]  # Y
             elif view == "xz":
-                # paths in XYZ: horizontal=X(0), vertical=Z(2)
-                artists.extend(ax.plot(path[:, 0], path[:, 2], color=color, linewidth=1.5))
+                in_slice = np.isclose(path[:, 1], self.current_y, atol=0.5)
+                x_coords = path[:, 0]  # X
+                y_coords = path[:, 2]  # Z
             else:
-                # paths in XYZ: horizontal=Y(1), vertical=Z(2)
-                artists.extend(ax.plot(path[:, 1], path[:, 2], color=color, linewidth=1.5))
-            return artists
+                in_slice = np.isclose(path[:, 0], self.current_x, atol=0.5)
+                x_coords = path[:, 1]  # Y
+                y_coords = path[:, 2]  # Z
 
-        if view == "xy":
-            # paths in XYZ: slice by Z(2)
-            in_slice = np.isclose(path[:, 2], self.current_z, atol=0.5)
-            x_coords = path[:, 0]  # X
-            y_coords = path[:, 1]  # Y
-        elif view == "xz":
-            # paths in XYZ: slice by Y(1)
-            in_slice = np.isclose(path[:, 1], self.current_y, atol=0.5)
-            x_coords = path[:, 0]  # X
-            y_coords = path[:, 2]  # Z
-        else:
-            # paths in XYZ: slice by X(0)
-            in_slice = np.isclose(path[:, 0], self.current_x, atol=0.5)
-            x_coords = path[:, 1]  # Y
-            y_coords = path[:, 2]  # Z
+            indices = np.flatnonzero(in_slice)
+            if indices.size == 0:
+                continue
 
-        indices = np.flatnonzero(in_slice)
-        if indices.size == 0:
-            return artists
+            split_points = np.where(np.diff(indices) > 1)[0] + 1
+            for seg in np.split(indices, split_points):
+                if seg.size >= 2:
+                    line_segments.append(np.column_stack((x_coords[seg], y_coords[seg])))
+                elif seg.size == 1:
+                    point_xs.append(float(x_coords[seg[0]]))
+                    point_ys.append(float(y_coords[seg[0]]))
 
-        split_points = np.where(np.diff(indices) > 1)[0] + 1
-        segments = np.split(indices, split_points)
-        for seg in segments:
-            if seg.size >= 2:
-                artists.extend(ax.plot(x_coords[seg], y_coords[seg], color=color, linewidth=1.5))
-            elif seg.size == 1:
-                artists.append(ax.scatter(x_coords[seg], y_coords[seg], s=10, c=color))
+        if line_segments:
+            collection = LineCollection(line_segments, colors=color, linewidths=1.5)
+            artists.append(ax.add_collection(collection, autolim=False))
+        if point_xs:
+            artists.append(ax.scatter(point_xs, point_ys, s=10, c=color))
 
         return artists
 
@@ -2862,6 +2730,10 @@ class _OrthoViewDialog:
             return
         self._set_active_view(view)
 
+        if int(getattr(event, "button", 0)) == 3:
+            self._show_add_branch_menu_for_selected_node(event=event, view=view)
+            return
+
         if int(getattr(event, "button", 0)) != 1:
             return
 
@@ -2874,12 +2746,15 @@ class _OrthoViewDialog:
                 pass
             self._drag_rect = None
 
+        if self._active_tool != "zoom":
+            return
+
         self._drag_rect = Rectangle(
             (self._drag_start[0], self._drag_start[1]),
             0,
             0,
             linewidth=1.0,
-            edgecolor="cyan" if self._active_tool == "crop" else "yellow",
+            edgecolor="yellow",
             facecolor="none",
             linestyle="--",
         )
@@ -2901,6 +2776,75 @@ class _OrthoViewDialog:
         self._drag_rect.set_y(min(y0, y1))
         self._drag_rect.set_width(abs(x1 - x0))
         self._drag_rect.set_height(abs(y1 - y0))
+        self.canvas.draw_idle()
+
+    def _handle_click_without_drag(self, view: str, xdata: float, ydata: float) -> None:
+        if self.mode == "seed":
+            selected_seed_idx = self._select_seed_at_view_coords(view, xdata, ydata)
+            selected_node_id: Optional[int] = None
+            if selected_seed_idx is None:
+                selected_node_id = self._select_annotation_node_at_view_coords(view, xdata, ydata)
+            self._set_cursor_from_view_coords(view, xdata, ydata)
+            return
+        self.canvas.draw_idle()
+
+    def _select_annotation_nodes_in_view_rect(
+        self,
+        view: str,
+        x0: float,
+        y0: float,
+        x1: float,
+        y1: float,
+    ) -> List[int]:
+        if not self._active_annotation_is_visible():
+            self._editor_state.selection.selected_annotation_node_ids.clear()
+            self._editor_state.selection.clip_preview_node_ids.clear()
+            self._refresh_edit_action_controls()
+            return []
+
+        min_x, max_x = sorted((float(x0), float(x1)))
+        min_y, max_y = sorted((float(y0), float(y1)))
+        selected_node_ids: List[int] = []
+        graph = self._active_annotation_graph()
+        cursor_zyx = (self.current_z, self.current_y, self.current_x)
+        for node_id, node in graph.nodes_by_id.items():
+            if not annotation_node_visible_in_view(node.xyz, view, self.projection_mode, cursor_zyx):
+                continue
+            px, py = annotation_plot_coords(node.xyz, view)
+            if min_x <= px <= max_x and min_y <= py <= max_y:
+                selected_node_ids.append(int(node_id))
+
+        self.selected_seed_index = None
+        self._editor_state.selection.clip_preview_node_ids.clear()
+        self._editor_state.selection.selected_annotation_node_ids = set(selected_node_ids)
+        self._editor_state.selection.selection_view = view if selected_node_ids else None
+        self._refresh_seed_order_controls()
+        self._refresh_edit_action_controls()
+        return selected_node_ids
+
+    def _handle_drag_release(self, event, view: str, start_x: float, start_y: float, end_x: float, end_y: float) -> None:
+        if self._active_tool == "select":
+            self._select_annotation_nodes_in_view_rect(
+                view=view,
+                x0=start_x,
+                y0=start_y,
+                x1=end_x,
+                y1=end_y,
+            )
+            self._set_cursor_from_view_coords(view, end_x, end_y)
+            self.canvas.draw_idle()
+            return
+        if self._active_tool != "zoom":
+            self.canvas.draw_idle()
+            return
+
+        x0, x1 = sorted([start_x, end_x])
+        y0, y1 = sorted([start_y, end_y])
+
+        self._push_current_zoom(view, event.inaxes)
+        event.inaxes.set_xlim(x0, x1)
+        event.inaxes.set_ylim(y0, y1)
+        self.zoom_limits[view] = ((x0, x1), (y0, y1))
         self.canvas.draw_idle()
 
     def _on_mouse_release(self, event):
@@ -2938,40 +2882,132 @@ class _OrthoViewDialog:
         drag_threshold = 1.0
 
         if dx <= drag_threshold and dy <= drag_threshold:
-            if self.mode == "seed":
-                selected_seed_idx = self._select_seed_at_view_coords(view, end_x, end_y)
-                self._set_cursor_from_view_coords(view, end_x, end_y)
-                if self._active_tool != "crop" and selected_seed_idx is None:
-                    self._select_trace_revision_point()
-            else:
-                self.canvas.draw_idle()
+            self._handle_click_without_drag(view=view, xdata=end_x, ydata=end_y)
             return
 
-        x0, x1 = sorted([start_x, end_x])
-        y0, y1 = sorted([start_y, end_y])
-
-        if self.mode == "seed" and self._active_tool == "crop":
-            try:
-                self._update_crop_box_from_view(view=view, x0f=x0, x1f=x1, y0f=y0, y1f=y1)
-                self._apply_crop_preview()
-            except ValueError:
-                self.canvas.draw_idle()
-            return
-
-        self._push_current_zoom(view, event.inaxes)
-        event.inaxes.set_xlim(x0, x1)
-        event.inaxes.set_ylim(y0, y1)
-        self.zoom_limits[view] = ((x0, x1), (y0, y1))
-        self.canvas.draw_idle()
+        self._handle_drag_release(
+            event=event,
+            view=view,
+            start_x=start_x,
+            start_y=start_y,
+            end_x=end_x,
+            end_y=end_y,
+        )
 
     def _add_current_seed(self):
         if not self._has_image_dir():
             return
+        if self._insert_child_node_at_crosshair():
+            return
+        self._editor_state.selection.pending_branch_seed_xyz = None
         self.seeds.append((self.current_z, self.current_y, self.current_x))
         self.selected_seed_index = len(self.seeds) - 1
         self._refresh_seed_order_controls()
         self._refresh_effective_seed_overlay()
         self._redraw()
+
+    def _add_branch_seed_from_selected_node(self) -> bool:
+        selected_node_ids = self._editor_state.selection.selected_annotation_node_ids
+        if len(selected_node_ids) != 1:
+            return False
+
+        graph = self._active_annotation_graph()
+        anchor_id = int(next(iter(selected_node_ids)))
+        anchor_node = graph.nodes_by_id.get(anchor_id)
+        if anchor_node is None:
+            return False
+
+        x, y, z = anchor_node.xyz
+        seed = (
+            int(np.clip(np.round(z), 0, self.shape[0] - 1)),
+            int(np.clip(np.round(y), 0, self.shape[1] - 1)),
+            int(np.clip(np.round(x), 0, self.shape[2] - 1)),
+        )
+        self._editor_state.selection.pending_branch_seed_xyz = (float(x), float(y), float(z))
+        self.seeds.append(seed)
+        self.selected_seed_index = len(self.seeds) - 1
+        self._refresh_seed_order_controls()
+        self._refresh_effective_seed_overlay()
+        self._redraw()
+        return True
+
+    def _show_add_branch_menu_for_selected_node(self, event, view: str) -> None:
+        if self.mode != "seed":
+            return
+
+        selected_node_ids = self._editor_state.selection.selected_annotation_node_ids
+        if len(selected_node_ids) != 1:
+            return
+
+        clicked_node_id = hit_test_annotation_node(
+            annotation=self._active_annotation_graph(),
+            view=view,
+            xdata=float(event.xdata),
+            ydata=float(event.ydata),
+            projection_mode=self.projection_mode,
+            cursor_zyx=(self.current_z, self.current_y, self.current_x),
+            tolerance=4.0,
+        )
+        if clicked_node_id is None or int(clicked_node_id) not in selected_node_ids:
+            return
+
+        qt_widgets = importlib.import_module("qtpy.QtWidgets")
+        menu = qt_widgets.QMenu(self.dialog)
+        add_branch_action = menu.addAction("Add Branch")
+
+        gui_event = getattr(event, "guiEvent", None)
+        global_pos = None
+        if gui_event is not None:
+            if hasattr(gui_event, "globalPosition"):
+                gp = gui_event.globalPosition()
+                global_pos = gp.toPoint() if hasattr(gp, "toPoint") else gp
+            elif hasattr(gui_event, "globalPos"):
+                global_pos = gui_event.globalPos()
+        if global_pos is None:
+            qt_gui = importlib.import_module("qtpy.QtGui")
+            global_pos = qt_gui.QCursor.pos()
+
+        exec_fn = getattr(menu, "exec", None)
+        if exec_fn is None:
+            exec_fn = getattr(menu, "exec_", None)
+        if exec_fn is None:
+            return
+
+        selected_action = exec_fn(global_pos)
+        if selected_action == add_branch_action:
+            self._add_branch_seed_from_selected_node()
+
+    def _insert_child_node_at_crosshair(self) -> bool:
+        selected_node_ids = self._editor_state.selection.selected_annotation_node_ids
+        if len(selected_node_ids) != 1:
+            return False
+
+        parent_id = int(next(iter(selected_node_ids)))
+        graph = self._active_annotation_graph()
+        if parent_id not in graph.nodes_by_id:
+            return False
+
+        target = self._editor_state.active_annotation
+        selection_view = self._editor_state.selection.selection_view
+        parent_radius = float(graph.nodes_by_id[parent_id].radius)
+        self._push_annotation_undo_snapshot()
+        new_node_id = graph.add_child(
+            parent_id=parent_id,
+            xyz=(float(self.current_x), float(self.current_y), float(self.current_z)),
+            radius=parent_radius,
+        )
+
+        self._sync_annotation_graph_to_view(target)
+        self.selected_seed_index = None
+        self._editor_state.selection.pending_branch_seed_xyz = None
+        self._editor_state.selection.clip_preview_node_ids.clear()
+        self._editor_state.selection.selected_annotation_node_ids.clear()
+        self._editor_state.selection.selected_annotation_node_ids.add(int(new_node_id))
+        self._editor_state.selection.selection_view = selection_view
+        self._refresh_seed_order_controls()
+        self._refresh_edit_action_controls()
+        self._redraw()
+        return True
 
     def _on_mpl_keypress(self, event):
         if event.key == "shift":
@@ -2982,10 +3018,9 @@ class _OrthoViewDialog:
         if event.key in (" ", "space"):
             self._add_current_seed()
         elif event.key in ("backspace", "delete"):
-            if self.selected_seed_index is not None:
-                self._remove_selected_seed()
-            else:
-                self._undo_seed()
+            self._remove_selected()
+        elif event.key == "escape":
+            self._clear_current_selection()
 
     def _on_mpl_keyrelease(self, event):
         if event.key == "shift":
@@ -3011,7 +3046,9 @@ class _OrthoViewDialog:
             self.current_x = int(np.clip(self.current_x + delta, 0, self.shape[2] - 1))
 
         self._sync_sliders_from_cursor()
-        self._redraw(fast=True)
+        # In MIP mode overlays do not depend on the slice position, so scrubbing the
+        # slice only needs to move the crosshair; skip the overlay rebuild.
+        self._redraw(skip_overlay_redraw=(self.projection_mode == "mip"))
 
     def _canvas_wheel_event(self, qt_event):
         if not self._has_image_dir():
@@ -3108,10 +3145,7 @@ def interactive_seed_selection_step(
     on_trace_current: Optional[Callable[[np.ndarray], Optional[List[np.ndarray]]]] = None,
     on_trace_all: Optional[Callable[[], None]] = None,
     on_cancel_trace: Optional[Callable[[], None]] = None,
-    on_trace_revision_select_point: Optional[Callable[[np.ndarray], Optional[Dict[str, object]]]] = None,
-    on_trace_revision_preview: Optional[Callable[[], Optional[List[np.ndarray]]]] = None,
-    on_trace_revision_launch: Optional[Callable[[], Optional[List[np.ndarray]]]] = None,
-    get_trace_status: Optional[Callable[[], Dict[str, object]]] = None,
+    get_trace_status: Optional[Callable[[str], Dict[str, object]]] = None,
     finished_paths: Optional[List[np.ndarray]] = None,
     on_save_trace: Optional[Callable[[], None]] = None,
     on_save_all_traces: Optional[Callable[[], None]] = None,
@@ -3149,9 +3183,6 @@ def interactive_seed_selection_step(
         on_trace_current=on_trace_current,
         on_trace_all=on_trace_all,
         on_cancel_trace=on_cancel_trace,
-        on_trace_revision_select_point=on_trace_revision_select_point,
-        on_trace_revision_preview=on_trace_revision_preview,
-        on_trace_revision_launch=on_trace_revision_launch,
         get_trace_status=get_trace_status,
         on_save_trace=on_save_trace,
         on_save_all_traces=on_save_all_traces,
@@ -3191,10 +3222,7 @@ def interactive_seed_selection_session(
     on_trace_current: Optional[Callable[[np.ndarray], Optional[List[np.ndarray]]]] = None,
     on_trace_all: Optional[Callable[[], None]] = None,
     on_cancel_trace: Optional[Callable[[], None]] = None,
-    on_trace_revision_select_point: Optional[Callable[[np.ndarray], Optional[Dict[str, object]]]] = None,
-    on_trace_revision_preview: Optional[Callable[[], Optional[List[np.ndarray]]]] = None,
-    on_trace_revision_launch: Optional[Callable[[], Optional[List[np.ndarray]]]] = None,
-    get_trace_status: Optional[Callable[[], Dict[str, object]]] = None,
+    get_trace_status: Optional[Callable[[str], Dict[str, object]]] = None,
     on_save_trace: Optional[Callable[[], None]] = None,
     on_save_all_traces: Optional[Callable[[], None]] = None,
     on_discard_trace: Optional[Callable[[], None]] = None,
@@ -3215,15 +3243,14 @@ def interactive_seed_selection_session(
     trace_branching: bool = True,
     trace_repeat_starts: bool = False,
     trace_stochastic_actions: bool = False,
-    trace_auto_seed_mode: str = "remote_endnode",
     trace_seed_jitter_count: int = 0,
     trace_seed_jitter_radius: float = 0.0,
     trace_seed_jitter_weight_strategy: str = "uniform",
     on_trace_params_changed: Optional[Callable[[Dict[str, object]], None]] = None,
     show_postprocess_controls: bool = False,
-    on_run_postprocess: Optional[Callable[[], None]] = None,
-    on_run_postprocess_all: Optional[Callable[[], None]] = None,
-    on_undo_postprocess: Optional[Callable[[], None]] = None,
+    on_run_postprocess: Optional[Callable[[str], None]] = None,
+    on_run_postprocess_all: Optional[Callable[[str], None]] = None,
+    on_undo_postprocess: Optional[Callable[[str], None]] = None,
     on_run_evaluation: Optional[Callable[[], None]] = None,
     on_run_evaluation_all: Optional[Callable[[], None]] = None,
     on_save_eval_report: Optional[Callable[[], None]] = None,
@@ -3257,6 +3284,7 @@ def interactive_seed_selection_session(
     on_clear_filtered_swc_output_dir: Optional[Callable[[], Optional[str]]] = None,
     on_save_filtered_swc: Optional[Callable[[str, List[List[float]]], Optional[str]]] = None,
     on_filtered_swc_changed: Optional[Callable[[str, List[List[float]]], None]] = None,
+    on_prediction_paths_changed: Optional[Callable[[str, List[List[List[float]]]], None]] = None,
 ) -> torch.Tensor:
     """Open a persistent seed-session dialog and update content in-place while navigating images."""
     if _is_jupyter_notebook():
@@ -3286,9 +3314,6 @@ def interactive_seed_selection_session(
         on_trace_current=on_trace_current,
         on_trace_all=on_trace_all,
         on_cancel_trace=on_cancel_trace,
-        on_trace_revision_select_point=on_trace_revision_select_point,
-        on_trace_revision_preview=on_trace_revision_preview,
-        on_trace_revision_launch=on_trace_revision_launch,
         get_trace_status=get_trace_status,
         on_save_trace=on_save_trace,
         on_save_all_traces=on_save_all_traces,
@@ -3315,7 +3340,6 @@ def interactive_seed_selection_session(
         trace_branching=trace_branching,
         trace_repeat_starts=trace_repeat_starts,
         trace_stochastic_actions=trace_stochastic_actions,
-        trace_auto_seed_mode=trace_auto_seed_mode,
         trace_seed_jitter_count=trace_seed_jitter_count,
         trace_seed_jitter_radius=trace_seed_jitter_radius,
         trace_seed_jitter_weight_strategy=trace_seed_jitter_weight_strategy,
@@ -3362,6 +3386,7 @@ def interactive_seed_selection_session(
         on_clear_filtered_swc_output_dir=on_clear_filtered_swc_output_dir,
         on_save_filtered_swc=on_save_filtered_swc,
         on_filtered_swc_changed=on_filtered_swc_changed,
+        on_prediction_paths_changed=on_prediction_paths_changed,
     )
     _run_ortho_dialog(dialog)
 

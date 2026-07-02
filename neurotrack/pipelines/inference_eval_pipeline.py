@@ -28,7 +28,6 @@ _INFERENCE_PIPELINE_DEFAULTS: Dict[str, Any] = {
     "seeds_path": None,
     "soma_sample_radius": 0.0,
     "random_offset": 0.0,
-    "auto_seed_selection_mode": "remote_endnode",
     "review_before_next": False,
     "sync": False,            # Skip images whose reconstruction already exists
     "run_evaluation": None,   # None → infer from swc_dir

@@ -1,11 +1,11 @@
 {
-  "img_dir": "/home/brysongray/data/neurotrack_data/gold166/gold166_cropped/all_soma_removed/fold3/test/images",
-  "swc_dir": "/home/brysongray/data/neurotrack_data/gold166/gold166_cropped/all_soma_removed/fold3/test/morphology/",
-  "out_dir": "/home/brysongray/data/neurotrack_data/inference_outputs/all_fold3_inference/",
+  "img_dir": "/home/brysongray/data/neurotrack_data/gold166/gold166_cropped/all_soma_removed/fold5/test/images",
+  "swc_dir": "/home/brysongray/data/neurotrack_data/gold166/gold166_cropped/all_soma_removed/fold5/test/morphology/",
+  "out_dir": "/home/brysongray/data/neurotrack_data/inference_outputs/all_fold5_inference/",
   "seeds_path": "/home/brysongray/data/neurotrack_data/gold166/gold166_cropped/soma_removed_seeds.json",
-  "test_name": "example_cleanup_fold3",
+  "test_name": "example_cleanup_fold5",
 
-  "sac_weights": "/home/brysongray/data/neurotrack_data/model_weights/bc_weights/training_outputs/model_state_dicts_all_fold3_training_round22_2026-06-03_20-13-00.pt",
+  "sac_weights": "/home/brysongray/data/neurotrack_data/model_weights/bc_weights/training_outputs/model_state_dicts_all_fold5_training_round36_2026-06-01_17-20-18.pt",
   "step_width": 2.0,
   "repeat_starts": false,
   "max_len": 10000,

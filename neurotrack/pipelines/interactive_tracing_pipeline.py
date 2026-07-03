@@ -91,12 +91,18 @@ def _normalize_seed_array(seed_array: np.ndarray, shape: tuple[int, int, int]) -
     return arr.tolist()
 
 
-def _format_eval_value(value: Any, decimals: int = 4) -> str:
+def _format_eval_value(value: Any, decimals: int = 2) -> str:
     """Format evaluation values for the interactive report."""
     if value is None:
         return "N/A"
     if isinstance(value, np.generic):
         value = value.item()
+    if isinstance(value, np.ndarray):
+        value = value.tolist()
+    if isinstance(value, (tuple, list)):
+        formatted = [_format_eval_value(v, decimals=decimals) for v in value]
+        open_bracket, close_bracket = ("(", ")") if isinstance(value, tuple) else ("[", "]")
+        return f"{open_bracket}{', '.join(formatted)}{close_bracket}"
     if isinstance(value, (int, np.integer)):
         return str(int(value))
     if isinstance(value, (float, np.floating)):
@@ -138,9 +144,6 @@ def _format_eval_report(image_key: str, result: Dict) -> str:
             f"  Pred Nodes: {_format_eval_value(result.get('n_points_pred'), decimals=0)}"
             f"  |  GT Nodes: {_format_eval_value(result.get('n_points_gt'), decimals=0)}"
         )
-
-    if "gt_file" in result:
-        lines.append(f"  GT File: {result['gt_file']}")
 
     l_measure_pairs = [
         ("num_bifurcations", "Num Bifurcations"),
@@ -199,6 +202,9 @@ def _format_eval_report(image_key: str, result: Dict) -> str:
                 "  % Different Structure Avg: "
                 f"{_format_eval_value(result.get('percent_different_structure_average'))}"
             )
+
+    if "gt_file" in result:
+        lines.append(f"  Reference File: {result['gt_file']}")
 
     return "\n".join(lines)
 

@@ -217,6 +217,10 @@ class _OrthoViewDialog:
         self.image_artists = {}
         self.crosshair_artists = {}
         self.overlay_artists = {}
+        self.selection_artists = {}
+        self._supports_blit = False
+        self._blit_background_by_view: Dict[str, object] = {}
+        self._blit_background_valid = False
         self.session_action = "finish"
         self._on_save_current = on_save_current
         self._on_save_all = on_save_all
@@ -600,6 +604,7 @@ class _OrthoViewDialog:
             _left_edit_sa, _left_edit_lay = _make_left_tab_scroll()
             _left_trace_sa, _left_trace_lay = _make_left_tab_scroll()
             _left_eval_sa, _left_eval_lay = _make_left_tab_scroll()
+            _left_tab_pages = [_left_trace_sa, _left_edit_sa, _left_eval_sa]
             _left_tab_widget.addTab(_left_trace_sa, "Trace")
             _left_tab_widget.addTab(_left_edit_sa, "Edit")
             _left_tab_widget.addTab(_left_eval_sa, "Evaluate")
@@ -823,16 +828,40 @@ class _OrthoViewDialog:
                         "Evaluation report will appear here after running evaluation."
                     )
                     self.eval_report_widget.setMinimumHeight(120)
-                    _left_eval_lay.addWidget(self.eval_report_widget)
+                    self.eval_report_widget.setSizePolicy(
+                        _qt_widgets_mod.QSizePolicy.Expanding,
+                        _qt_widgets_mod.QSizePolicy.Expanding,
+                    )
+                    _left_eval_lay.addWidget(self.eval_report_widget, stretch=1)
                 else:
                     self.eval_report_widget = None
-                _left_eval_lay.addStretch(1)
+                    _left_eval_lay.addStretch(1)
 
             left_layout.addWidget(self._sidebar_separator())
             left_layout.addWidget(_left_tab_widget, stretch=1)
 
         left_sidebar.adjustSize()
         left_min_width = max(left_sidebar.minimumSizeHint().width(), left_sidebar.sizeHint().width())
+        if mode == "seed" and _left_tab_widget is not None:
+            # Ensure initial sidebar width accommodates the widest tab content,
+            # not only the currently active tab.
+            _left_tab_widget.ensurePolished()
+            _left_tab_widget.updateGeometry()
+            tab_bar_width = _left_tab_widget.tabBar().sizeHint().width() if _left_tab_widget.tabBar() is not None else 0
+            max_tab_page_width = 0
+            for page in _left_tab_pages:
+                if page is None:
+                    continue
+                page.ensurePolished()
+                page.updateGeometry()
+                max_tab_page_width = max(
+                    max_tab_page_width,
+                    page.minimumSizeHint().width(),
+                    page.sizeHint().width(),
+                    page.widget().minimumSizeHint().width() if page.widget() is not None else 0,
+                    page.widget().sizeHint().width() if page.widget() is not None else 0,
+                )
+            left_min_width = max(left_min_width, int(tab_bar_width + max_tab_page_width + 24))
         left_sidebar.setMinimumWidth(left_min_width)
 
         main_splitter.addWidget(left_sidebar)
@@ -847,6 +876,9 @@ class _OrthoViewDialog:
 
         self.figure = plt.Figure(figsize=(12, 6))
         self.canvas = FigureCanvas(self.figure)
+        self._supports_blit = all(
+            hasattr(self.canvas, name) for name in ("copy_from_bbox", "restore_region", "blit")
+        )
         self._original_wheel_event = self.canvas.wheelEvent
         self.canvas.wheelEvent = self._canvas_wheel_event
         center_layout.addWidget(self.canvas, stretch=1)
@@ -1075,6 +1107,7 @@ class _OrthoViewDialog:
         self._mpl_release_cid = self.canvas.mpl_connect("button_release_event", self._on_mouse_release)
         self._mpl_key_cid = self.canvas.mpl_connect("key_press_event", self._on_mpl_keypress)
         self._mpl_key_release_cid = self.canvas.mpl_connect("key_release_event", self._on_mpl_keyrelease)
+        self._mpl_draw_cid = self.canvas.mpl_connect("draw_event", self._on_canvas_draw)
         self.dialog.keyPressEvent = self._make_keypress_handler(self.dialog.keyPressEvent)
         self.dialog.keyReleaseEvent = self._make_keyrelease_handler(self.dialog.keyReleaseEvent)
         self.canvas.setFocusPolicy(self.Qt.StrongFocus)
@@ -1128,6 +1161,7 @@ class _OrthoViewDialog:
             if event.key() == self.Qt.Key_Escape:
                 if self.mode == "seed":
                     self._clear_current_selection()
+                    self._redraw_selection_only()
                 # Prevent accidental dialog close from Escape.
                 return
             if self.mode == "seed" and event.key() == self.Qt.Key_Space:
@@ -1166,6 +1200,9 @@ class _OrthoViewDialog:
         self.current_z = int(self.z_slider.value())
         self.current_y = int(self.y_slider.value())
         self.current_x = int(self.x_slider.value())
+        if self.projection_mode == "mip" and self._try_blit_crosshair_update():
+            self._refresh_info_label()
+            return
         # In MIP mode, slider moves only update crosshairs; overlays are unchanged.
         # Skip overlay re-plotting to keep interactive scrubbing responsive.
         self._redraw(skip_overlay_redraw=(self.projection_mode == "mip"))
@@ -1227,7 +1264,7 @@ class _OrthoViewDialog:
             return
 
         self._editor_state.selection.clip_preview_node_ids = set(preview_node_ids)
-        self._redraw()
+        self._redraw_selection_only()
 
     def _remove_selected_seed(self):
         self._remove_selected()
@@ -2304,14 +2341,24 @@ class _OrthoViewDialog:
                 pass
         self.overlay_artists[view] = []
 
+    def _clear_selection_artists(self, view: str):
+        for artist in self.selection_artists.get(view, []):
+            try:
+                artist.remove()
+            except Exception:
+                pass
+        self.selection_artists[view] = []
+
     def _build_layout(self, views):
         self.figure.clear()
+        self._invalidate_blit_background()
         ncols = len(views)
         self.axis_view_map = {}
         self.axes_by_view = {}
         self.image_artists = {}
         self.crosshair_artists = {}
         self.overlay_artists = {}
+        self.selection_artists = {}
 
         for i, view in enumerate(views):
             ax = self.figure.add_subplot(1, ncols, i + 1)
@@ -2334,10 +2381,14 @@ class _OrthoViewDialog:
 
             vline = ax.axvline(self.current_x, color="cyan", linewidth=0.8, alpha=0.8)
             hline = ax.axhline(self.current_y, color="cyan", linewidth=0.8, alpha=0.8)
+            if self._supports_blit:
+                vline.set_animated(True)
+                hline.set_animated(True)
             self.crosshair_artists[view] = (vline, hline)
             self._set_crosshair_for_view(view)
 
             self.overlay_artists[view] = []
+            self.selection_artists[view] = []
             if view in self.zoom_limits:
                 xlim, ylim = self.zoom_limits[view]
                 ax.set_xlim(xlim)
@@ -2352,6 +2403,119 @@ class _OrthoViewDialog:
         self._current_views = list(views)
         self.figure.tight_layout()
         self._layout_dirty = False
+
+    def _refresh_info_label(self) -> None:
+        if self.mode != "seed":
+            return
+        self.info_label.setText(
+            f"Tool: {self._active_tool} | Seeds: {len(self.seeds)}"
+            f" | Effective: {len(self.effective_seed_overlay)} | "
+            f"Cursor (z,y,x)=({self.current_z}, {self.current_y}, {self.current_x})"
+        )
+
+    def _invalidate_blit_background(self) -> None:
+        self._blit_background_by_view = {}
+        self._blit_background_valid = False
+
+    def _on_canvas_draw(self, _event) -> None:
+        if not self._supports_blit:
+            return
+        backgrounds: Dict[str, object] = {}
+        try:
+            for view in self._current_views:
+                ax = self.axes_by_view.get(view)
+                if ax is None:
+                    continue
+                backgrounds[view] = self.canvas.copy_from_bbox(ax.bbox)
+        except Exception:
+            self._invalidate_blit_background()
+            return
+        self._blit_background_by_view = backgrounds
+        self._blit_background_valid = len(backgrounds) == len(self._current_views)
+
+    def _ensure_blit_background(self) -> bool:
+        if not self._supports_blit:
+            return False
+        if self._blit_background_valid:
+            return True
+        try:
+            self.canvas.draw()
+        except Exception:
+            return False
+        return self._blit_background_valid
+
+    def _blit_views(
+        self,
+        views: List[str],
+        extra_artists_by_view: Optional[Dict[str, List[object]]] = None,
+    ) -> bool:
+        if not self._ensure_blit_background():
+            return False
+
+        extra_artists_by_view = extra_artists_by_view or {}
+        try:
+            for view in views:
+                ax = self.axes_by_view.get(view)
+                background = self._blit_background_by_view.get(view)
+                crosshair = self.crosshair_artists.get(view)
+                if ax is None or background is None or crosshair is None:
+                    return False
+
+                self.canvas.restore_region(background)
+                for artist in crosshair:
+                    if artist is not None and artist.get_visible():
+                        ax.draw_artist(artist)
+
+                for artist in extra_artists_by_view.get(view, []):
+                    if artist is None:
+                        continue
+                    if getattr(artist, "axes", None) is not ax:
+                        continue
+                    if not artist.get_visible():
+                        continue
+                    ax.draw_artist(artist)
+
+                self.canvas.blit(ax.bbox)
+        except Exception:
+            self._invalidate_blit_background()
+            return False
+        return True
+
+    def _try_blit_crosshair_update(self) -> bool:
+        if self.projection_mode != "mip":
+            return False
+        views = self._iter_views()
+        if self._layout_dirty or self._current_views != views or len(self.axes_by_view) == 0:
+            return False
+        for view in views:
+            self._set_crosshair_for_view(view)
+        return self._blit_views(list(views))
+
+    def _redraw_selection_only(self) -> bool:
+        """Refresh only selection-highlight artists and present via blitting when possible."""
+        if not hasattr(self, "selection_artists") or not hasattr(self, "axes_by_view"):
+            self._redraw()
+            return False
+        if not hasattr(self, "_layout_dirty") or not hasattr(self, "_current_views"):
+            self._redraw()
+            return False
+        views = self._iter_views()
+        if self._layout_dirty or self._current_views != views or len(self.axes_by_view) == 0:
+            self._redraw()
+            return False
+
+        for view in views:
+            ax = self.axes_by_view[view]
+            self._clear_selection_artists(view)
+            self.selection_artists[view] = self._draw_selection_overlay(ax=ax, view=view)
+
+        if self._blit_views(list(views), extra_artists_by_view=self.selection_artists):
+            self._refresh_info_label()
+            return True
+
+        self.canvas.draw_idle()
+        self._refresh_info_label()
+        return False
 
     def _redraw(self, fast: bool = False, skip_overlay_redraw: bool = False):
         views = self._iter_views()
@@ -2374,6 +2538,9 @@ class _OrthoViewDialog:
                 self._clear_overlay_artists(view)
                 self.overlay_artists[view] = self._draw_overlay(ax, view)
 
+            self._clear_selection_artists(view)
+            self.selection_artists[view] = self._draw_selection_overlay(ax=ax, view=view)
+
             # Re-enforce limits AFTER drawing overlays so that ax.plot() calls
             # inside overlay drawing cannot trigger matplotlib autoscale and
             # zoom out to world-coordinate extents (which would push seeds off-screen).
@@ -2386,13 +2553,16 @@ class _OrthoViewDialog:
                 ax.set_xlim(full_xlim)
                 ax.set_ylim(full_ylim)
 
-        self.canvas.draw_idle()
-        if self.mode == "seed":
-            self.info_label.setText(
-                f"Tool: {self._active_tool} | Seeds: {len(self.seeds)}"
-                f" | Effective: {len(self.effective_seed_overlay)} | "
-                f"Cursor (z,y,x)=({self.current_z}, {self.current_y}, {self.current_x})"
-            )
+        self._invalidate_blit_background()
+        if self._supports_blit:
+            # Draw static artists once, capture per-axis backgrounds (via draw_event),
+            # then draw animated crosshair/selection artists with blit.
+            self.canvas.draw()
+            if not self._blit_views(list(views), extra_artists_by_view=self.selection_artists):
+                self.canvas.draw_idle()
+        else:
+            self.canvas.draw_idle()
+        self._refresh_info_label()
 
     @staticmethod
     def _project_xyz_to_view(point_xyz: np.ndarray, view: str) -> Tuple[float, float]:
@@ -2501,6 +2671,51 @@ class _OrthoViewDialog:
 
         if self.gt_overlay_visible:
             artists.extend(self._draw_tree_overlay(ax=ax, view=view))
+
+        if self.seeds:
+            if self.effective_seed_overlay:
+                effective_visible_indices = visible_seed_indices(
+                    seeds=self.effective_seed_overlay,
+                    view=view,
+                    projection_mode=self.projection_mode,
+                    cursor_zyx=(self.current_z, self.current_y, self.current_x),
+                )
+                if effective_visible_indices:
+                    xs_eff = []
+                    ys_eff = []
+                    for idx in effective_visible_indices:
+                        sx, sy = self._seed_plot_coords(self.effective_seed_overlay[idx], view)
+                        xs_eff.append(sx)
+                        ys_eff.append(sy)
+                    artists.append(
+                        ax.scatter(xs_eff, ys_eff, s=22, c="deepskyblue", alpha=0.45, edgecolors="none")
+                    )
+
+            visible_indices = visible_seed_indices(
+                seeds=self.seeds,
+                view=view,
+                projection_mode=self.projection_mode,
+                cursor_zyx=(self.current_z, self.current_y, self.current_x),
+            )
+            if visible_indices:
+                xs = []
+                ys = []
+                for idx in visible_indices:
+                    sx, sy = self._seed_plot_coords(self.seeds[idx], view)
+                    xs.append(sx)
+                    ys.append(sy)
+                artists.append(ax.scatter(xs, ys, s=35, c="lime", edgecolors="black"))
+
+        if self.trace_overlay_visible:
+            artists.extend(self._draw_prediction_paths(ax=ax, view=view, color="deepskyblue"))
+
+        return artists
+
+    def _draw_selection_overlay(self, ax, view: str):
+        artists = []
+        if not self._has_image_dir():
+            return artists
+
         clip_preview_node_ids = self._editor_state.selection.clip_preview_node_ids
         if clip_preview_node_ids:
             active_annotation = self._active_annotation_graph()
@@ -2545,48 +2760,16 @@ class _OrthoViewDialog:
             if xs_nodes:
                 artists.append(ax.scatter(xs_nodes, ys_nodes, s=72, c="gold", edgecolors="black", zorder=6))
 
-        if self.seeds:
-            if self.effective_seed_overlay:
-                effective_visible_indices = visible_seed_indices(
-                    seeds=self.effective_seed_overlay,
-                    view=view,
-                    projection_mode=self.projection_mode,
-                    cursor_zyx=(self.current_z, self.current_y, self.current_x),
-                )
-                if effective_visible_indices:
-                    xs_eff = []
-                    ys_eff = []
-                    for idx in effective_visible_indices:
-                        sx, sy = self._seed_plot_coords(self.effective_seed_overlay[idx], view)
-                        xs_eff.append(sx)
-                        ys_eff.append(sy)
-                    artists.append(
-                        ax.scatter(xs_eff, ys_eff, s=22, c="deepskyblue", alpha=0.45, edgecolors="none")
-                    )
+        selected_seed_idx = self.selected_seed_index
+        if selected_seed_idx is not None and 0 <= int(selected_seed_idx) < len(self.seeds):
+            seed = self.seeds[int(selected_seed_idx)]
+            if self._seed_visible_in_view(seed=seed, view=view):
+                sx, sy = self._seed_plot_coords(seed, view)
+                artists.append(ax.scatter([sx], [sy], s=65, c="yellow", edgecolors="black", zorder=7))
 
-            visible_indices = visible_seed_indices(
-                seeds=self.seeds,
-                view=view,
-                projection_mode=self.projection_mode,
-                cursor_zyx=(self.current_z, self.current_y, self.current_x),
-            )
-            if visible_indices:
-                xs = []
-                ys = []
-                colors = []
-                sizes = []
-                for idx in visible_indices:
-                    sx, sy = self._seed_plot_coords(self.seeds[idx], view)
-                    xs.append(sx)
-                    ys.append(sy)
-                    is_selected = self.selected_seed_index == idx
-                    colors.append("yellow" if is_selected else "lime")
-                    sizes.append(65 if is_selected else 35)
-                artists.append(ax.scatter(xs, ys, s=sizes, c=colors, edgecolors="black"))
-
-        if self.trace_overlay_visible:
-            artists.extend(self._draw_prediction_paths(ax=ax, view=view, color="deepskyblue"))
-
+        if self._supports_blit:
+            for artist in artists:
+                artist.set_animated(True)
         return artists
 
     def _draw_prediction_paths(self, ax, view: str, color: str = "deepskyblue"):
@@ -2691,7 +2874,8 @@ class _OrthoViewDialog:
             del self.zoom_limits[view]
         self._redraw()
 
-    def _set_cursor_from_view_coords(self, view: str, xdata: float, ydata: float):
+    def _set_cursor_from_view_coords(self, view: str, xdata: float, ydata: float, redraw: bool = True) -> bool:
+        prev_cursor = (self.current_z, self.current_y, self.current_x)
         if view == "xy":
             x = int(np.clip(np.round(xdata), 0, self.shape[2] - 1))
             y = int(np.clip(np.round(ydata), 0, self.shape[1] - 1))
@@ -2716,8 +2900,11 @@ class _OrthoViewDialog:
             if self.projection_mode == "mip":
                 self.current_x = int(np.argmax(self.img_np[z, y, :]))
 
+        changed = (self.current_z, self.current_y, self.current_x) != prev_cursor
         self._sync_sliders_from_cursor()
-        self._redraw()
+        if redraw:
+            self._redraw()
+        return changed
 
     def _on_mouse_press(self, event):
         if not self._has_image_dir():
@@ -2759,7 +2946,8 @@ class _OrthoViewDialog:
             linestyle="--",
         )
         event.inaxes.add_patch(self._drag_rect)
-        self.canvas.draw_idle()
+        if not self._blit_views([view], extra_artists_by_view={view: [self._drag_rect]}):
+            self.canvas.draw_idle()
 
     def _on_mouse_move(self, event):
         if self._drag_start is None or self._drag_rect is None:
@@ -2776,15 +2964,19 @@ class _OrthoViewDialog:
         self._drag_rect.set_y(min(y0, y1))
         self._drag_rect.set_width(abs(x1 - x0))
         self._drag_rect.set_height(abs(y1 - y0))
-        self.canvas.draw_idle()
+        if not self._blit_views([self._drag_view], extra_artists_by_view={self._drag_view: [self._drag_rect]}):
+            self.canvas.draw_idle()
 
     def _handle_click_without_drag(self, view: str, xdata: float, ydata: float) -> None:
         if self.mode == "seed":
             selected_seed_idx = self._select_seed_at_view_coords(view, xdata, ydata)
-            selected_node_id: Optional[int] = None
             if selected_seed_idx is None:
-                selected_node_id = self._select_annotation_node_at_view_coords(view, xdata, ydata)
-            self._set_cursor_from_view_coords(view, xdata, ydata)
+                self._select_annotation_node_at_view_coords(view, xdata, ydata)
+            cursor_changed = self._set_cursor_from_view_coords(view, xdata, ydata, redraw=False)
+            if cursor_changed:
+                self._redraw()
+            else:
+                self._redraw_selection_only()
             return
         self.canvas.draw_idle()
 
@@ -2831,11 +3023,15 @@ class _OrthoViewDialog:
                 x1=end_x,
                 y1=end_y,
             )
-            self._set_cursor_from_view_coords(view, end_x, end_y)
-            self.canvas.draw_idle()
+            cursor_changed = self._set_cursor_from_view_coords(view, end_x, end_y, redraw=False)
+            if cursor_changed:
+                self._redraw()
+            else:
+                self._redraw_selection_only()
             return
         if self._active_tool != "zoom":
-            self.canvas.draw_idle()
+            if not self._blit_views([view]):
+                self.canvas.draw_idle()
             return
 
         x0, x1 = sorted([start_x, end_x])
@@ -2845,6 +3041,7 @@ class _OrthoViewDialog:
         event.inaxes.set_xlim(x0, x1)
         event.inaxes.set_ylim(y0, y1)
         self.zoom_limits[view] = ((x0, x1), (y0, y1))
+        self._invalidate_blit_background()
         self.canvas.draw_idle()
 
     def _on_mouse_release(self, event):
@@ -2865,12 +3062,14 @@ class _OrthoViewDialog:
         self._drag_view = None
 
         if event.inaxes is None or event.xdata is None or event.ydata is None or view is None:
-            self.canvas.draw_idle()
+            if view is None or (not self._blit_views([view])):
+                self.canvas.draw_idle()
             return
 
         current_view = self.axis_view_map.get(event.inaxes)
         if current_view != view:
-            self.canvas.draw_idle()
+            if not self._blit_views([view]):
+                self.canvas.draw_idle()
             return
 
         self._set_active_view(view)
@@ -3021,6 +3220,7 @@ class _OrthoViewDialog:
             self._remove_selected()
         elif event.key == "escape":
             self._clear_current_selection()
+            self._redraw_selection_only()
 
     def _on_mpl_keyrelease(self, event):
         if event.key == "shift":
@@ -3046,6 +3246,9 @@ class _OrthoViewDialog:
             self.current_x = int(np.clip(self.current_x + delta, 0, self.shape[2] - 1))
 
         self._sync_sliders_from_cursor()
+        if self.projection_mode == "mip" and self._try_blit_crosshair_update():
+            self._refresh_info_label()
+            return
         # In MIP mode overlays do not depend on the slice position, so scrubbing the
         # slice only needs to move the crosshair; skip the overlay rebuild.
         self._redraw(skip_overlay_redraw=(self.projection_mode == "mip"))

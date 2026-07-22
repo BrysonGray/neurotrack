@@ -6,6 +6,22 @@ and train a neuron tracking model.
 Command-line tools
 ******************
 
+Canonical package entrypoints
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Use package CLI modules from the project root:
+
+.. code-block:: bash
+
+    python -m neurotrack.cli.run_sac_train -i configs/training/train_sac_gold166.json
+    python -m neurotrack.cli.run_inference -i configs/inference/sac_inference_gold166.json
+
+The inference command runs a single workflow and defers behavior to the JSON config:
+
+- Inference always runs.
+- Post-processing steps run only if their parameters are present in the config (granular per-step control).
+- Evaluation runs when ``swc_dir`` is provided, independent of whether post-processing ran.
+
 simulate_neurons.py
 ^^^^^^^^^^^^^^^^^^^
 Generates and saves simulated neuron images, either from existing neuron swc files or

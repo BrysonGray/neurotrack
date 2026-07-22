@@ -1,0 +1,61 @@
+{
+    "img_dir": "/home/brysongray/data/neurotrack_data/gold166/gold166_cropped/train_set/images/",
+    "swc_dir": "/home/brysongray/data/neurotrack_data/gold166/gold166_cropped/train_set/morphology/",
+    "outdir": "/home/brysongray/data/neurotrack_data/model_weights/bc_weights/training_outputs_3_17/",
+    "name": "bc_early_stop_ablation",
+    "target_step_len": 5.0,
+    "step_width": 2.0,
+    "batch_size": 64,
+    "learning_rate": 0.001,
+    "repeat_starts": 0,
+    "branching": 1,
+    "rng_seed": 1,
+    "start_complexity": 1.0,
+    "patches_per_image": 5,
+    "crop_size": 512,
+    "save_every_steps": 1000,
+    "root_sampling_probability": 0.1,
+    "soma_sample_radius": 0.0,
+    "random_offset": 0.0,
+
+    "warmstart_episodes": 300,
+    "update_after_steps": 100000,
+    "update_every": 64,
+    "updates_per_step": 1,
+    "aggregate_memory_budget": 100000,
+    "beta_start": 1.0,
+    "beta_end": 0.0,
+
+    "stall_threshold": 1.0,
+    "continue_target_norm_threshold": 1.0,
+    "continue_weight": 1.0,
+    "norm_floor": 1.5,
+    "norm_floor_weight": 0.1,
+
+    "ablations": [
+        {
+            "name_suffix": "baseline",
+            "stall_threshold": 1.0,
+            "continue_target_norm_threshold": 1.0,
+            "continue_weight": 1.0,
+            "norm_floor": 0.0,
+            "norm_floor_weight": 0.0
+        },
+        {
+            "name_suffix": "stall075_floor",
+            "stall_threshold": 0.75,
+            "continue_target_norm_threshold": 0.75,
+            "continue_weight": 1.0,
+            "norm_floor": 1.2,
+            "norm_floor_weight": 0.05
+        },
+        {
+            "name_suffix": "stall050_floor_weighted",
+            "stall_threshold": 0.5,
+            "continue_target_norm_threshold": 0.5,
+            "continue_weight": 1.5,
+            "norm_floor": 1.5,
+            "norm_floor_weight": 0.15
+        }
+    ]
+}

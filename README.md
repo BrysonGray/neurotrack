@@ -2,36 +2,89 @@
 
 ## Features
 
-- Load and simulate microscopy images from existing morphology saved in SWC file format.
-- Simulate neuron tree morphology de novo.
-- Perform neuron tracking to reconstruct neuron morphology.
+- Train a 3D CNN tracing policy with behavior cloning (BC) and optional DAgger rounds.
+- Run interactive tracing sessions with GUI-based seed selection and per-image navigation.
+- Perform automated tracing from selected seeds using trained policy checkpoints.
+- Manually revise predicted traces in the GUI and iterate on reconstructions.
+- Post-process reconstructions (resampling, smoothing, merging, branch filtering).
+- Evaluate predictions against ground-truth SWC files and export session reports.
 
 ## Overview
 
-This package provides tools for performing neuron tracing using simulated fluorescence microscopy data. It includes functions for
-generating simulated data, collecting data and training a branch point classification model, and performing tracing to
-reconstruct neuron morphology.
+Neurotrack is a neuron tracing toolkit for 3D microscopy volumes built around a behavior cloning pipeline with DAgger fine-tuning.
 
-Neuron tracing is performed sequentially, starting from a seed point and stepping along the neuron until the end is reached. It uses two independent neural network models for the tracing process: 
-1. Actor -- A deep convolutional neural network which takes 3D RGB image patches as input and outputs the mean and standard deviation for a multivariate Gaussian from which the next step direction is sampled.  
-2. Branch classifier -- A residual neural network (ResNet) [ref](https://www.cv-foundation.org/openaccess/content_cvpr_2016/papers/He_Deep_Residual_Learning_CVPR_2016_paper.pdf) which takes 3D grayscale image patches as input and outputs a number representing the probability that the patch is centered on a neuron branch.
+The current tracing policy is a deterministic 3D CNN that predicts the next step vector directly from local 3D image context.
+Training starts with BC warmstart and can continue with DAgger rounds that aggregate expert labels on policy-visited states.
 
-The actor network is trained using the soft actor-critic reinforcement learning algorithm [ref](https://proceedings.mlr.press/v80/haarnoja18b/haarnoja18b.pdf) which jointly optimizes a value function and a policy function. The value function aims to estimate the value (sum of future discounted rewards) of state-action pairs and the policy function aims to find a policy that maximizes the value at each state plus the entropy of the policy. The reward for each state-action pair is a function of the change in sum of square error between the estimated path image and the true neuron image plus a term to enforce smoothness.
+In addition to training and batch inference, Neurotrack provides an interactive GUI workflow for practical reconstruction work:
 
-The branch classifier is used to mark points along the traced path where the neuron branches. When the current path ends, the agent will return to each branch point to continue tracing. The training dataset is created by randomly sampling image windows around the neurons and assigning target labels based on the branch mask. We include random permutations and flips to augment the input data to minimize overfitting and utilized class balancing for generalizability.
+1. Select or edit seed points in orthogonal 3D views.
+2. Run automated tracing from selected seeds.
+3. Manually revise reconstructed paths.
+4. Run post-processing on predictions.
+5. Evaluate against reference SWC and export metrics.
+
+Legacy SAC utilities remain in the repository for compatibility and comparison experiments, but the primary pipeline is BC + DAgger.
+
+## Pipeline
+
+### 1) Train policy (BC / DAgger)
+
+Use JSON configs under `configs/training` with the BC training CLI:
+
+```bash
+python -m neurotrack.cli.run_bc_train -i configs/training/train_dagger_example.json
+```
+
+This training path supports:
+
+- Warmstart behavior cloning
+- Configurable DAgger rounds and beta schedules (linear, exponential, adaptive)
+- Replay-buffer based aggregation across rounds
+- Per-round logging and checkpointing
+
+### 2) Run interactive tracing GUI
+
+Launch the interactive tracing session:
+
+```bash
+python -m neurotrack.cli.interactive_tracing -c path/to/interactive_config.json
+```
+
+Or provide paths directly:
+
+```bash
+python -m neurotrack.cli.interactive_tracing \
+	--img_dir /path/to/images \
+	--seeds_input /path/to/seeds.json \
+	--seeds_output /path/to/output_seeds.json
+```
+
+The GUI supports seed selection, trace-all or per-image tracing, model selection, path revision, post-processing controls, and evaluation/report export.
+
+### 3) Batch inference / evaluation
+
+Use the inference pipeline CLI with a JSON config:
+
+```bash
+python -m neurotrack.cli.run_inference -i path/to/inference_config.json
+```
 
 ## Requirements
 
-This code was developed and tested with Python 3.12.8 
+This codebase is developed and tested with Python 3.12.8.
 
-Dependencies are listed in requirements.txt
+Install dependencies from `requirements.txt`:
 
-No non-standard hardware is required, but this library uses pytorch which can use gpu acceleration if a gpu is available.
+```bash
+pip install -r requirements.txt
+```
 
+PyTorch can run on CPU or GPU. A GPU is recommended for faster training and inference, but is not required.
 
 ## Demo
 
-Examples for usage are given in Jupyter notebooks in the notebooks folder of the github repository.
+Examples are available in the `notebooks` directory, including data, inference, QC, and training workflows.
 
 ## Example neuron tracking results
 

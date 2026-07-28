@@ -287,14 +287,13 @@ class PostprocessConfig:
 
 def load_pipeline_config(
     config_path: str,
-    defaults: Dict[str, Any],
 ) -> Dict[str, Any]:
-    """Load a JSON config file, apply *defaults*, and canonicalize key aliases.
+    """Load a JSON config file, apply defaults, and canonicalize key aliases.
 
     Steps applied (in order):
 
     1. Parse the JSON object.
-    2. Fill in any missing keys from *defaults*.
+    2. Fill in missing keys with built-in defaults.
     3. Canonicalize ``eval_distance_threshold`` → ``distance_threshold``
        (only when ``distance_threshold`` is absent from the raw JSON).
     4. Normalize null-sentinel strings to ``None`` for all known path keys.
@@ -303,9 +302,6 @@ def load_pipeline_config(
     ----------
     config_path:
         Path to the JSON configuration file.
-    defaults:
-        Mapping of key → default value applied for keys absent in the JSON.
-
     Returns
     -------
     dict
@@ -322,10 +318,25 @@ def load_pipeline_config(
     # Save the raw config before applying defaults (needed for per-step enable flag computation).
     raw_config = dict(config)
 
-    # Apply defaults for absent keys.
-    for key, value in defaults.items():
-        if key not in config:
-            config[key] = value
+    # Apply pipeline defaults for absent keys.
+    config.setdefault("step_width", 2.0)
+    config.setdefault("repeat_starts", False)
+    config.setdefault("rng_seed", 1)
+    config.setdefault("n_trials", 1)
+    config.setdefault("seeds_path", None)
+    config.setdefault("soma_sample_radius", 0.0)
+    config.setdefault("random_offset", 0.0)
+    config.setdefault("review_before_next", False)
+    config.setdefault("sync", False)
+    config.setdefault("run_evaluation", None)
+    config.setdefault("min_branch_length", 5.0)
+    config.setdefault("resampling_step_size", 4.0)
+    config.setdefault("smoothing_window", 5)
+    config.setdefault("merge_threshold", 5.0)
+    config.setdefault("eval_distance_threshold", None)
+    config.setdefault("distance_threshold", 5.0)
+    config.setdefault("scales_path", None)
+    config.setdefault("swc_dir", None)
 
     # Key alias: eval_distance_threshold → distance_threshold.
     if "distance_threshold" not in config and "eval_distance_threshold" in config:

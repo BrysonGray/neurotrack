@@ -30,7 +30,7 @@ class Environment():
             img_path: str,
             radius: int,
             step_size: float = 1.0,
-            step_width: float = 1.0,
+            step_width: float = 2.0,
             max_len: int = 10000,
             max_paths: int = 100,
             alpha: float = 1.0,
@@ -51,7 +51,7 @@ class Environment():
         step_size : float, optional
             Step size for tracking, by default 1.0.
         step_width : float, optional
-            Step width for tracking, by default 1.0.
+            Step width for tracking, by default 2.0.
         max_len : int, optional
             Maximum length of the path, by default 10000.
         max_paths : int, optional

@@ -48,7 +48,7 @@ This training path supports:
 Launch the interactive tracing session:
 
 ```bash
-python -m neurotrack.cli.interactive_tracing -c path/to/interactive_config.json
+python -m neurotrack.cli.interactive_tracing -c configs/inference/test_example_inference.json
 ```
 
 Or provide paths directly:
@@ -57,7 +57,6 @@ Or provide paths directly:
 python -m neurotrack.cli.interactive_tracing \
 	--img_dir /path/to/images \
 	--seeds_input /path/to/seeds.json \
-	--seeds_output /path/to/output_seeds.json
 ```
 
 The GUI supports seed selection, trace-all or per-image tracing, model selection, path revision, post-processing controls, and evaluation/report export.
@@ -67,7 +66,7 @@ The GUI supports seed selection, trace-all or per-image tracing, model selection
 Use the inference pipeline CLI with a JSON config:
 
 ```bash
-python -m neurotrack.cli.run_inference -i path/to/inference_config.json
+python -m neurotrack.cli.run_inference -i configs/inference/test_example_inference.json
 ```
 
 ## Requirements
@@ -84,10 +83,30 @@ PyTorch can run on CPU or GPU. A GPU is recommended for faster training and infe
 
 ## Demo
 
-Examples are available in the `notebooks` directory, including data, inference, QC, and training workflows.
+An example inference, postprocessing, and evaluation workflow is available in the Jupyter notebook `notebooks/inference_pipeline_demo.ipynb`.
+
+### Before running the demo, download the necessary data by following these steps:
+### 1) Download the trained model weights from Huggingface.co
+```bash
+pip install "huggingface_hub[cli]"
+```
+Navigate to the neurotrack root directory.
+```bash
+cd /path/to/neurotrack
+```
+```bash
+hf download brysongray/NeuroTrack --local-dir ./neurotrack_data/model_weights
+```
+### 2) Download and unzip the NeuroTrack data zip file
+
+```bash
+curl -O https://zenodo.org/records/21500447/files/neurotrack_data.zip && unzip neurotrack_data.zip -d ./neurotrack_data/
+```
+
+
 
 ## Example neuron tracking results
-
+Example neuron traces of simulated image volumes from real neuron reconstructions obtained from neuromorpho.org.
 Gray surface is the true neuron, red surface is the result of automated tracing.
 
 ![hippo](https://media.giphy.com/media/ZEcTAh6nwSrbRMdMDS/giphy.gif)

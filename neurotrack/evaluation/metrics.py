@@ -759,23 +759,3 @@ def evaluate_reconstruction(
         )
 
     return results
-
-#%%
-# quick check whether restructuring the neuron with hierarchical path ordering affects the evaluation metrics
-from neurotrack.data import loading, save, tree
-
-#%%
-# load an unordered neuron reconstruction
-unordered_swc = loading.swc("/home/brysongray/data/neurotrack_data/gold166/bigneuron_reconstructions/smartTracing/09-2902-04R-01C-60x_merge_c1.swc")
-# restructure the neuron with hierarchical path ordering
-restructured_sections = tree.restructure_neuron_tree(unordered_swc, input_type="swc")
-restructured_paths = [section for section in restructured_sections.values()]
-restructured_swc = save.paths_to_swc(restructured_paths)
-gt_path = "/home/brysongray/data/neurotrack_data/gold166/gold166_original/e_checked6_chick_uw/DONE_09-2902-04R-01C-60x_merge_c1/09-2902-04R-01C-60x_merge_c1.v3dpbd_FIXED_PARENT_CONNECTIONS.swc"
-gt_swc = loading.swc(gt_path)
-results = evaluate_reconstruction(pred_swc=unordered_swc, gt_swc=gt_swc, threshold=2.0, sample_spacing=1.0, return_l_measures=True)
-print(results)
-# %%
-results_restructured = evaluate_reconstruction(pred_swc=restructured_swc, gt_swc=gt_swc, threshold=2.0, sample_spacing=1.0, return_l_measures=True)
-print(results_restructured)
-# %%

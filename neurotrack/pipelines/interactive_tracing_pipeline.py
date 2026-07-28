@@ -1744,7 +1744,7 @@ def run_interactive_tracing_session(
         seeds_input_path = _first_config_value("seeds_input_path", "seeds_path")
     if seeds_output_path is None:
         seeds_output_path = _first_config_value("seeds_output_path")
-    report_stem = _first_config_value("test_name", "session_name", "run_name")
+    report_stem = _first_config_value("name", "test_name", "session_name", "run_name")
 
     image_dir, seeds_input_path, seeds_output_path = prompt_seed_session_paths(
         image_dir=image_dir,

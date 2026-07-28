@@ -42,7 +42,7 @@ class NeuronPatchDataset(TorchDataset):
         crop_size: int = 64,
         patches_per_image: int = 10,
         alpha: float = 0.5,
-        step_width: float = 3.0,
+        step_width: float = 2.0,
         rng: Optional[np.random.Generator] = None,
         crop_patches: bool = True,
         inference_mode: bool = False,

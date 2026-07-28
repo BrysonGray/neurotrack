@@ -3439,7 +3439,7 @@ def interactive_seed_selection_session(
     on_select_seeds_input_path: Optional[Callable[[], Optional[str]]] = None,
     on_clear_image_dir: Optional[Callable[[], Optional[str]]] = None,
     on_clear_seeds_input_path: Optional[Callable[[], Optional[str]]] = None,
-    trace_step_width: float = 4.0,
+    trace_step_width: float = 2.0,
     trace_n_trials: int = 1,
     trace_max_len: int = 10000,
     trace_max_paths: int = 1000,

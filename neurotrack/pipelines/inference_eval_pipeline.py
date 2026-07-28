@@ -20,34 +20,13 @@ from neurotrack.inference.runtime import run_inference
 
 date_time = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 
-_INFERENCE_PIPELINE_DEFAULTS: Dict[str, Any] = {
-    "step_width": 2.0,
-    "repeat_starts": False,
-    "rng_seed": 1,
-    "n_trials":1,
-    "seeds_path": None,
-    "soma_sample_radius": 0.0,
-    "random_offset": 0.0,
-    "review_before_next": False,
-    "sync": False,            # Skip images whose reconstruction already exists
-    "run_evaluation": None,   # None → infer from swc_dir
-    "min_branch_length": 5.0,
-    "resampling_step_size": 4.0,
-    "smoothing_window": 5,
-    "merge_threshold": 5.0,
-    "eval_distance_threshold": None,
-    "distance_threshold": 5.0,
-    "scales_path": None,
-    "swc_dir": None,
-}
-
 
 class InferenceEvaluationPipeline:
     """Orchestrate inference, post-processing, and optional evaluation."""
 
     def __init__(self, config_path: str):
         self.config_path = config_path
-        self.config = load_pipeline_config(self.config_path, _INFERENCE_PIPELINE_DEFAULTS)
+        self.config = load_pipeline_config(self.config_path)
         self._validate_config()
 
         seed = self.config.get("rng_seed")
@@ -58,7 +37,7 @@ class InferenceEvaluationPipeline:
                 torch.cuda.manual_seed(seed)
 
     def _validate_config(self) -> None:
-        required = ["img_dir", "out_dir", "test_name", "sac_weights"]
+        required = ["img_dir", "out_dir", "name", "sac_weights"]
         missing = [key for key in required if key not in self.config]
         if missing:
             raise ValueError(f"Missing required config parameters: {missing}")
@@ -79,7 +58,7 @@ class InferenceEvaluationPipeline:
         self,
         run_evaluation: bool | None = None,
     ) -> Dict[str, Any]:
-        run_out_dir = Path(self.config["out_dir"]) / (self.config["test_name"] + "_" + date_time)
+        run_out_dir = Path(self.config["out_dir"]) / (self.config["name"] + "_" + date_time)
         run_out_dir.mkdir(parents=True, exist_ok=True)
 
         postprocess_config = PostprocessConfig.from_config(self.config)
@@ -129,7 +108,7 @@ class InferenceEvaluationPipeline:
                 swc_dir=self.config["swc_dir"],
                 distance_threshold=float(self.config.get("distance_threshold", 2.0)),
             )
-            metrics_csv = run_out_dir / f"{self.config['test_name']}_metrics.csv"
+            metrics_csv = run_out_dir / f"{self.config['name']}_metrics.csv"
             save_evaluation_results(
                 evaluation_results,
                 str(metrics_csv),
@@ -142,7 +121,7 @@ class InferenceEvaluationPipeline:
             has_ground_truth=should_evaluate,
         )
 
-        pipeline_summary_path = run_out_dir / f"{self.config['test_name']}_summary.json"
+        pipeline_summary_path = run_out_dir / f"{self.config['name']}_summary.json"
         with open(pipeline_summary_path, "w") as handle:
             json.dump(pipeline_summary, handle, indent=2)
 

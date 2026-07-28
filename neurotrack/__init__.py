@@ -16,10 +16,11 @@ from neurotrack.data.neuron_data import (
     create_neuron_data_components
 )
 
+
 __all__ = [
     "Dataset",
     "DataLoader", 
     "DataGenerator",
     "DrawingComplexityConfig",
-    "create_neuron_data_components"
+    "create_neuron_data_components",
 ]

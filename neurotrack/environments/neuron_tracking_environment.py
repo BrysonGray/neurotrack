@@ -33,7 +33,7 @@ class NeuronTrackingEnvironment:
     """
     
     def __init__(self, dataset,
-                 radius: int = 17, target_step_len: float = 4.0, step_width: float = 4.0,
+                 radius: int = 17, target_step_len: float = 5.0, step_width: float = 2.0,
                  stall_threshold: float = 1.0,
                  max_len: int = 9999999, max_paths: int = 9999999, gamma=0.99, branching: bool = False,
                  repeat_starts: bool = False, start_idx: int = 0,

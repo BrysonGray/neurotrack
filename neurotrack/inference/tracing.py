@@ -224,7 +224,7 @@ def trace_image(
     else:
         n_original_retry_seeds = base_retry_seeds.shape[0]
     original_retry_seeds = base_retry_seeds[:n_original_retry_seeds]
-    retry_rng = np.random.default_rng(int(dataset_idx) + 9973)
+    retry_rng = np.random.default_rng(int(dataset_idx))
 
     long_path_min_points = int(getattr(env, "min_path_steps", 3)) + 1
 

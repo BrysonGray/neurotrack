@@ -100,7 +100,7 @@ hf download brysongray/NeuroTrack --local-dir ./neurotrack_data/model_weights
 ### 2) Download and unzip the NeuroTrack data zip file
 
 ```bash
-curl -O https://zenodo.org/records/21500447/files/neurotrack_data.zip && unzip neurotrack_data.zip -d ./neurotrack_data/
+curl -L  https://api.figshare.com/v2/file/download/67098257 -o neurotrack_data.zip && unzip neurotrack_data.zip -d ./neurotrack_data/
 ```
 
 

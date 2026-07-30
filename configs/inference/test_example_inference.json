@@ -21,7 +21,7 @@
   "soma_sample_radius": 0.0,
   "random_offset": 0.0,
   "save_paths": true,
-  "sync": true,
+  "sync": false,
   "return_stats": true,
   "stochastic_actions": false,
   "branching": 1,

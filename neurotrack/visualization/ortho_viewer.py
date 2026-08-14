@@ -110,13 +110,10 @@ class _OrthoViewDialog:
         on_prev_image: Optional[Callable[[np.ndarray], Optional[Dict[str, object]]]] = None,
         on_next_image: Optional[Callable[[np.ndarray], Optional[Dict[str, object]]]] = None,
         on_get_effective_seed_overlay: Optional[Callable[[np.ndarray], Optional[np.ndarray]]] = None,
-        trace_step_width: float = 4.0,
-        trace_n_trials: int = 1,
         trace_max_len: int = 10000,
         trace_max_paths: int = 1000,
         trace_branching: bool = True,
         trace_repeat_starts: bool = False,
-        trace_stochastic_actions: bool = False,
         trace_seed_jitter_count: int = 0,
         trace_seed_jitter_radius: float = 0.0,
         trace_seed_jitter_weight_strategy: str = "uniform",
@@ -130,7 +127,7 @@ class _OrthoViewDialog:
         on_run_evaluation: Optional[Callable[[], None]] = None,
         on_run_evaluation_all: Optional[Callable[[], None]] = None,
         on_save_eval_report: Optional[Callable[[], None]] = None,
-        on_select_gt_swc_path: Optional[Callable[[], Optional[str]]] = None,
+        on_select_gt_swc_path: Optional[Callable[[], object]] = None,
         on_clear_gt_swc_path: Optional[Callable[[], Optional[str]]] = None,
         on_select_scales_path: Optional[Callable[[], Optional[str]]] = None,
         on_clear_scales_path: Optional[Callable[[], Optional[str]]] = None,
@@ -396,20 +393,6 @@ class _OrthoViewDialog:
             self.btn_rejitter_seeds = QPushButton("Rejitter Seeds")
             # Advanced trace parameter widgets
             _qt_w = importlib.import_module("qtpy.QtWidgets")
-            self._trace_step_width_spin = _qt_w.QDoubleSpinBox()
-            self._trace_step_width_spin.setRange(0.1, 100.0)
-            self._trace_step_width_spin.setSingleStep(0.5)
-            self._trace_step_width_spin.setDecimals(2)
-            self._trace_step_width_spin.setValue(trace_step_width)
-            self._trace_step_width_spin.setSizePolicy(
-                _qt_w.QSizePolicy.Expanding, _qt_w.QSizePolicy.Fixed)
-            self._trace_step_width_spin.setMinimumWidth(0)
-            self._trace_n_trials_spin = _qt_w.QSpinBox()
-            self._trace_n_trials_spin.setRange(1, 100)
-            self._trace_n_trials_spin.setValue(trace_n_trials)
-            self._trace_n_trials_spin.setSizePolicy(
-                _qt_w.QSizePolicy.Expanding, _qt_w.QSizePolicy.Fixed)
-            self._trace_n_trials_spin.setMinimumWidth(0)
             self._trace_max_len_spin = _qt_w.QSpinBox()
             self._trace_max_len_spin.setRange(1, 1000000)
             self._trace_max_len_spin.setValue(trace_max_len)
@@ -426,8 +409,6 @@ class _OrthoViewDialog:
             self._trace_branching_check.setChecked(trace_branching)
             self._trace_repeat_starts_check = _qt_w.QCheckBox("Repeat Starts")
             self._trace_repeat_starts_check.setChecked(trace_repeat_starts)
-            self._trace_stochastic_check = _qt_w.QCheckBox("Stochastic Actions")
-            self._trace_stochastic_check.setChecked(trace_stochastic_actions)
             self._trace_seed_jitter_count_spin = _qt_w.QSpinBox()
             self._trace_seed_jitter_count_spin.setRange(0, 10000)
             self._trace_seed_jitter_count_spin.setValue(int(max(0, trace_seed_jitter_count)))
@@ -776,17 +757,12 @@ class _OrthoViewDialog:
             _adv_layout = QVBoxLayout(_adv_panel)
             _adv_layout.setContentsMargins(4, 0, 4, 0)
             _adv_layout.setSpacing(4)
-            _adv_layout.addWidget(QLabel("Step Width:"))
-            _adv_layout.addWidget(self._trace_step_width_spin)
-            _adv_layout.addWidget(QLabel("Num Trials:"))
-            _adv_layout.addWidget(self._trace_n_trials_spin)
             _adv_layout.addWidget(QLabel("Max Length:"))
             _adv_layout.addWidget(self._trace_max_len_spin)
             _adv_layout.addWidget(QLabel("Max Paths:"))
             _adv_layout.addWidget(self._trace_max_paths_spin)
             _adv_layout.addWidget(self._trace_branching_check)
             _adv_layout.addWidget(self._trace_repeat_starts_check)
-            _adv_layout.addWidget(self._trace_stochastic_check)
             _left_trace_lay.addWidget(_adv_panel)
 
             def _toggle_adv_panel(checked, panel=_adv_panel, btn=_adv_toggle):
@@ -809,12 +785,12 @@ class _OrthoViewDialog:
                 _left_eval_lay.addWidget(self.btn_set_eval_output)
                 _left_eval_lay.addWidget(self.btn_clear_eval_output)
                 _left_eval_lay.addWidget(self._sidebar_separator())
-                _left_eval_lay.addWidget(QLabel("Distance Threshold:"))
-                _left_eval_lay.addWidget(self._eval_distance_threshold_spin)
                 _left_eval_lay.addWidget(QLabel("Scales JSON (optional):"))
                 _left_eval_lay.addWidget(self.eval_scales_path_value_label)
                 _left_eval_lay.addWidget(self.btn_set_eval_scales_path)
                 _left_eval_lay.addWidget(self.btn_clear_eval_scales_path)
+                _left_eval_lay.addWidget(QLabel("Distance Threshold:"))
+                _left_eval_lay.addWidget(self._eval_distance_threshold_spin)
                 if self._show_postprocess_controls:
                     _left_eval_lay.addWidget(self._sidebar_separator())
                     _left_eval_lay.addWidget(self.btn_run_evaluation)
@@ -1029,13 +1005,10 @@ class _OrthoViewDialog:
             self.btn_clear_seeds_input.clicked.connect(self._clear_seeds_input_path)
             self.btn_prev_image.clicked.connect(self._go_prev_image)
             self.btn_next_image.clicked.connect(self._go_next_image)
-            self._trace_step_width_spin.valueChanged.connect(self._on_advanced_params_changed)
-            self._trace_n_trials_spin.valueChanged.connect(self._on_advanced_params_changed)
             self._trace_max_len_spin.valueChanged.connect(self._on_advanced_params_changed)
             self._trace_max_paths_spin.valueChanged.connect(self._on_advanced_params_changed)
             self._trace_branching_check.toggled.connect(self._on_advanced_params_changed)
             self._trace_repeat_starts_check.toggled.connect(self._on_advanced_params_changed)
-            self._trace_stochastic_check.toggled.connect(self._on_advanced_params_changed)
             self._trace_seed_jitter_count_spin.valueChanged.connect(self._on_advanced_params_changed)
             self._trace_seed_jitter_radius_spin.valueChanged.connect(self._on_advanced_params_changed)
             self._trace_seed_jitter_weight_combo.currentIndexChanged.connect(self._on_advanced_params_changed)
@@ -1617,9 +1590,8 @@ class _OrthoViewDialog:
         self._show_next_button = bool(context.get("show_next_button", False))
         self.btn_prev_image.setVisible(self._show_prev_button)
         self.btn_next_image.setVisible(self._show_next_button)
-        running = bool(self._trace_controls_running_state)
-        self.btn_prev_image.setEnabled((not running) and self._show_prev_button)
-        self.btn_next_image.setEnabled((not running) and self._show_next_button)
+        self.btn_prev_image.setEnabled(self._show_prev_button)
+        self.btn_next_image.setEnabled(self._show_next_button)
 
         self._seeds_output_path = context.get("seeds_output_path")  # type: ignore[assignment]
         self._trace_output_path = context.get("trace_output_path")  # type: ignore[assignment]
@@ -1767,10 +1739,25 @@ class _OrthoViewDialog:
     def _select_gt_swc_path(self):
         if self._on_select_gt_swc_path is None:
             return
-        selected = self._on_select_gt_swc_path()
+        result = self._on_select_gt_swc_path()
+        if isinstance(result, tuple):
+            selected, swc_rows = result
+        else:
+            selected, swc_rows = result, None
         if selected is not None:
             self._gt_swc_path = selected
             self._refresh_output_path_labels()
+        if swc_rows is not None:
+            self._set_reference_swc_rows(swc_rows)
+            self._tree_swc_preview_source = np.empty((0, 7), dtype=np.float32)
+            self._tree_swc_preview_filtered = np.empty((0, 7), dtype=np.float32)
+            self._tree_preview_seed_points = []
+            self._tree_preview_removed_ids = set()
+            self._has_clip_preview = False
+            self._invalidate_tree_overlay_cache()
+            self._clear_transient_selection_state()
+            self._refresh_annotation_target_options()
+            self._redraw()
 
     def _clear_gt_swc_path(self):
         if self._on_clear_gt_swc_path is not None:
@@ -1926,13 +1913,10 @@ class _OrthoViewDialog:
     def get_trace_params_overrides(self) -> Dict[str, object]:
         """Return the current advanced trace parameter values from the config panel."""
         return {
-            "step_width": float(self._trace_step_width_spin.value()),
-            "n_trials": int(self._trace_n_trials_spin.value()),
             "max_len": int(self._trace_max_len_spin.value()),
             "max_paths": int(self._trace_max_paths_spin.value()),
             "branching": bool(self._trace_branching_check.isChecked()),
             "repeat_starts": bool(self._trace_repeat_starts_check.isChecked()),
-            "stochastic_actions": bool(self._trace_stochastic_check.isChecked()),
             "seed_jitter_count": int(self._trace_seed_jitter_count_spin.value()),
             "seed_jitter_radius": float(self._trace_seed_jitter_radius_spin.value()),
             "seed_jitter_weight_strategy": self._trace_seed_jitter_weight_combo.currentText(),
@@ -2260,8 +2244,8 @@ class _OrthoViewDialog:
         self.chk_gt_overlay.setEnabled(not running)
         self.btn_apply_component_filter.setEnabled(not running)
         self.btn_save_filtered_swc.setEnabled(not running)
-        self.btn_prev_image.setEnabled((not running) and self._show_prev_button)
-        self.btn_next_image.setEnabled((not running) and self._show_next_button)
+        self.btn_prev_image.setEnabled(self._show_prev_button)
+        self.btn_next_image.setEnabled(self._show_next_button)
         self.btn_cancel_trace.setEnabled(running)
         if running:
             self.btn_remove_selected.setEnabled(False)
@@ -2933,9 +2917,6 @@ class _OrthoViewDialog:
                 pass
             self._drag_rect = None
 
-        if self._active_tool != "zoom":
-            return
-
         self._drag_rect = Rectangle(
             (self._drag_start[0], self._drag_start[1]),
             0,
@@ -3439,13 +3420,10 @@ def interactive_seed_selection_session(
     on_select_seeds_input_path: Optional[Callable[[], Optional[str]]] = None,
     on_clear_image_dir: Optional[Callable[[], Optional[str]]] = None,
     on_clear_seeds_input_path: Optional[Callable[[], Optional[str]]] = None,
-    trace_step_width: float = 2.0,
-    trace_n_trials: int = 1,
     trace_max_len: int = 10000,
     trace_max_paths: int = 1000,
     trace_branching: bool = True,
     trace_repeat_starts: bool = False,
-    trace_stochastic_actions: bool = False,
     trace_seed_jitter_count: int = 0,
     trace_seed_jitter_radius: float = 0.0,
     trace_seed_jitter_weight_strategy: str = "uniform",
@@ -3457,7 +3435,7 @@ def interactive_seed_selection_session(
     on_run_evaluation: Optional[Callable[[], None]] = None,
     on_run_evaluation_all: Optional[Callable[[], None]] = None,
     on_save_eval_report: Optional[Callable[[], None]] = None,
-    on_select_gt_swc_path: Optional[Callable[[], Optional[str]]] = None,
+    on_select_gt_swc_path: Optional[Callable[[], object]] = None,
     on_clear_gt_swc_path: Optional[Callable[[], Optional[str]]] = None,
     on_select_scales_path: Optional[Callable[[], Optional[str]]] = None,
     on_clear_scales_path: Optional[Callable[[], Optional[str]]] = None,
@@ -3536,13 +3514,10 @@ def interactive_seed_selection_session(
         on_select_seeds_input_path=on_select_seeds_input_path,
         on_clear_image_dir=on_clear_image_dir,
         on_clear_seeds_input_path=on_clear_seeds_input_path,
-        trace_step_width=trace_step_width,
-        trace_n_trials=trace_n_trials,
         trace_max_len=trace_max_len,
         trace_max_paths=trace_max_paths,
         trace_branching=trace_branching,
         trace_repeat_starts=trace_repeat_starts,
-        trace_stochastic_actions=trace_stochastic_actions,
         trace_seed_jitter_count=trace_seed_jitter_count,
         trace_seed_jitter_radius=trace_seed_jitter_radius,
         trace_seed_jitter_weight_strategy=trace_seed_jitter_weight_strategy,

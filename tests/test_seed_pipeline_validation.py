@@ -1,5 +1,6 @@
 import json
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -134,6 +135,111 @@ def _make_viewer_stub(
 
 
 class SeedPipelineValidationTests(unittest.TestCase):
+    def test_trace_busy_state_keeps_neuron_navigation_enabled(self):
+        viewer = ortho_viewer._OrthoViewDialog.__new__(ortho_viewer._OrthoViewDialog)
+        viewer._show_trace_controls = True
+        viewer._show_postprocess_controls = False
+        viewer._show_prev_button = True
+        viewer._show_next_button = True
+        viewer._refresh_edit_action_controls = mock.Mock()
+
+        control_names = [
+            "btn_trace_neuron",
+            "btn_trace_all",
+            "btn_save_trace",
+            "btn_save_all_traces",
+            "btn_discard_trace",
+            "chk_trace_overlay",
+            "chk_gt_overlay",
+            "btn_apply_component_filter",
+            "btn_save_filtered_swc",
+            "btn_prev_image",
+            "btn_next_image",
+            "btn_cancel_trace",
+            "btn_remove_selected",
+            "btn_clip_selected",
+        ]
+        for name in control_names:
+            setattr(viewer, name, SimpleNamespace(setEnabled=mock.Mock()))
+
+        ortho_viewer._OrthoViewDialog._set_trace_controls_busy(viewer, True)
+
+        viewer.btn_prev_image.setEnabled.assert_called_once_with(True)
+        viewer.btn_next_image.setEnabled.assert_called_once_with(True)
+        viewer.btn_trace_neuron.setEnabled.assert_called_once_with(False)
+        viewer.btn_cancel_trace.setEnabled.assert_called_once_with(True)
+
+    def test_start_trace_current_runs_in_background_and_seed_overlay_stays_available(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            image_path = root / "sample.tif"
+            _write_volume(image_path, shape=(12, 12, 12))
+            image_key = image_path.relative_to(root).as_posix()
+            trace_started = threading.Event()
+            release_trace = threading.Event()
+
+            class _RuntimeStub:
+                effective_seed_calls = 0
+
+                def trace_image(self, **kwargs):
+                    del kwargs
+                    trace_started.set()
+                    release_trace.wait(timeout=5.0)
+                    return {
+                        "paths": [[[1.0, 1.0, 1.0], [2.0, 1.0, 1.0]]],
+                        "timing_ms": {"total": 1.0, "steps": 1},
+                    }
+
+                def get_effective_seed_points(self, **kwargs):
+                    del kwargs
+                    self.effective_seed_calls += 1
+                    return np.asarray([[9.0, 9.0, 9.0]], dtype=np.float32)
+
+            manager = interactive_pipeline._TraceSessionManager(
+                image_paths=[image_path],
+                image_root=root,
+                trace_params={},
+            )
+            manager.enabled = True
+            runtime = _RuntimeStub()
+            manager._runtime = runtime
+
+            try:
+                manager.start_trace_current(0, image_key, [[4.0, 5.0, 6.0]])
+                self.assertTrue(trace_started.wait(timeout=1.0))
+                self.assertIsNotNone(manager._thread)
+                self.assertTrue(manager._thread.is_alive())
+
+                overlay = manager.get_effective_seed_overlay(0, image_key, [[4.0, 5.0, 6.0]])
+                np.testing.assert_array_equal(overlay, np.asarray([[4.0, 5.0, 6.0]], dtype=np.float32))
+                self.assertEqual(runtime.effective_seed_calls, 0)
+            finally:
+                release_trace.set()
+                if manager._thread is not None:
+                    manager._thread.join(timeout=5.0)
+                manager.close()
+
+            self.assertFalse(manager._running)
+            self.assertEqual(len(manager.trace_results_by_key[image_key]), 1)
+
+    def test_select_gt_swc_path_updates_current_reference_and_redraws(self):
+        viewer = _make_viewer_stub()
+        new_rows = np.asarray(_make_chain_rows(3), dtype=np.float32)
+        viewer._on_select_gt_swc_path = lambda: ("/tmp/reference", new_rows)
+        viewer._refresh_output_path_labels = mock.Mock()
+        viewer._invalidate_tree_overlay_cache = mock.Mock()
+        viewer._refresh_annotation_target_options = mock.Mock()
+        viewer._redraw = mock.Mock()
+
+        ortho_viewer._OrthoViewDialog._select_gt_swc_path(viewer)
+
+        self.assertEqual(viewer._gt_swc_path, "/tmp/reference")
+        np.testing.assert_array_equal(viewer._tree_swc_committed, new_rows)
+        self.assertEqual(len(viewer._editor_state.reference_annotation.nodes_by_id), 3)
+        viewer._invalidate_tree_overlay_cache.assert_called_once_with()
+        viewer._refresh_annotation_target_options.assert_called_once_with()
+        viewer._redraw.assert_called_once_with()
+
     def test_annotation_graph_roundtrip_and_mutation(self):
         rows = np.asarray(
             [
@@ -1009,6 +1115,40 @@ class SeedPipelineValidationTests(unittest.TestCase):
             self.assertEqual(captured_prompt_args["seeds_input_path"], str(seeds_path))
             self.assertIsNone(captured_prompt_args["seeds_output_path"])
             self.assertTrue(out_dir.exists())
+
+    def test_interactive_gt_selector_returns_current_swc_rows(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            image_path = root / "sample.tif"
+            _write_volume(image_path)
+            swc_dir = root / "swcs"
+            swc_dir.mkdir()
+            expected_rows = _make_chain_rows(3)
+            _write_swc(swc_dir / "sample.swc", expected_rows)
+            captured = {}
+
+            def fake_interactive_session(**kwargs):
+                captured["result"] = kwargs["on_select_gt_swc_path"]()
+                return torch.zeros((0, 3), dtype=torch.float32)
+
+            with mock.patch.object(
+                interactive_pipeline,
+                "prompt_seed_session_paths",
+                return_value=(str(root), None, None),
+            ), mock.patch.object(
+                interactive_pipeline,
+                "prompt_select_directory",
+                return_value=str(swc_dir),
+            ), mock.patch.object(
+                interactive_pipeline,
+                "interactive_seed_selection_session",
+                side_effect=fake_interactive_session,
+            ):
+                interactive_pipeline.run_interactive_tracing_session(image_dir=str(root))
+
+            selected_path, selected_rows = captured["result"]
+            self.assertEqual(selected_path, str(swc_dir))
+            np.testing.assert_allclose(np.asarray(selected_rows), np.asarray(expected_rows))
 
     def test_postprocess_prediction_target_updates_and_undo_restores_trace(self):
         with tempfile.TemporaryDirectory() as tmp_dir:

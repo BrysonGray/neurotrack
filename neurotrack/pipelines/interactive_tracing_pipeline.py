@@ -45,6 +45,9 @@ from neurotrack.visualization.ortho_viewer import (
 )
 
 
+_INTERACTIVE_TRACE_STEP_WIDTH = 2.0
+
+
 def _discover_images(image_dir: Path):
     image_paths = sorted([*image_dir.rglob("*.tif"), *image_dir.rglob("*.tiff")])
     return [p for p in image_paths if p.is_file()]
@@ -375,7 +378,7 @@ class _TraceRuntime:
 
     def __init__(self, trace_params: Dict[str, object]):
         self.trace_params = trace_params
-        self._lock = threading.Lock()
+        self._lock = threading.Lock() # prevents GUI and background tracing threads from modifying runtime state simultaneously.
         self._actor, self._q_net = load_models(trace_params)
 
         rng_seed = int(trace_params.get("rng_seed", 0))
@@ -383,7 +386,7 @@ class _TraceRuntime:
             img_dir=str(trace_params["img_dir"]),
             swc_dir=trace_params.get("swc_dir", None),
             alpha=1.0,
-            step_width=float(trace_params.get("step_width", 4.0)),
+            step_width=_INTERACTIVE_TRACE_STEP_WIDTH,
             rng=np.random.default_rng(rng_seed),
             crop_patches=False,
             patches_per_image=1,
@@ -402,7 +405,7 @@ class _TraceRuntime:
         self._env = NeuronTrackingEnvironment(
             dataset=self._dataset,
             radius=17,
-            step_width=float(trace_params.get("step_width", 4.0)),
+            step_width=_INTERACTIVE_TRACE_STEP_WIDTH,
             stall_threshold=float(trace_params.get("stall_threshold", 1.0)),
             max_len=int(trace_params.get("max_len", 9999999)),
             max_paths=int(trace_params.get("max_paths", 9999999)),
@@ -463,7 +466,7 @@ class _TraceRuntime:
                     image_shape_zyx = tuple(int(v) for v in np.asarray(sample_image).shape[-3:])
                     initial_path_mask = _PredictionGraphInitializationAdapter(prediction_paths).build_initial_path_mask(
                         image_shape_zyx=image_shape_zyx,
-                        width=float(self.trace_params.get("step_width", 4.0)),
+                        width=_INTERACTIVE_TRACE_STEP_WIDTH,
                     )
 
             result = sac_trace_image(
@@ -471,10 +474,10 @@ class _TraceRuntime:
                 actor=self._actor,
                 dataset_idx=dataset_index,
                 Q_net=self._q_net,
-                n_trials=int(self.trace_params.get("n_trials", 1)),
+                n_trials=1,
                 show=False,
                 show_live=False,
-                stochastic=bool(self.trace_params.get("stochastic_actions", False)),
+                stochastic=False,
                 cancel_event=cancel_event,
                 initial_path_mask=initial_path_mask,
                 retry_on_no_long_paths=bool(self.trace_params.get("retry_on_no_long_paths", True)),
@@ -1354,14 +1357,17 @@ class _TraceSessionManager:
     def get_trace_output_dir(self) -> Optional[str]:
         return None if self._trace_output_dir is None else str(self._trace_output_dir)
 
-    def trace_current(self, image_index: int, image_key: str, seed_rows: List[List[float]]) -> Optional[List[List[List[float]]]]:
-        if not self.enabled or self._runtime is None:
+    def _trace_current_impl(
+        self,
+        image_index: int,
+        image_key: str,
+        seed_rows: List[List[float]],
+        cancel_event: Optional[threading.Event],
+    ) -> Optional[List[List[List[float]]]]:
+        runtime = self._runtime
+        if runtime is None:
             self._set_state("Tracing is disabled (missing model config).", increment_token=True)
             return None
-        if self._running:
-            self._set_state("Trace All is running. Cancel it before tracing a single image.", increment_token=True)
-            return self.trace_results_by_key.get(image_key, [])
-
         normalized_seed_rows = self._normalize_seed_rows_payload(seed_rows)
         pending_seed_rows = self._pending_seed_rows(image_key=image_key, seed_rows=seed_rows)
         if len(normalized_seed_rows) > 0 and len(pending_seed_rows) == 0 and image_key in self.trace_results_by_key:
@@ -1369,12 +1375,12 @@ class _TraceSessionManager:
             return self.trace_results_by_key.get(image_key, [])
 
         self._set_state(f"Tracing {image_key}...", increment_token=False)
-        result = self._runtime.trace_image(
+        result = runtime.trace_image(
             image_index=image_index,
             image_relative_key=image_key,
             seed_rows=pending_seed_rows,
             prediction_paths=self._normalize_paths_payload(self.trace_results_by_key.get(image_key, [])),
-            cancel_event=None,
+            cancel_event=cancel_event,
         )
         self._store_trace_timing(image_key=image_key, timing_ms=result.get("timing_ms", None))
         paths = self._append_trace_paths(image_key=image_key, new_paths=result["paths"])
@@ -1387,6 +1393,57 @@ class _TraceSessionManager:
             increment_token=True,
         )
         return paths
+
+    def trace_current(self, image_index: int, image_key: str, seed_rows: List[List[float]]) -> Optional[List[List[List[float]]]]:
+        if not self.enabled or self._runtime is None:
+            self._set_state("Tracing is disabled (missing model config).", increment_token=True)
+            return None
+        if self._running:
+            self._set_state("A trace is already running.", increment_token=True)
+            return self.trace_results_by_key.get(image_key, [])
+        return self._trace_current_impl(
+            image_index=image_index,
+            image_key=image_key,
+            seed_rows=seed_rows,
+            cancel_event=None,
+        )
+
+    def start_trace_current(self, image_index: int, image_key: str, seed_rows: List[List[float]]) -> None:
+        """Start tracing one image without blocking the Qt event loop."""
+        if not self.enabled or self._runtime is None:
+            self._set_state("Tracing is disabled (missing model config).", increment_token=True)
+            return
+        if self._running:
+            self._set_state("A trace is already running.", increment_token=True)
+            return
+
+        self._cancel_event = threading.Event()
+        with self._state_lock:
+            self._running = True
+            self._progress_total = 1
+            self._progress_completed = 0
+
+        def _worker() -> None:
+            try:
+                result = self._trace_current_impl(
+                    image_index=image_index,
+                    image_key=image_key,
+                    seed_rows=seed_rows,
+                    cancel_event=self._cancel_event,
+                )
+                if result is not None:
+                    with self._state_lock:
+                        self._progress_completed = 1
+            except RuntimeError as exc:
+                self._set_state(str(exc), increment_token=True)
+            except Exception as exc:
+                self._set_state(f"Trace failed: {exc}", increment_token=True)
+            finally:
+                with self._state_lock:
+                    self._running = False
+
+        self._thread = threading.Thread(target=_worker, daemon=True)
+        self._thread.start()
 
     def start_trace_all(self, seeds_by_key: Dict[str, List[List[float]]]):
         if not self.enabled or self._runtime is None:
@@ -1463,6 +1520,10 @@ class _TraceSessionManager:
     ) -> Optional[np.ndarray]:
         """Compute display-only effective seeds (including configured jitter) for the viewer."""
         if self._runtime is None:
+            if len(seed_rows) == 0:
+                return None
+            return np.asarray(seed_rows, dtype=np.float32)
+        if self._running:
             if len(seed_rows) == 0:
                 return None
             return np.asarray(seed_rows, dtype=np.float32)
@@ -1684,11 +1745,12 @@ class _SessionState:
         rows_from_ui = self.rows_from_seed_array(seed_array)
         if rows_from_ui:
             self.selected_seeds[relative_key] = rows_from_ui
-        return trace_manager.trace_current(
+        trace_manager.start_trace_current(
             image_index=self.current_index,
             image_key=relative_key,
             seed_rows=self.selected_seeds.get(relative_key, []),
         )
+        return None
 
     # ------------------------------------------------------------------
     # Seeds input loading
@@ -1766,7 +1828,6 @@ def run_interactive_tracing_session(
         "sac_weights": config.get("sac_weights"),
         "policy_output_mode": config.get("policy_output_mode", "direct_vector"),
         "rng_seed": config.get("rng_seed", 0),
-        "step_width": config.get("step_width", 4.0),
         "stall_threshold": config.get("stall_threshold", 1.0),
         "soma_sample_radius": config.get("soma_sample_radius", 0.0),
         "random_offset": config.get("random_offset", 0.0),
@@ -1777,8 +1838,6 @@ def run_interactive_tracing_session(
         "max_paths": config.get("max_paths", 1000),
         "branching": config.get("branching", True),
         "repeat_starts": config.get("repeat_starts", False),
-        "n_trials": config.get("n_trials", 1),
-        "stochastic_actions": config.get("stochastic_actions", False),
         "retry_on_no_long_paths": config.get("retry_on_no_long_paths", True),
         "retry_initial_radius": config.get("retry_initial_radius", 5.0),
         "retry_radius_step": config.get("retry_radius_step", 5.0),
@@ -1826,13 +1885,17 @@ def run_interactive_tracing_session(
         loaded = trace_manager.set_model_weights_path(selected)
         return loaded if loaded is not None else current_weights
 
-    def _select_gt_swc_path() -> Optional[str]:
+    def _select_gt_swc_path() -> object:
         selected = prompt_select_directory(
             default_path=config.get("swc_dir") or str(image_root)
         )
-        if selected:
-            trace_manager.set_gt_swc_dir(selected)
-        return trace_manager.get_gt_swc_path()
+        if not selected:
+            return trace_manager.get_gt_swc_path(), None
+        trace_manager.set_gt_swc_dir(selected)
+        return (
+            trace_manager.get_gt_swc_path(),
+            trace_manager.get_tree_swc_rows(session.current_relative_key()),
+        )
 
     def _clear_gt_swc_path() -> Optional[str]:
         return trace_manager.clear_gt_swc_dir()
@@ -1933,13 +1996,10 @@ def run_interactive_tracing_session(
             on_clear_image_dir=session.clear_image_dir,
             on_select_seeds_input_path=session.select_seeds_input_path,
             on_clear_seeds_input_path=session.clear_seeds_input_path,
-            trace_step_width=float(trace_params.get("step_width", 4.0)),
-            trace_n_trials=int(trace_params.get("n_trials", 1)),
             trace_max_len=int(trace_params.get("max_len", 10000)),
             trace_max_paths=int(trace_params.get("max_paths", 1000)),
             trace_branching=bool(trace_params.get("branching", True)),
             trace_repeat_starts=bool(trace_params.get("repeat_starts", False)),
-            trace_stochastic_actions=bool(trace_params.get("stochastic_actions", False)),
             trace_seed_jitter_count=int(trace_params.get("seed_jitter_count", 0)),
             trace_seed_jitter_radius=float(trace_params.get("seed_jitter_radius", 0.0)),
             trace_seed_jitter_weight_strategy=str(

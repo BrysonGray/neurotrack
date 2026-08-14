@@ -21,6 +21,101 @@ def _coord_key_xyz(point_xyz: np.ndarray, decimals: int = 5) -> tuple[float, flo
     return float(rounded[0]), float(rounded[1]), float(rounded[2])
 
 
+def _join_parentless_roots_to_common_center(swc_list: List[List[float]]) -> List[List[float]]:
+    """Attach all parentless roots to one new root at their coordinate mean.
+
+    The new root is appended with ``parent=-1`` and each existing root's parent
+    is updated to the new node ID. Inputs with <=1 root are returned unchanged.
+    """
+    if len(swc_list) == 0:
+        return swc_list
+
+    parentless_rows = [row for row in swc_list if int(row[6]) == -1]
+    if len(parentless_rows) <= 1:
+        return swc_list
+
+    roots_xyz = np.asarray([row[2:5] for row in parentless_rows], dtype=np.float32)
+    mean_xyz = np.mean(roots_xyz, axis=0).astype(np.float32)
+    root_radii = np.asarray([float(row[5]) for row in parentless_rows], dtype=np.float32)
+    mean_radius = float(np.mean(root_radii)) if root_radii.size > 0 else 1.0
+
+    max_node_id = max(int(row[0]) for row in swc_list)
+    new_root_id = max_node_id + 1
+
+    updated_rows: List[List[float]] = []
+    for row in swc_list:
+        updated = [float(v) for v in row[:7]]
+        if int(updated[6]) == -1:
+            updated[6] = float(new_root_id)
+        updated_rows.append(updated)
+
+    updated_rows.append([
+        float(new_root_id),
+        1.0,
+        float(mean_xyz[0]),
+        float(mean_xyz[1]),
+        float(mean_xyz[2]),
+        float(mean_radius),
+        -1.0,
+    ])
+    return updated_rows
+
+
+def _swc_rows_to_paths_xyz(swc_list: List[List[float]]) -> List[np.ndarray]:
+    """Convert SWC rows to root-to-leaf xyz paths for viewer consumers."""
+    if len(swc_list) == 0:
+        return []
+
+    parent_by_id: Dict[int, int] = {}
+    xyz_by_id: Dict[int, np.ndarray] = {}
+    children_by_id: Dict[int, List[int]] = {}
+    for row in swc_list:
+        arr = np.asarray(row, dtype=np.float32).reshape(-1)
+        if arr.shape[0] < 7:
+            continue
+        node_id = int(arr[0])
+        parent_id = int(arr[6])
+        parent_by_id[node_id] = parent_id
+        xyz_by_id[node_id] = arr[2:5].astype(np.float32, copy=True)
+        children_by_id.setdefault(node_id, [])
+
+    for node_id, parent_id in parent_by_id.items():
+        if parent_id in children_by_id:
+            children_by_id[parent_id].append(node_id)
+
+    root_ids = [
+        node_id
+        for node_id, parent_id in parent_by_id.items()
+        if parent_id == -1 or parent_id not in parent_by_id
+    ]
+    if len(root_ids) == 0:
+        root_ids = list(parent_by_id.keys())
+
+    def _dfs_paths(node_id: int, stack: set[int]) -> List[List[np.ndarray]]:
+        if node_id in stack:
+            return [[xyz_by_id[node_id]]]
+        stack_next = set(stack)
+        stack_next.add(node_id)
+        child_ids = children_by_id.get(node_id, [])
+        if len(child_ids) == 0:
+            return [[xyz_by_id[node_id]]]
+
+        all_paths: List[List[np.ndarray]] = []
+        for child_id in child_ids:
+            for child_path in _dfs_paths(child_id, stack_next):
+                all_paths.append([xyz_by_id[node_id], *child_path])
+        return all_paths
+
+    output_paths: List[np.ndarray] = []
+    for root_id in root_ids:
+        for path_nodes in _dfs_paths(root_id, set()):
+            if len(path_nodes) == 0:
+                continue
+            output_paths.append(np.asarray(path_nodes, dtype=np.float32))
+
+    return output_paths
+
+
 def filter_paths_by_length(
     paths: List[np.ndarray],
     min_length: float,
@@ -642,6 +737,7 @@ def process_results(results: List[Dict[str, Any]], params: Dict[str, Any]) -> Li
     confidence_threshold = int(params.get("confidence_threshold", 0))
     mask_smoothing_size = int(params.get("mask_smoothing_size", 0))
     merge_timeout_seconds = float(params.get("merge_timeout_seconds", 30.0))
+    join_roots_to_common_center = bool(params.get("join_roots_to_common_center", True))
     max_branch_label = "inf" if not np.isfinite(max_branch_length) else f"{max_branch_length}"
 
     processed_results: List[Dict[str, Any]] = []
@@ -662,7 +758,8 @@ def process_results(results: List[Dict[str, Any]], params: Dict[str, Any]) -> Li
               merge_threshold: {merge_threshold}\n\
               confidence_threshold: {confidence_threshold}\n\
               merge_timeout_seconds: {merge_timeout_seconds}\n\
-              mask_smoothing_size: {mask_smoothing_size}\n")
+              mask_smoothing_size: {mask_smoothing_size}\n\
+              join_roots_to_common_center: {join_roots_to_common_center}\n")
         try:
             total_paths = len(raw_paths)
             total_nodes = int(sum(len(path) for path in raw_paths))
@@ -705,13 +802,24 @@ def process_results(results: List[Dict[str, Any]], params: Dict[str, Any]) -> Li
                 if len(path) > 0
             ]
             swc_list = save.paths_to_swc(post_paths)
+            if join_roots_to_common_center:
+                swc_list = _join_parentless_roots_to_common_center(swc_list)
+
+            processed_paths_xyz = _swc_rows_to_paths_xyz(swc_list)
+            if len(processed_paths_xyz) == 0:
+                processed_paths_xyz = [
+                    np.asarray(path.detach().cpu().numpy() if isinstance(path, torch.Tensor) else path, dtype=np.float32)
+                    for path in post_paths
+                    if len(path) > 0
+                ]
+            processed_paths = [torch.from_numpy(path.astype(np.float32)) for path in processed_paths_xyz]
 
             processed_results.append({
                 "neuron_name": neuron_name,
                 "swc_list": swc_list,
-                "processed_paths": post_paths,
+                "processed_paths": processed_paths,
                 "n_raw_paths": len(raw_paths),
-                "n_processed_paths": len(post_paths),
+                "n_processed_paths": len(processed_paths),
                 "n_swc_nodes": len(swc_list),
             })
         except Exception as exc:

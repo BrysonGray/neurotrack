@@ -144,6 +144,7 @@ class PostprocessConfig:
     smoothing_window: int = 5
     enable_smooth_paths: bool = True
     enable_merge: bool = True
+    join_roots_to_common_center: bool = True
     merge_threshold: float = 1.0
     confidence_threshold: int = 0  # min input paths supporting a node; <=1 disables
     mask_smoothing_size: int = 0  # binary close/open of the merge overlap mask; <=1 disables
@@ -196,6 +197,7 @@ class PostprocessConfig:
             smoothing_window=int(config.get("smoothing_window", 5)),
             enable_smooth_paths=bool(config.get("enable_smooth_paths", smooth_paths)),
             enable_merge=bool(config.get("enable_merge", merge_paths)),
+            join_roots_to_common_center=bool(config.get("join_roots_to_common_center", True)),
             merge_threshold=float(config.get("merge_threshold", 1.0)),
             confidence_threshold=int(config.get("confidence_threshold", 0)),
             mask_smoothing_size=int(config.get("mask_smoothing_size", 0)),
@@ -215,6 +217,7 @@ class PostprocessConfig:
             "enable_smooth_paths": self.enable_smooth_paths,
             "smoothing_window": self.smoothing_window,
             "enable_merge": self.enable_merge,
+            "join_roots_to_common_center": self.join_roots_to_common_center,
             "merge_threshold": self.merge_threshold,
             "confidence_threshold": self.confidence_threshold,
             "mask_smoothing_size": self.mask_smoothing_size,
@@ -278,6 +281,7 @@ class PostprocessConfig:
             "enable_smooth_paths": self.enable_smooth_paths,
             "smoothing_window": max(1, round(self.smoothing_window)),
             "enable_merge": self.enable_merge,
+            "join_roots_to_common_center": self.join_roots_to_common_center,
             "merge_threshold": self.merge_threshold / scale,
             "confidence_threshold": self.confidence_threshold,
             "mask_smoothing_size": self.mask_smoothing_size,

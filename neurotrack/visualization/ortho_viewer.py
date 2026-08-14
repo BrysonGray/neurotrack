@@ -140,6 +140,7 @@ class _OrthoViewDialog:
         postprocess_enable_smooth_paths: bool = True,
         postprocess_smoothing_window: int = 5,
         postprocess_enable_merge: bool = True,
+        postprocess_join_roots_to_common_center: bool = True,
         postprocess_merge_threshold: float = 1.0,
         postprocess_confidence_threshold: int = 0,
         postprocess_mask_smoothing_size: int = 0,
@@ -472,6 +473,8 @@ class _OrthoViewDialog:
             self._pp_smoothing_window_spin.setValue(postprocess_smoothing_window)
             self._pp_enable_merge_check = _qt_w.QCheckBox("Merge overlapping paths")
             self._pp_enable_merge_check.setChecked(postprocess_enable_merge)
+            self._pp_join_roots_check = _qt_w.QCheckBox("Join roots")
+            self._pp_join_roots_check.setChecked(postprocess_join_roots_to_common_center)
             self._pp_overlap_dist_threshold_spin = _qt_w.QDoubleSpinBox()
             self._pp_overlap_dist_threshold_spin.setRange(0.0, 100.0)
             self._pp_overlap_dist_threshold_spin.setSingleStep(0.1)
@@ -652,6 +655,7 @@ class _OrthoViewDialog:
                 _left_edit_lay.addWidget(self._pp_mask_smoothing_size_spin)
                 _left_edit_lay.addWidget(QLabel("Merge Timeout Seconds (0=off):"))
                 _left_edit_lay.addWidget(self._pp_merge_timeout_seconds_spin)
+                _left_edit_lay.addWidget(self._pp_join_roots_check)
                 _left_edit_lay.addWidget(QLabel("Scales JSON (optional):"))
                 _left_edit_lay.addWidget(self.scales_path_value_label)
                 _left_edit_lay.addWidget(self.btn_set_scales_path)
@@ -1028,6 +1032,7 @@ class _OrthoViewDialog:
             self._pp_confidence_threshold_spin.valueChanged.connect(self._on_postprocess_params_changed_slot)
             self._pp_enable_merge_check.toggled.connect(self._on_postprocess_params_changed_slot)
             self._pp_enable_merge_check.toggled.connect(self._update_postprocess_step_controls)
+            self._pp_join_roots_check.toggled.connect(self._on_postprocess_params_changed_slot)
             self._pp_mask_smoothing_size_spin.valueChanged.connect(self._on_postprocess_params_changed_slot)
             self._pp_merge_timeout_seconds_spin.valueChanged.connect(self._on_postprocess_params_changed_slot)
             self.btn_set_eval_output.clicked.connect(self._select_eval_output_dir)
@@ -1936,6 +1941,7 @@ class _OrthoViewDialog:
             "enable_smooth_paths": bool(self._pp_enable_smooth_paths_check.isChecked()),
             "smoothing_window": int(self._pp_smoothing_window_spin.value()),
             "enable_merge": bool(self._pp_enable_merge_check.isChecked()),
+            "join_roots_to_common_center": bool(self._pp_join_roots_check.isChecked()),
             "merge_threshold": float(self._pp_overlap_dist_threshold_spin.value()),
             "confidence_threshold": int(self._pp_confidence_threshold_spin.value()),
             "mask_smoothing_size": int(self._pp_mask_smoothing_size_spin.value()),
@@ -3448,6 +3454,7 @@ def interactive_seed_selection_session(
     postprocess_enable_smooth_paths: bool = True,
     postprocess_smoothing_window: int = 5,
     postprocess_enable_merge: bool = True,
+    postprocess_join_roots_to_common_center: bool = True,
     postprocess_merge_threshold: float = 1.0,
     postprocess_confidence_threshold: int = 0,
     postprocess_mask_smoothing_size: int = 0,
@@ -3547,6 +3554,7 @@ def interactive_seed_selection_session(
         postprocess_enable_smooth_paths=postprocess_enable_smooth_paths,
         postprocess_smoothing_window=postprocess_smoothing_window,
         postprocess_enable_merge=postprocess_enable_merge,
+        postprocess_join_roots_to_common_center=postprocess_join_roots_to_common_center,
         postprocess_merge_threshold=postprocess_merge_threshold,
         postprocess_confidence_threshold=postprocess_confidence_threshold,
         postprocess_mask_smoothing_size=postprocess_mask_smoothing_size,

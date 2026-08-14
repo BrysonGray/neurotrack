@@ -837,6 +837,8 @@ class _TraceSessionManager:
             self.postprocess_config.smoothing_window = int(overrides["smoothing_window"])
         if "enable_merge" in overrides:
             self.postprocess_config.enable_merge = bool(overrides["enable_merge"])
+        if "join_roots_to_common_center" in overrides:
+            self.postprocess_config.join_roots_to_common_center = bool(overrides["join_roots_to_common_center"])
         if "merge_threshold" in overrides:
             self.postprocess_config.merge_threshold = float(overrides["merge_threshold"])
         if "confidence_threshold" in overrides:
@@ -2032,6 +2034,7 @@ def run_interactive_tracing_session(
             postprocess_merge_threshold=postprocess_config.merge_threshold,
             postprocess_confidence_threshold=postprocess_config.confidence_threshold,
             postprocess_enable_merge=postprocess_config.enable_merge,
+            postprocess_join_roots_to_common_center=postprocess_config.join_roots_to_common_center,
             postprocess_mask_smoothing_size=postprocess_config.mask_smoothing_size,
             postprocess_merge_timeout_seconds=postprocess_config.merge_timeout_seconds,
             on_select_postprocess_output_dir=_select_postprocess_output_dir,

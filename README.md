@@ -115,3 +115,9 @@ Gray surface is the true neuron, red surface is the result of automated tracing.
 
 ![hippo](https://media.giphy.com/media/Qlkpz2BHlb1bjyHEmo/giphy.gif)
 
+## GUI Demo
+
+https://github.com/user-attachments/assets/56362921-f5e6-4167-8a6b-39f8e9639b1e
+
+
+
